@@ -1096,7 +1096,7 @@ describe("LifecycleService", () => {
 
     const agentCommand = tmux.commands.at(-1)?.command;
 
-    expect(agentCommand).toContain("codex --enable codex_hooks --yolo resume --last");
+    expect(agentCommand).toContain("codex --enable hooks --yolo resume --last");
     expect(agentCommand).not.toContain("developer_instructions=");
     expect(agentCommand).not.toContain("Database:");
     expect(agentCommand).not.toContain("ship the fix");

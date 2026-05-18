@@ -139,7 +139,7 @@ describe("agent-service command builders", () => {
     expect(shell).toContain("docker exec -it -w '/repos/feature' 'wm-feature-container' /bin/sh -c");
     expect(shell).toContain("/bin/zsh");
     expect(shell).toContain('export PATH="$PATH:/root/.local/bin:/usr/local/bin:/root/.bun/bin:/root/.cargo/bin"');
-    expect(agent).toContain("codex --enable codex_hooks --yolo");
+    expect(agent).toContain("codex --enable hooks --yolo");
     expect(agent).toContain("ship the fix");
     expect(agent).toContain('export PATH="$PATH:/root/.local/bin:/usr/local/bin:/root/.bun/bin:/root/.cargo/bin"');
     expect(agent).not.toContain("docker exec");
@@ -182,7 +182,7 @@ describe("agent-service command builders", () => {
       launchMode: "resume",
     });
 
-    expect(command).toContain("codex --enable codex_hooks --yolo resume --last");
+    expect(command).toContain("codex --enable hooks --yolo resume --last");
     expect(command).not.toContain("developer_instructions=");
     expect(command).not.toContain("stay focused");
     expect(command).not.toContain(" -- ");
@@ -226,7 +226,7 @@ describe("agent-service command builders", () => {
       prompt: "--help",
     });
     expect(codex).toContain("-- '--help'");
-    expect(codex).toContain("codex --enable codex_hooks");
+    expect(codex).toContain("codex --enable hooks");
   });
 
   it("omits -- when no prompt is provided", () => {

@@ -35,7 +35,7 @@ function buildBuiltInAgentInvocation(input: {
   const promptSuffix = input.prompt ? ` -- ${quoteShell(input.prompt)}` : "";
 
   if (input.agent === "codex") {
-    const hooksFlag = " --enable codex_hooks";
+    const hooksFlag = " --enable hooks";
     const yoloFlag = input.yolo ? " --yolo" : "";
     if (input.launchMode === "resume") {
       // `codex resume --last` takes the prompt after `--`, so a follow-up is
