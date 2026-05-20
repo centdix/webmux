@@ -198,7 +198,7 @@ const TEST_CONFIG: ProjectConfig = {
   startupEnvs: {},
   integrations: {
     github: { linkedRepos: [], autoRemoveOnMerge: false },
-    linear: { enabled: true, autoCreateWorktrees: false, createTicketOption: false },
+    linear: { enabled: true, autoCreateWorktrees: false, createTicketOption: false, postCommentOnPickup: false },
   },
   lifecycleHooks: {},
   autoName: null,

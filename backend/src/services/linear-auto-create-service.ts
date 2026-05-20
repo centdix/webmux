@@ -23,6 +23,10 @@ export interface LinearAutoCreateDependencies {
   /** Restrict triggering to issues whose team.key is in this list (uppercase).
    *  Undefined or empty → no team filter (all teams). */
   watchTeamKeys?: string[];
+  /** Optional callback invoked after a successful pickup (create or oneshot) so external
+   *  automation can be notified. Failures are logged and swallowed — they must not
+   *  block the pickup itself. */
+  onIssuePickedUp?: (issue: LinearIssue, kind: "create" | "oneshot") => Promise<void>;
 }
 
 export interface LinearAutoCreateMonitorOptions {
@@ -148,6 +152,7 @@ export async function runLinearAutoCreateOnce(deps: LinearAutoCreateDependencies
         await deps.runOneshotForIssue!(issue.identifier);
         processedIssueIds.add(issue.id);
         log.info(`[linear-auto-create] launched oneshot for ${issue.identifier}`);
+        await notifyPickup(deps, issue, "oneshot");
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         log.error(`[linear-auto-create] failed to launch oneshot for ${issue.identifier}: ${msg}`);
@@ -172,6 +177,7 @@ export async function runLinearAutoCreateOnce(deps: LinearAutoCreateDependencies
         });
         processedIssueIds.add(issue.id);
         log.info(`[linear-auto-create] created worktree for ${issue.identifier}`);
+        await notifyPickup(deps, issue, "create");
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         log.error(`[linear-auto-create] failed to create worktree for ${issue.identifier}: ${msg}`);
@@ -179,6 +185,20 @@ export async function runLinearAutoCreateOnce(deps: LinearAutoCreateDependencies
         processedIssueIds.add(issue.id);
       }
     }
+  }
+}
+
+async function notifyPickup(
+  deps: LinearAutoCreateDependencies,
+  issue: LinearIssue,
+  kind: "create" | "oneshot",
+): Promise<void> {
+  if (!deps.onIssuePickedUp) return;
+  try {
+    await deps.onIssuePickedUp(issue, kind);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(`[linear-auto-create] pickup notification failed for ${issue.identifier}: ${msg}`);
   }
 }
 

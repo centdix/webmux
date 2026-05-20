@@ -75,6 +75,10 @@ export interface LinearIntegrationConfig {
   /** Restrict the auto-create watcher to issues from these team keys (e.g. ["ENG", "OPS"]).
    *  When unset, all teams the authenticated user is assigned in are watched. */
   watchTeams?: string[];
+  /** When the auto-create watcher picks up an issue (creates a worktree or launches a
+   *  oneshot), post a comment on the Linear issue announcing the pickup so external
+   *  automation can track it. Defaults to false. */
+  postCommentOnPickup: boolean;
 }
 
 export interface IntegrationConfig {

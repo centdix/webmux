@@ -686,6 +686,10 @@ integrations:
     # the authenticated Linear user is in multiple teams or when running webmux
     # in several projects on the same machine that share a Linear account.
     # watchTeams: [ENG, OPS]
+    # Post a structured comment on the Linear issue when the auto-create
+    # watcher picks it up (prefix `**Webmux pickup — branch \`<branch>\`**`),
+    # so external automation can track when webmux starts working on it.
+    # postCommentOnPickup: true
 
 # startupEnvs become runtime env vars for panes, agents, and hooks.
 startupEnvs:

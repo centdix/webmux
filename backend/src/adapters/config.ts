@@ -73,7 +73,7 @@ const DEFAULT_CONFIG: ProjectConfig = {
   startupEnvs: {},
   integrations: {
     github: { linkedRepos: [], autoRemoveOnMerge: false },
-    linear: { enabled: true, autoCreateWorktrees: false, createTicketOption: false },
+    linear: { enabled: true, autoCreateWorktrees: false, createTicketOption: false, postCommentOnPickup: false },
   },
   lifecycleHooks: {},
   autoName: null,
@@ -442,6 +442,9 @@ function parseLinearIntegration(parsed: Record<string, unknown>): LinearIntegrat
     createTicketOption: typeof linear.createTicketOption === "boolean"
       ? linear.createTicketOption
       : defaults.createTicketOption,
+    postCommentOnPickup: typeof linear.postCommentOnPickup === "boolean"
+      ? linear.postCommentOnPickup
+      : defaults.postCommentOnPickup,
     ...(watchTeams ? { watchTeams } : {}),
   };
 }
@@ -455,6 +458,7 @@ function parseLocalLinearOverlay(parsed: Record<string, unknown>): Partial<Linea
   if (typeof linear.enabled === "boolean") overlay.enabled = linear.enabled;
   if (typeof linear.autoCreateWorktrees === "boolean") overlay.autoCreateWorktrees = linear.autoCreateWorktrees;
   if (typeof linear.createTicketOption === "boolean") overlay.createTicketOption = linear.createTicketOption;
+  if (typeof linear.postCommentOnPickup === "boolean") overlay.postCommentOnPickup = linear.postCommentOnPickup;
   const watchTeams = parseTeamKeyList(linear.watchTeams);
   if (watchTeams) overlay.watchTeams = watchTeams;
   return Object.keys(overlay).length > 0 ? overlay : null;

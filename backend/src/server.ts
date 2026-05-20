@@ -166,13 +166,39 @@ async function runOneshotForIssue(issueId: string): Promise<void> {
 function startLinearAutoCreate(): void {
   if (stopLinearAutoCreate) return;
   const watchTeamKeys = config.integrations.linear.watchTeams;
+  const postCommentOnPickup = config.integrations.linear.postCommentOnPickup;
   stopLinearAutoCreate = startLinearAutoCreateMonitor({
     lifecycleService,
     git,
     projectRoot: PROJECT_DIR,
     runOneshotForIssue,
     ...(watchTeamKeys && watchTeamKeys.length > 0 ? { watchTeamKeys } : {}),
+    ...(postCommentOnPickup ? { onIssuePickedUp: postLinearPickupComment } : {}),
   });
+}
+
+/** Post a "webmux picked this up" comment on the Linear issue so external automation can
+ *  see when an issue moves into active work. Failures are logged and swallowed by the
+ *  caller — pickup itself must not depend on this. The structured prefix matches the
+ *  "done" comment in `buildLinearSummaryMarkdown` so both ends of the lifecycle can be
+ *  grepped by external systems. */
+async function postLinearPickupComment(
+  issue: { id: string; identifier: string; branchName: string },
+  kind: "create" | "oneshot",
+): Promise<void> {
+  const mode = kind === "oneshot" ? "oneshot" : "worktree";
+  const body = [
+    `**Webmux pickup — branch \`${issue.branchName}\`**`,
+    "",
+    `- Mode: ${mode}`,
+    `- Started: ${new Date().toISOString()}`,
+  ].join("\n");
+  const result = await createIssueComment({ issueId: issue.id, body });
+  if (!result.ok) {
+    log.warn(`[linear-auto-create] failed to post pickup comment for ${issue.identifier}: ${result.error}`);
+    return;
+  }
+  log.info(`[linear-auto-create] posted pickup comment for ${issue.identifier}: ${result.data.url}`);
 }
 
 /** Map the wire-side `OneshotConfig` (all-optional fields) to the persisted
