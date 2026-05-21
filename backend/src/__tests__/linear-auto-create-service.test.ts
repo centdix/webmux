@@ -72,8 +72,8 @@ function createDeps(input: {
   existingBranches?: string[];
   fetchResult?: FetchIssuesResult;
   onFetch?: (options: { skipCache?: boolean } | undefined) => void;
-  runOneshotForIssue?: (issueId: string) => Promise<void>;
-  onIssuePickedUp?: (issue: LinearIssue, kind: "create" | "oneshot") => Promise<void>;
+  runOneshotForIssue?: (issueId: string) => Promise<{ branch: string }>;
+  onIssuePickedUp?: (input: { issue: LinearIssue; branch: string; kind: "create" | "oneshot" }) => Promise<void>;
 } = {}): {
   deps: LinearAutoCreateDependencies;
   created: CreateLifecycleWorktreeInput[];
@@ -362,6 +362,7 @@ describe("runLinearAutoCreateOnce", () => {
       issues: [oneshotIssue, createIssue1],
       runOneshotForIssue: async (id) => {
         triggered.push(id);
+        return { branch: "eng-200-oneshot" };
       },
     });
 
@@ -371,38 +372,43 @@ describe("runLinearAutoCreateOnce", () => {
     expect(created.map((c) => c.branch)).toEqual(["eng-201-create"]);
   });
 
-  it("notifies onIssuePickedUp after a successful create pickup", async () => {
+  it("notifies onIssuePickedUp after a successful create pickup with the issue's own branchName", async () => {
     const issue = createIssue();
-    const pickups: Array<{ identifier: string; kind: "create" | "oneshot" }> = [];
+    const pickups: Array<{ identifier: string; branch: string; kind: "create" | "oneshot" }> = [];
     const { deps } = createDeps({
       issues: [issue],
-      onIssuePickedUp: async (picked, kind) => {
-        pickups.push({ identifier: picked.identifier, kind });
+      onIssuePickedUp: async ({ issue: picked, branch, kind }) => {
+        pickups.push({ identifier: picked.identifier, branch, kind });
       },
     });
 
     await runLinearAutoCreateOnce(deps);
 
-    expect(pickups).toEqual([{ identifier: "ENG-123", kind: "create" }]);
+    expect(pickups).toEqual([{ identifier: "ENG-123", branch: issue.branchName, kind: "create" }]);
   });
 
-  it("notifies onIssuePickedUp after a successful oneshot pickup", async () => {
+  it("notifies onIssuePickedUp with the branch resolved by runOneshotForIssue, not the issue's branchName", async () => {
+    // Regression guard: for `webmux_oneshot`, `buildSeedFromLinear` may resolve to
+    // an attachment-payload or PR branch instead of `issue.branchName`. The
+    // pickup-comment contract requires the *actual* working branch.
     const oneshotIssue = createIssue({
-      id: "issue-oneshot", identifier: "ENG-200", branchName: "eng-200-oneshot",
+      id: "issue-oneshot", identifier: "ENG-200", branchName: "eng-200-original",
       labels: [{ name: "webmux_oneshot", color: "#fff" }],
     });
-    const pickups: Array<{ identifier: string; kind: "create" | "oneshot" }> = [];
+    const pickups: Array<{ identifier: string; branch: string; kind: "create" | "oneshot" }> = [];
     const { deps } = createDeps({
       issues: [oneshotIssue],
-      runOneshotForIssue: async () => {},
-      onIssuePickedUp: async (picked, kind) => {
-        pickups.push({ identifier: picked.identifier, kind });
+      runOneshotForIssue: async () => ({ branch: "eng-200-resumed-from-attachment" }),
+      onIssuePickedUp: async ({ issue: picked, branch, kind }) => {
+        pickups.push({ identifier: picked.identifier, branch, kind });
       },
     });
 
     await runLinearAutoCreateOnce(deps);
 
-    expect(pickups).toEqual([{ identifier: "ENG-200", kind: "oneshot" }]);
+    expect(pickups).toEqual([
+      { identifier: "ENG-200", branch: "eng-200-resumed-from-attachment", kind: "oneshot" },
+    ]);
   });
 
   it("does not notify onIssuePickedUp when the pickup itself fails", async () => {
@@ -417,7 +423,7 @@ describe("runLinearAutoCreateOnce", () => {
       git: { listWorktrees: () => [] },
       projectRoot: "/repo",
       fetchIssues: async () => ({ ok: true, data: [issue] }),
-      onIssuePickedUp: async (picked) => {
+      onIssuePickedUp: async ({ issue: picked }) => {
         pickups.push(picked.identifier);
       },
     };

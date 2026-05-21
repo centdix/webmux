@@ -137,8 +137,11 @@ let stopLinearAutoCreate: (() => void) | null = null;
 let autoRemoveOnMergeEnabled = config.integrations.github.autoRemoveOnMerge;
 
 /** Create a worktree in oneshot mode for the given Linear issue and arm the
- *  server-side watcher to post results back + close the session when done. */
-async function runOneshotForIssue(issueId: string): Promise<void> {
+ *  server-side watcher to post results back + close the session when done. Returns
+ *  the resolved working branch — the seed may pick `attachmentPayload.branch ??
+ *  pr.branch ?? issue.branchName`, so the caller (e.g. the pickup-comment poster)
+ *  must use this value, not `issue.branchName`. */
+async function runOneshotForIssue(issueId: string): Promise<{ branch: string }> {
   const seed = await buildSeedFromLinear({ issueId }, defaultSeedFromLinearDeps);
   if (!seed.ok) {
     throw new Error(`Linear seed failed for ${issueId}: ${seed.error}`);
@@ -161,6 +164,7 @@ async function runOneshotForIssue(issueId: string): Promise<void> {
       postToLinearOnDone: { kind: "issue", issueId },
     },
   });
+  return { branch };
 }
 
 /** Safe to call multiple times — the guard prevents duplicate monitors. */
@@ -179,25 +183,27 @@ function startLinearAutoCreate(): void {
 }
 
 /** Post the structured pickup comment on the Linear issue so external automation can see
- *  when an issue moves into active work. Failures are logged and swallowed — pickup
- *  itself must not depend on this. Markdown is built by the pure
- *  `buildLinearPickupMarkdown` in `linear-service.ts` (next to its `done`-comment
- *  sibling) so the grep-able prefix has a unit-test contract. */
-async function postLinearPickupComment(
-  issue: { id: string; identifier: string; branchName: string },
-  kind: "create" | "oneshot",
-): Promise<void> {
+ *  when an issue moves into active work. The `branch` argument is the *actual* working
+ *  branch (which can differ from `issue.branchName` for oneshot — see
+ *  `runOneshotForIssue`). Failures are logged and swallowed — pickup itself must not
+ *  depend on this. Markdown is built by the pure `buildLinearPickupMarkdown` in
+ *  `linear-service.ts` so the grep-able prefix has a unit-test contract. */
+async function postLinearPickupComment(input: {
+  issue: { id: string; identifier: string };
+  branch: string;
+  kind: "create" | "oneshot";
+}): Promise<void> {
   const body = buildLinearPickupMarkdown({
-    branch: issue.branchName,
-    kind,
+    branch: input.branch,
+    kind: input.kind,
     pickedUpAt: new Date(),
   });
-  const result = await createIssueComment({ issueId: issue.id, body });
+  const result = await createIssueComment({ issueId: input.issue.id, body });
   if (!result.ok) {
-    log.warn(`[linear-auto-create] failed to post pickup comment for ${issue.identifier}: ${result.error}`);
+    log.warn(`[linear-auto-create] failed to post pickup comment for ${input.issue.identifier}: ${result.error}`);
     return;
   }
-  log.info(`[linear-auto-create] posted pickup comment for ${issue.identifier}: ${result.data.url}`);
+  log.info(`[linear-auto-create] posted pickup comment for ${input.issue.identifier}: ${result.data.url}`);
 }
 
 /** Map the wire-side `OneshotConfig` (all-optional fields) to the persisted
