@@ -156,12 +156,6 @@ integrations:
     # Enables or disables Linear issue fetching in the dashboard.
     enabled: true
 
-    # When the auto-create watcher picks up an issue (creates a worktree or
-    # launches a oneshot), post a structured comment on the Linear issue —
-    # prefix `**Webmux pickup — branch \`<branch>\`**` — so external automation
-    # can detect that webmux has started working on it.
-    # postCommentOnPickup: true
-
 lifecycleHooks:
   # Shell command run after a managed worktree is created and its session exists.
   # Runs with the worktree as cwd and receives startupEnvs, allocated ports,

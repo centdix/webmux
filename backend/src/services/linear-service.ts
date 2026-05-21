@@ -812,19 +812,16 @@ export interface LinearSummaryInput {
 
 export interface LinearPickupMarkdownInput {
   branch: string;
-  kind: "create" | "oneshot";
   pickedUpAt: Date;
 }
 
-/** Build the structured pickup comment posted when the auto-create watcher picks up an
- *  issue. The prefix (`**Webmux pickup — branch ...**`) is the contract external
- *  automation greps on, so the format is fixed by tests. */
+/** Build the structured pickup comment posted when the auto-create watcher picks up a
+ *  `webmux_oneshot`-labeled issue. The prefix (`**Webmux pickup — branch ...**`) is the
+ *  contract external automation greps on, so the format is fixed by tests. */
 export function buildLinearPickupMarkdown(input: LinearPickupMarkdownInput): string {
-  const mode = input.kind === "oneshot" ? "oneshot" : "worktree";
   return [
     `**Webmux pickup — branch \`${input.branch}\`**`,
     "",
-    `- Mode: ${mode}`,
     `- Picked up: ${input.pickedUpAt.toISOString()}`,
   ].join("\n");
 }

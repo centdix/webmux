@@ -50,7 +50,7 @@ See your assigned Linear issues alongside your worktrees. Webmux matches branche
 
 Each issue is processed once while it stays in Todo + labeled. Remove the label and re-add it to retrigger.
 
-**Pickup notifications.** Set `integrations.linear.postCommentOnPickup: true` in `.webmux.yaml` and webmux will post a structured comment on the Linear issue when the auto-create watcher picks it up (prefix `**Webmux pickup — branch \`<branch>\`**`), so external automation can track when webmux starts working on it.
+When the auto-create watcher picks up a `webmux_oneshot` issue, it posts a structured comment on the Linear issue (prefix `**Webmux pickup — branch \`<branch>\`**`) so external automation can track when the autonomous run starts. (Regular `webmux` pickups are user-driven and skip the comment.)
 
 ## Quick Start
 

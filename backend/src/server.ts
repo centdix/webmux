@@ -171,31 +171,29 @@ async function runOneshotForIssue(issueId: string): Promise<{ branch: string }> 
 function startLinearAutoCreate(): void {
   if (stopLinearAutoCreate) return;
   const watchTeamKeys = config.integrations.linear.watchTeams;
-  const postCommentOnPickup = config.integrations.linear.postCommentOnPickup;
   stopLinearAutoCreate = startLinearAutoCreateMonitor({
     lifecycleService,
     git,
     projectRoot: PROJECT_DIR,
     runOneshotForIssue,
+    onOneshotPickedUp: postLinearOneshotPickupComment,
     ...(watchTeamKeys && watchTeamKeys.length > 0 ? { watchTeamKeys } : {}),
-    ...(postCommentOnPickup ? { onIssuePickedUp: postLinearPickupComment } : {}),
   });
 }
 
-/** Post the structured pickup comment on the Linear issue so external automation can see
- *  when an issue moves into active work. The `branch` argument is the *actual* working
- *  branch (which can differ from `issue.branchName` for oneshot — see
- *  `runOneshotForIssue`). Failures are logged and swallowed — pickup itself must not
- *  depend on this. Markdown is built by the pure `buildLinearPickupMarkdown` in
- *  `linear-service.ts` so the grep-able prefix has a unit-test contract. */
-async function postLinearPickupComment(input: {
+/** Post the structured pickup comment on the Linear issue when the auto-create watcher
+ *  picks up a `webmux_oneshot` issue, so external automation can see the autonomous run
+ *  started. `branch` is the *actual* working branch (which can differ from
+ *  `issue.branchName` — see `runOneshotForIssue`). Failures are logged and swallowed —
+ *  pickup itself must not depend on this. Markdown is built by the pure
+ *  `buildLinearPickupMarkdown` in `linear-service.ts` so the grep-able prefix has a
+ *  unit-test contract. */
+async function postLinearOneshotPickupComment(input: {
   issue: { id: string; identifier: string };
   branch: string;
-  kind: "create" | "oneshot";
 }): Promise<void> {
   const body = buildLinearPickupMarkdown({
     branch: input.branch,
-    kind: input.kind,
     pickedUpAt: new Date(),
   });
   const result = await createIssueComment({ issueId: input.issue.id, body });
