@@ -103,6 +103,7 @@ describe("parseInstalledServiceConfig", () => {
       webmuxPath: "/usr/local/bin/webmux",
       projectDir: dir,
       port: 5117,
+      envVars: {},
     };
     await writeFile(filePath, generateServiceFile(original));
 
@@ -126,6 +127,7 @@ describe("parseInstalledServiceConfig", () => {
       webmuxPath: "/usr/local/bin/webmux",
       projectDir: dir,
       port: 5222,
+      envVars: {},
     };
     await writeFile(filePath, generateServiceFile(original));
 
@@ -161,6 +163,7 @@ describe("generateServiceFile → parseInstalledServiceConfig → generateServic
       webmuxPath: "/usr/local/bin/webmux",
       projectDir: dir,
       port: 5333,
+      envVars: {},
     };
     const originalContent = generateServiceFile(original);
     await writeFile(filePath, originalContent);
@@ -186,6 +189,7 @@ describe("updateInstalledService", () => {
       webmuxPath: "/old/path/webmux",
       projectDir: dir,
       port: 5500,
+      envVars: {},
     };
     const originalContent = generateServiceFile(original);
     await writeFile(filePath, originalContent);
@@ -276,6 +280,7 @@ describe("updateInstalledService", () => {
       webmuxPath: "/old/path/webmux",
       projectDir: dir,
       port: 5600,
+      envVars: {},
     };
     await writeFile(filePath, generateServiceFile(original));
     const service: InstalledService = {
