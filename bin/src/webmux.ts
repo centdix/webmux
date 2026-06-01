@@ -37,6 +37,7 @@ Usage:
 
 Options:
   --port N            Set port (default: 5111). Falls back to a free port when taken.
+                      Without --port, CLI commands target the live server for this project.
   --prefix NAME       URL prefix this instance registers under (default: project dir basename).
                       Other webmux instances on this machine will redirect /<NAME> to this port.
   --app               Open dashboard in browser app mode (minimal window)
@@ -348,15 +349,30 @@ async function main(args: string[] = process.argv.slice(2)): Promise<void> {
   await loadEnvFile(resolve(process.cwd(), ".env.local"));
   await loadEnvFile(resolve(process.cwd(), ".env"));
 
+  // When the user didn't pin a port, point CLI commands at the live server for
+  // this project rather than the 5111 default. `webmux serve` walks to a free
+  // port when 5111 is taken, so the running instance is often elsewhere (e.g.
+  // a service installed on 5112); server-backed commands like `oneshot` would
+  // otherwise fail to connect.
+  let effectivePort = parsed.port;
+  if (!parsed.portExplicit) {
+    const { resolveLiveServerPort } = await import("./instance-port.ts");
+    const resolved = resolveLiveServerPort({ defaultPort: parsed.port, cwd: process.cwd() });
+    effectivePort = resolved.port;
+    if (parsed.debug && resolved.source !== "default") {
+      console.error(`[webmux] resolved port ${resolved.port} from live instance (${resolved.source})`);
+    }
+  }
+
   if (parsed.command === "oneshot") {
     const { runOneshotCommand } = await import("./oneshot.ts");
-    const exitCode = await runOneshotCommand(parsed.commandArgs, parsed.port);
+    const exitCode = await runOneshotCommand(parsed.commandArgs, effectivePort);
     process.exit(exitCode);
   }
 
   if (parsed.command === "linear") {
     const { runLinearCommand } = await import("./linear-commands.ts");
-    const exitCode = await runLinearCommand(parsed.commandArgs, parsed.port);
+    const exitCode = await runLinearCommand(parsed.commandArgs, effectivePort);
     process.exit(exitCode);
   }
 
@@ -366,7 +382,7 @@ async function main(args: string[] = process.argv.slice(2)): Promise<void> {
       command: parsed.command,
       args: parsed.commandArgs,
       projectDir: process.cwd(),
-      port: parsed.port,
+      port: effectivePort,
     });
     process.exit(exitCode);
   }
