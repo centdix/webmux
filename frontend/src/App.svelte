@@ -238,7 +238,12 @@
 
   function handleNotification(n: AppNotification): void {
     notifications = [...notifications, n];
-    notifiedBranches = new Set([...notifiedBranches, n.branch]);
+    // Only suppress the unread dot when the user is actually looking at this branch
+    // (selected and tab visible); otherwise a finished run should still surface.
+    const viewingThisBranch = n.branch === selectedBranch && !document.hidden;
+    if (!viewingThisBranch) {
+      notifiedBranches = new Set([...notifiedBranches, n.branch]);
+    }
     notificationHistory = [n, ...notificationHistory].slice(0, MAX_HISTORY);
     unreadCount++;
     // Auto-dismiss after timeout
