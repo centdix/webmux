@@ -581,8 +581,11 @@ export class LifecycleService {
     const windowName = buildWorktreeWindowName(input.branch);
     const parkingWindow = buildWorktreeParkingWindowName(input.branch);
     const visibleSlot = `${sessionName}:${windowName}.0`;
+    // Capture the visible slot's pane id once: it is the root's on-screen pane and,
+    // if a fork is restored on top, the swap target. Two reads could diverge.
+    const visibleSlotPaneId = this.deps.tmux.getPaneId(visibleSlot);
 
-    const restored: WorktreeTab[] = [{ ...root, paneId: this.deps.tmux.getPaneId(visibleSlot) }];
+    const restored: WorktreeTab[] = [{ ...root, paneId: visibleSlotPaneId }];
     for (const fork of listTabs(meta).filter((tab) => tab.kind === "fork")) {
       if (!fork.sessionId) continue; // cannot resume an unknown session — drop it
       const command = buildAgentPaneCommand({
@@ -610,7 +613,7 @@ export class LifecycleService {
     const wantActive = readActiveTabId(meta);
     const activeTab = restored.find((tab) => tab.tabId === wantActive && tab.kind === "fork" && tab.paneId);
     if (activeTab?.paneId) {
-      this.deps.tmux.swapPanes(activeTab.paneId, this.deps.tmux.getPaneId(visibleSlot));
+      this.deps.tmux.swapPanes(activeTab.paneId, visibleSlotPaneId);
       nextMeta = setActiveTab(nextMeta, activeTab.tabId);
     } else {
       nextMeta = setActiveTab(nextMeta, ROOT_TAB_ID);
@@ -998,11 +1001,17 @@ export class LifecycleService {
     return nextMeta;
   }
 
+  /** Tear down a worktree's tmux windows: the main agent window and the hidden
+   *  parking window that holds its forked tab panes. killWindow tolerates a missing
+   *  window, so this is safe for root-only worktrees that never created a parking window. */
+  private killWorktreeWindows(branch: string): void {
+    const sessionName = buildProjectSessionName(this.deps.projectRoot);
+    this.deps.tmux.killWindow(sessionName, buildWorktreeWindowName(branch));
+    this.deps.tmux.killWindow(sessionName, buildWorktreeParkingWindowName(branch));
+  }
+
   private async closeBranchWindow(branch: string): Promise<void> {
-    this.deps.tmux.killWindow(
-      buildProjectSessionName(this.deps.projectRoot),
-      buildWorktreeWindowName(branch),
-    );
+    this.killWorktreeWindows(branch);
     await this.deps.reconciliation.reconcile(this.deps.projectRoot, { force: true });
   }
 
@@ -1166,10 +1175,7 @@ export class LifecycleService {
     }
 
     try {
-      this.deps.tmux.killWindow(
-        buildProjectSessionName(this.deps.projectRoot),
-        buildWorktreeWindowName(branch),
-      );
+      this.killWorktreeWindows(branch);
     } catch (error) {
       cleanupErrors.push(`tmux cleanup failed: ${toErrorMessage(error)}`);
     }
@@ -1219,10 +1225,7 @@ export class LifecycleService {
       await this.deps.docker.removeContainer(branch);
     }
 
-    this.deps.tmux.killWindow(
-      buildProjectSessionName(this.deps.projectRoot),
-      buildWorktreeWindowName(branch),
-    );
+    this.killWorktreeWindows(branch);
     removeManagedWorktree(
       {
         repoRoot: this.deps.projectRoot,

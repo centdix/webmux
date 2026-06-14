@@ -144,6 +144,7 @@ const claudeConversationService = new ClaudeConversationService({
   git,
 });
 const removingBranches = new Set<string>();
+const mutatingTabBranches = new Set<string>();
 const lifecycleService = runtime.lifecycleService;
 let linearAutoCreateEnabled = config.integrations.linear.autoCreateWorktrees;
 let stopLinearAutoCreate: (() => void) | null = null;
@@ -423,9 +424,16 @@ function ensureBranchNotCreating(branch: string): void {
   }
 }
 
+function ensureBranchNotMutatingTab(branch: string): void {
+  if (mutatingTabBranches.has(branch)) {
+    throw new LifecycleError(`Worktree tabs are being updated: ${branch}`, 409);
+  }
+}
+
 function ensureBranchNotBusy(branch: string): void {
   ensureBranchNotRemoving(branch);
   ensureBranchNotCreating(branch);
+  ensureBranchNotMutatingTab(branch);
 }
 
 async function withRemovingBranch<T>(branch: string, fn: () => Promise<T>): Promise<T> {
@@ -435,6 +443,19 @@ async function withRemovingBranch<T>(branch: string, fn: () => Promise<T>): Prom
     return await fn();
   } finally {
     removingBranches.delete(branch);
+  }
+}
+
+// Tab create/select/delete each read-modify-write the worktree meta. Serialize them
+// per branch (and mutually exclude with remove/create) so concurrent requests from the
+// CLI or multiple clients can't clobber each other's tab bookkeeping.
+async function withMutatingTab<T>(branch: string, fn: () => Promise<T>): Promise<T> {
+  ensureBranchNotBusy(branch);
+  mutatingTabBranches.add(branch);
+  try {
+    return await fn();
+  } finally {
+    mutatingTabBranches.delete(branch);
   }
 }
 
@@ -1159,22 +1180,27 @@ async function apiSetWorktreeArchived(name: string, req: Request): Promise<Respo
 }
 
 async function apiCreateWorktreeTab(name: string): Promise<Response> {
-  ensureBranchNotBusy(name);
-  log.info(`[worktree:tab:create] name=${name}`);
-  const result = await lifecycleService.createWorktreeTab(name);
-  return jsonResponse({ tab: result.tab }, 201);
+  return withMutatingTab(name, async () => {
+    log.info(`[worktree:tab:create] name=${name}`);
+    const result = await lifecycleService.createWorktreeTab(name);
+    return jsonResponse({ tab: result.tab }, 201);
+  });
 }
 
 async function apiSelectWorktreeTab(name: string, tabId: string): Promise<Response> {
-  log.info(`[worktree:tab:select] name=${name} tab=${tabId}`);
-  await lifecycleService.selectWorktreeTab(name, tabId);
-  return jsonResponse({ ok: true });
+  return withMutatingTab(name, async () => {
+    log.info(`[worktree:tab:select] name=${name} tab=${tabId}`);
+    await lifecycleService.selectWorktreeTab(name, tabId);
+    return jsonResponse({ ok: true });
+  });
 }
 
 async function apiDeleteWorktreeTab(name: string, tabId: string): Promise<Response> {
-  log.info(`[worktree:tab:delete] name=${name} tab=${tabId}`);
-  await lifecycleService.deleteWorktreeTab(name, tabId);
-  return jsonResponse({ ok: true });
+  return withMutatingTab(name, async () => {
+    log.info(`[worktree:tab:delete] name=${name} tab=${tabId}`);
+    await lifecycleService.deleteWorktreeTab(name, tabId);
+    return jsonResponse({ ok: true });
+  });
 }
 
 async function apiSetWorktreeLabel(name: string, req: Request): Promise<Response> {
