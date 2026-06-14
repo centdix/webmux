@@ -40,6 +40,18 @@ class FakeTmuxGateway implements TmuxGateway {
   readonly createdWindows: Array<{ sessionName: string; windowName: string; cwd: string; command?: string }> = [];
   readonly commands: Array<{ target: string; command: string }> = [];
 
+  getPaneId(_target: string): string {
+    return "%0";
+  }
+
+  createParkedPane(_opts: { sessionName: string; parkingWindow: string; cwd: string; command: string }): string {
+    return "%99";
+  }
+
+  swapPanes(_source: string, _destination: string): void {}
+
+  killPane(_target: string): void {}
+
   ensureServer(): void {}
 
   ensureSession(_sessionName: string, _cwd: string): void {}
@@ -268,6 +280,7 @@ function makeLifecycleService(
     archiveState: new ArchiveStateService(git.resolveWorktreeGitDir(repoRoot)),
     git,
     tmux,
+    sessionDiscovery: { listSessionIds: async () => [] },
     docker,
     reconciliation,
     hooks,

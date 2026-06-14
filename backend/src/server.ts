@@ -1158,6 +1158,25 @@ async function apiSetWorktreeArchived(name: string, req: Request): Promise<Respo
   return jsonResponse({ ok: true, archived: body.archived });
 }
 
+async function apiCreateWorktreeTab(name: string): Promise<Response> {
+  ensureBranchNotBusy(name);
+  log.info(`[worktree:tab:create] name=${name}`);
+  const result = await lifecycleService.createWorktreeTab(name);
+  return jsonResponse({ tab: result.tab }, 201);
+}
+
+async function apiSelectWorktreeTab(name: string, tabId: string): Promise<Response> {
+  log.info(`[worktree:tab:select] name=${name} tab=${tabId}`);
+  await lifecycleService.selectWorktreeTab(name, tabId);
+  return jsonResponse({ ok: true });
+}
+
+async function apiDeleteWorktreeTab(name: string, tabId: string): Promise<Response> {
+  log.info(`[worktree:tab:delete] name=${name} tab=${tabId}`);
+  await lifecycleService.deleteWorktreeTab(name, tabId);
+  return jsonResponse({ ok: true });
+}
+
 async function apiSetWorktreeLabel(name: string, req: Request): Promise<Response> {
   ensureBranchNotBusy(name);
   const parsed = await parseJsonBody(req, SetWorktreeLabelRequestSchema);
@@ -1801,6 +1820,35 @@ function startServer(port: number): ReturnType<typeof Bun.serve> {
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
         return catching(`POST /api/worktrees/${name}/upload`, () => apiUploadFiles(name, req));
+      },
+    },
+
+    [apiPaths.createWorktreeTab]: {
+      POST: (req) => {
+        const parsed = parseWorktreeNameParam(req.params);
+        if (!parsed.ok) return parsed.response;
+        const name = parsed.data;
+        return catching(`POST /api/worktrees/${name}/tabs`, () => apiCreateWorktreeTab(name));
+      },
+    },
+
+    [apiPaths.selectWorktreeTab]: {
+      POST: (req) => {
+        const parsed = parseWorktreeNameParam(req.params);
+        if (!parsed.ok) return parsed.response;
+        const name = parsed.data;
+        const tabId = decodeURIComponent(req.params.tabId ?? "");
+        return catching(`POST /api/worktrees/${name}/tabs/${tabId}/select`, () => apiSelectWorktreeTab(name, tabId));
+      },
+    },
+
+    [apiPaths.deleteWorktreeTab]: {
+      DELETE: (req) => {
+        const parsed = parseWorktreeNameParam(req.params);
+        if (!parsed.ok) return parsed.response;
+        const name = parsed.data;
+        const tabId = decodeURIComponent(req.params.tabId ?? "");
+        return catching(`DELETE /api/worktrees/${name}/tabs/${tabId}`, () => apiDeleteWorktreeTab(name, tabId));
       },
     },
 

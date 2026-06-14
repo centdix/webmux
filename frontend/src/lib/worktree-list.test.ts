@@ -33,6 +33,8 @@ function createWorktree(branch: string, overrides: Partial<WorktreeInfo> = {}): 
     creationPhase: null,
     source: "ui",
     oneshot: null,
+    tabs: [],
+    activeTabId: null,
     ...overrides,
   };
 }
