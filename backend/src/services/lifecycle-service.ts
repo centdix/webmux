@@ -477,6 +477,9 @@ export class LifecycleService {
 
       const root = rootTab(ctx.meta);
       // If the deleted tab is on-screen, bring the root back into the visible slot first.
+      // No need to recapture/persist root.paneId (unlike select/create): tmux swap-pane
+      // moves pane *content* between slots while pane ids stay attached to their content,
+      // so root.paneId remains valid after the swap.
       if (readActiveTabId(ctx.meta) === tabId && root?.paneId) {
         this.deps.tmux.swapPanes(root.paneId, `${ctx.sessionName}:${ctx.windowName}.0`);
       }

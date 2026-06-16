@@ -446,9 +446,10 @@ async function withRemovingBranch<T>(branch: string, fn: () => Promise<T>): Prom
   }
 }
 
-// Tab create/select/delete each read-modify-write the worktree meta. Serialize them
-// per branch (and mutually exclude with remove/create) so concurrent requests from the
-// CLI or multiple clients can't clobber each other's tab bookkeeping.
+// Tab create/select/delete each read-modify-write the worktree meta. Open and
+// agent-terminal refresh also rewrite the whole tabs array (via restoreWorktreeTabs).
+// Serialize them all per branch (and mutually exclude with remove/create) so concurrent
+// requests from the CLI or multiple clients can't clobber each other's tab bookkeeping.
 async function withMutatingTab<T>(branch: string, fn: () => Promise<T>): Promise<T> {
   ensureBranchNotBusy(branch);
   mutatingTabBranches.add(branch);
@@ -810,9 +811,10 @@ async function apiInterruptAgentsWorktree(branch: string): Promise<Response> {
 
 async function apiRefreshWorktreeAgentTerminal(branch: string): Promise<Response> {
   touchDashboardActivity();
-  ensureBranchNotBusy(branch);
-  await lifecycleService.refreshAgentTerminal(branch);
-  return jsonResponse({ ok: true });
+  return withMutatingTab(branch, async () => {
+    await lifecycleService.refreshAgentTerminal(branch);
+    return jsonResponse({ ok: true });
+  });
 }
 
 async function loadAgentsConversationInitialState(
@@ -1152,9 +1154,11 @@ async function apiOpenWorktree(name: string, req: Request): Promise<Response> {
   // Intentionally NOT disarming here: opening a closed session is "let me peek
   // at the agent's progress", not "I'm taking over". The actual interaction
   // (terminal input, chat send, upload, etc.) is what fires disarm.
-  const result = await lifecycleService.openWorktree(name, { prompt, ...(oneshot ? { oneshot } : {}) });
-  log.debug(`[worktree:open] done name=${name} worktreeId=${result.worktreeId}`);
-  return jsonResponse({ ok: true });
+  return withMutatingTab(name, async () => {
+    const result = await lifecycleService.openWorktree(name, { prompt, ...(oneshot ? { oneshot } : {}) });
+    log.debug(`[worktree:open] done name=${name} worktreeId=${result.worktreeId}`);
+    return jsonResponse({ ok: true });
+  });
 }
 
 async function apiCloseWorktree(name: string): Promise<Response> {
