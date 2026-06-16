@@ -31,6 +31,7 @@ Usage:
   webmux remove       Remove a worktree
   webmux merge        Merge a worktree into the main branch and remove it
   webmux send         Send a prompt to a running worktree agent
+  webmux tab          List, create, switch, or close agent tabs in a worktree
   webmux prune        Remove all worktrees in the current project
   webmux linear       Post a worktree conversation to a Linear issue/team
   webmux completion   Generate shell completion script (bash, zsh)
@@ -51,7 +52,7 @@ Environment:
 `);
 }
 
-type RootCommand = "serve" | "init" | "service" | "update" | "add" | "oneshot" | "list" | "open" | "close" | "refresh" | "archive" | "unarchive" | "label" | "remove" | "merge" | "send" | "prune" | "linear" | "completion" | null;
+type RootCommand = "serve" | "init" | "service" | "update" | "add" | "oneshot" | "list" | "open" | "close" | "refresh" | "archive" | "unarchive" | "label" | "remove" | "merge" | "send" | "tab" | "prune" | "linear" | "completion" | null;
 
 interface ParsedRootArgs {
   port: number;
@@ -83,6 +84,7 @@ function isRootCommand(value: string): value is NonNullable<RootCommand> {
     || value === "remove"
     || value === "merge"
     || value === "send"
+    || value === "tab"
     || value === "prune"
     || value === "linear"
     || value === "completion";
@@ -174,7 +176,7 @@ export function parseRootArgs(args: string[]): ParsedRootArgs {
   };
 }
 
-function isWorktreeCommand(command: RootCommand): command is "add" | "list" | "open" | "close" | "refresh" | "archive" | "unarchive" | "label" | "remove" | "merge" | "send" | "prune" {
+function isWorktreeCommand(command: RootCommand): command is "add" | "list" | "open" | "close" | "refresh" | "archive" | "unarchive" | "label" | "remove" | "merge" | "send" | "tab" | "prune" {
   return command === "add"
     || command === "list"
     || command === "open"
@@ -186,6 +188,7 @@ function isWorktreeCommand(command: RootCommand): command is "add" | "list" | "o
     || command === "remove"
     || command === "merge"
     || command === "send"
+    || command === "tab"
     || command === "prune";
 }
 

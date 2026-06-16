@@ -58,12 +58,16 @@
   import { setToastController } from "./lib/toast-context";
   import {
     api,
+    createWorktreeTab,
+    deleteWorktreeTab,
     fetchWorktrees,
     postWorktreeToLinear,
     refreshWorktreeAgentTerminal,
+    selectWorktreeTab,
     setWorktreeLabel,
     subscribeNotifications,
   } from "./lib/api";
+  import TabBar from "./lib/TabBar.svelte";
 
   function createDefaultConfig(): AppConfig {
     return {
@@ -386,6 +390,7 @@
   let isMobile = $state(false);
   let sidebarOpen = $state(false);
   let activePane = $state(0);
+  let tabBusy = $state(false);
   let terminalRef:
     | {
         sendSelectPane: (pane: number) => void;
@@ -433,6 +438,12 @@
   );
   let canConnect = $derived(!!selectedBranch && selectedWorktree?.mux === "✓" && !selectedWorktree?.creating);
   let showWebChat = $derived(useWebChatUi && canConnect && supportsWorktreeChat(selectedWorktree));
+  // Tabs are only meaningful for the built-in terminal agents that have a forkable session.
+  let showTabBar = $derived(
+    canConnect
+    && !showWebChat
+    && (selectedWorktree?.agentName === "claude" || selectedWorktree?.agentName === "codex"),
+  );
   let isSelectedOpening = $derived(selectedBranch ? openingBranches.has(selectedBranch) : false);
   let isSelectedArchiving = $derived(selectedBranch ? archivingBranches.has(selectedBranch) : false);
   let isSelectedAgentTerminalRefreshing = $derived(
@@ -913,6 +924,48 @@
     }
   }
 
+  async function handleCreateTab(): Promise<void> {
+    const branch = selectedBranch;
+    if (!branch || tabBusy) return;
+    tabBusy = true;
+    try {
+      await createWorktreeTab(branch);
+      await refresh();
+    } catch (err) {
+      showToast({ tone: "error", message: `Failed to create tab: ${errorMessage(err)}` });
+    } finally {
+      tabBusy = false;
+    }
+  }
+
+  async function handleSelectTab(tabId: string): Promise<void> {
+    const branch = selectedBranch;
+    if (!branch || tabBusy) return;
+    tabBusy = true;
+    try {
+      await selectWorktreeTab(branch, tabId);
+      await refresh();
+    } catch (err) {
+      showToast({ tone: "error", message: `Failed to switch tab: ${errorMessage(err)}` });
+    } finally {
+      tabBusy = false;
+    }
+  }
+
+  async function handleDeleteTab(tabId: string): Promise<void> {
+    const branch = selectedBranch;
+    if (!branch || tabBusy) return;
+    tabBusy = true;
+    try {
+      await deleteWorktreeTab(branch, tabId);
+      await refresh();
+    } catch (err) {
+      showToast({ tone: "error", message: `Failed to delete tab: ${errorMessage(err)}` });
+    } finally {
+      tabBusy = false;
+    }
+  }
+
   async function handleArchiveToggle() {
     const branch = selectedBranch;
     if (!branch) return;
@@ -1260,6 +1313,16 @@
         />
       {/key}
     {:else if canConnect}
+      {#if showTabBar && selectedWorktree}
+        <TabBar
+          tabs={selectedWorktree.tabs}
+          activeTabId={selectedWorktree.activeTabId}
+          busy={tabBusy}
+          oncreate={handleCreateTab}
+          onselect={handleSelectTab}
+          ondelete={handleDeleteTab}
+        />
+      {/if}
       {#key selectedTerminalKey}
         <Terminal
           worktree={selectedBranch!}
