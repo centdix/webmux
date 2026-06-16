@@ -380,6 +380,18 @@ export class LifecycleService {
         ...initialized.meta,
         agentTerminalStale: false,
       });
+      // Rebuilding the agent pane recreated the worktree window, so any parked fork
+      // panes (and the root.paneId stored in meta) are now stale. Rebuild parked tabs
+      // and restore the active tab on-screen, same as the open path.
+      await this.restoreWorktreeTabs({
+        branch,
+        gitDir: resolved.gitDir,
+        worktreePath: resolved.entry.path,
+        profile,
+        profileName,
+        agent,
+        runtimeEnvPath: initialized.paths.runtimeEnvPath,
+      });
       await this.deps.reconciliation.reconcile(this.deps.projectRoot, { force: true });
 
       return {
@@ -583,6 +595,10 @@ export class LifecycleService {
     const sessionName = buildProjectSessionName(this.deps.projectRoot);
     const windowName = buildWorktreeWindowName(input.branch);
     const parkingWindow = buildWorktreeParkingWindowName(input.branch);
+    // A parking window may still exist (e.g. the agent terminal was refreshed without a
+    // full close/reopen): tear it down so we rebuild parked panes from a clean slate
+    // instead of duplicating them. killWindow tolerates an absent window.
+    this.deps.tmux.killWindow(sessionName, parkingWindow);
     const visibleSlot = `${sessionName}:${windowName}.0`;
     // Capture the visible slot's pane id once: it is the root's on-screen pane and,
     // if a fork is restored on top, the swap target. Two reads could diverge.

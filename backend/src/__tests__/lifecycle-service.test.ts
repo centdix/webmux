@@ -1980,6 +1980,94 @@ describe("LifecycleService", () => {
     expect(tmux.swaps[0]?.destination).toBe(restoredRootPaneId);
   });
 
+  it("rebuilds parked fork panes when the codex agent terminal is refreshed", async () => {
+    const repoRoot = await initRepo();
+    const runtime = new ProjectRuntime();
+    const tmux = new FakeTmuxGateway();
+    // ensureRootSessionId + the pre-fork snapshot (calls 1-2) see only the root session;
+    // once the fork pane is launched its session id becomes discoverable (call 3+), so a
+    // Codex fork captures a non-null id and survives the restore on refresh.
+    let listCalls = 0;
+    const lifecycle = makeLifecycleService(
+      repoRoot,
+      tmux,
+      runtime,
+      new FakeDockerGateway(),
+      new FakeHookRunner(),
+      {
+        ...TEST_CONFIG,
+        workspace: { ...TEST_CONFIG.workspace, defaultAgent: "codex" },
+        profiles: {
+          ...TEST_CONFIG.profiles,
+          default: { ...TEST_CONFIG.profiles.default, yolo: true },
+        },
+      },
+      new BunGitGateway(),
+      new FakeAutoNameService(),
+      {},
+      {
+        listSessionIds: async () => {
+          listCalls += 1;
+          return listCalls <= 2 ? ["root-session"] : ["fork-session-1", "root-session"];
+        },
+      },
+    );
+
+    await lifecycle.createWorktree({ branch: "feature-codex-tab-refresh" });
+    await lifecycle.createWorktreeTab("feature-codex-tab-refresh");
+
+    const session = buildProjectSessionName(repoRoot);
+    const parkingWindow = buildWorktreeParkingWindowName("feature-codex-tab-refresh");
+    const gitDir = new BunGitGateway().resolveWorktreeGitDir(
+      join(repoRoot, "__worktrees", "feature-codex-tab-refresh"),
+    );
+
+    const beforeMeta = await readWorktreeMeta(gitDir);
+    if (!beforeMeta) throw new Error("expected worktree metadata");
+    const rootPaneBefore = beforeMeta.tabs?.find((entry) => entry.tabId === "root")?.paneId;
+    const forkPaneBefore = beforeMeta.tabs?.find((entry) => entry.tabId === "fork-1")?.paneId;
+    if (!rootPaneBefore || !forkPaneBefore) throw new Error("expected pane ids after fork");
+
+    await writeWorktreeMeta(gitDir, {
+      ...beforeMeta,
+      agentTerminalStale: true,
+      conversation: {
+        provider: "codexAppServer",
+        conversationId: "thread-refresh",
+        threadId: "thread-refresh",
+        cwd: join(repoRoot, "__worktrees", "feature-codex-tab-refresh"),
+        lastSeenAt: "2026-04-15T10:00:00.000Z",
+      },
+    });
+
+    tmux.swaps.length = 0;
+    tmux.commands.length = 0;
+    await lifecycle.refreshAgentTerminal("feature-codex-tab-refresh");
+
+    // The parking window is rebuilt from a clean slate — exactly one fork pane, not a
+    // duplicate stacked on top of the pre-refresh pane.
+    const parking = tmux.listWindows().find((window) => window.windowName === parkingWindow);
+    expect(parking?.paneCount).toBe(1);
+    // The fork's codex session is resumed into the rebuilt parked pane.
+    expect(tmux.commands.some((entry) => entry.command.includes("resume 'fork-session-1'"))).toBe(true);
+
+    const meta = await readWorktreeMeta(gitDir);
+    expect(meta?.activeTabId).toBe("fork-1");
+    const rootAfter = meta?.tabs?.find((entry) => entry.tabId === "root");
+    const forkAfter = meta?.tabs?.find((entry) => entry.tabId === "fork-1");
+    // Pane ids are recaptured: the window was recreated, so the stale pre-refresh ids in
+    // meta would otherwise make a later swap target a dead pane.
+    expect(rootAfter?.paneId).not.toBe(rootPaneBefore);
+    expect(forkAfter?.paneId).not.toBe(forkPaneBefore);
+    expect(forkAfter?.sessionId).toBe("fork-session-1");
+
+    // The previously active fork is brought back on-screen, and a subsequent select against
+    // the refreshed (live) pane ids resolves instead of throwing on a stale pane.
+    expect(tmux.swaps.length).toBeGreaterThan(0);
+    await lifecycle.selectWorktreeTab("feature-codex-tab-refresh", "root");
+    expect((await readWorktreeMeta(gitDir))?.activeTabId).toBe("root");
+  });
+
   it("kills the parking window when removing a worktree with fork tabs", async () => {
     const repoRoot = await initRepo();
     const runtime = new ProjectRuntime();
