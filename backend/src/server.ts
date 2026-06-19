@@ -66,12 +66,12 @@ import {
   buildLinearPickupMarkdown,
   createIssueComment,
   createLinearIssue,
-  deriveLinearIssueTitle,
   fetchAssignedIssues,
   fetchIssueWithAttachments,
   fetchTeamByKey,
   uploadAttachmentFile,
 } from "./services/linear-service";
+import { resolveLinearTicketTitle } from "./services/linear-title-service";
 import {
   buildSeedFromLinear,
   defaultSeedFromLinearDeps,
@@ -1070,8 +1070,12 @@ async function apiCreateWorktree(req: Request): Promise<Response> {
   }
 
   if (createLinearTicket) {
-    const title = deriveLinearIssueTitle(linearTitle, prompt);
-    if (!title) {
+    const resolvedTitle = await resolveLinearTicketTitle({
+      explicitTitle: linearTitle,
+      prompt: prompt ?? "",
+      autoName: config.autoName,
+    });
+    if (!resolvedTitle) {
       return errorResponse("Linear ticket title could not be derived from the prompt", 400);
     }
 
@@ -1088,7 +1092,7 @@ async function apiCreateWorktree(req: Request): Promise<Response> {
     }
 
     const linearResult = await createLinearIssue({
-      title,
+      title: resolvedTitle.title,
       description: resolvedPrompt ?? "",
       teamId: teamResult.data.id,
     });
@@ -1098,7 +1102,7 @@ async function apiCreateWorktree(req: Request): Promise<Response> {
 
     resolvedBranch = linearResult.data.branchName;
     log.info(
-      `[linear] created ticket ${linearResult.data.identifier} branch=${linearResult.data.branchName} title="${linearResult.data.title.slice(0, 80)}"`,
+      `[linear] created ticket ${linearResult.data.identifier} branch=${linearResult.data.branchName} title="${linearResult.data.title.slice(0, 80)}" titleSource=${resolvedTitle.source}`,
     );
   }
 
