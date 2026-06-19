@@ -92,7 +92,15 @@ import {
 } from "./services/agents-ui-stream-service";
 import { classifyAgentsTerminalWorktreeError } from "./services/agents-ui-action-service";
 import { buildProjectSnapshot } from "./services/snapshot-service";
-import { ClaudeConversationService } from "./services/claude-conversation-service";
+import {
+  ClaudeConversationService,
+  isPendingClaudeConversationId,
+} from "./services/claude-conversation-service";
+import {
+  buildClaudeStreamingLaunchContext,
+  type ClaudeStreamingLaunchContext,
+} from "./services/claude-streaming-launch-service";
+import { ClaudeConversationStreamService } from "./services/claude-conversation-stream-service";
 import {
   WorktreeConversationService,
   resolveCodexAppServerLaunchContext,
@@ -142,6 +150,9 @@ const worktreeConversationService = new WorktreeConversationService({
 const claudeConversationService = new ClaudeConversationService({
   claude: claudeCliClient,
   git,
+});
+const claudeConversationStreamService = new ClaudeConversationStreamService({
+  claude: claudeCliClient,
 });
 const removingBranches = new Set<string>();
 const mutatingTabBranches = new Set<string>();
@@ -663,6 +674,24 @@ function resolveWorktreeTerminalSubmitDelayMs(agentName: WorktreeSnapshot["agent
   });
 }
 
+function withClaudeLiveConversation(
+  response: AgentsUiWorktreeConversationResponse,
+): AgentsUiWorktreeConversationResponse {
+  if (response.conversation.provider !== "claudeCode") return response;
+
+  const activeTurnId = claudeConversationStreamService.activeTurnId(response.conversation.conversationId);
+  if (!activeTurnId) return response;
+
+  return {
+    ...response,
+    conversation: {
+      ...response.conversation,
+      running: true,
+      activeTurnId,
+    },
+  };
+}
+
 async function setAgentTerminalStale(worktree: WorktreeSnapshot, stale: boolean): Promise<void> {
   const gitDir = git.resolveWorktreeGitDir(worktree.path);
   const meta = await readWorktreeMeta(gitDir);
@@ -675,6 +704,92 @@ async function setAgentTerminalStale(worktree: WorktreeSnapshot, stale: boolean)
   if (projectRuntime.getWorktree(meta.worktreeId)) {
     projectRuntime.setAgentTerminalStale(meta.worktreeId, stale);
   }
+}
+
+async function resolveClaudeStreamingLaunchContext(
+  worktree: WorktreeSnapshot,
+): Promise<{
+  ok: true;
+  data: ClaudeStreamingLaunchContext | null;
+} | {
+  ok: false;
+  response: Response;
+}> {
+  const gitDir = git.resolveWorktreeGitDir(worktree.path);
+  const meta = await readWorktreeMeta(gitDir);
+  if (!meta) {
+    return {
+      ok: false,
+      response: errorResponse("Worktree metadata is missing", 409),
+    };
+  }
+
+  const profile = config.profiles[meta.profile];
+  if (!profile) {
+    return {
+      ok: false,
+      response: errorResponse(`Profile is missing for Claude web chat: ${meta.profile}`, 409),
+    };
+  }
+
+  return {
+    ok: true,
+    data: await buildClaudeStreamingLaunchContext({
+      meta,
+      profile,
+      worktreePath: worktree.path,
+    }),
+  };
+}
+
+function isBusyAgentStatus(status: string): boolean {
+  return status === "starting" || status === "running";
+}
+
+async function sendClaudeStreamingMessage(input: {
+  worktree: WorktreeSnapshot;
+  text: string;
+  conversationId: string;
+}): Promise<Response | null> {
+  const launchContext = await resolveClaudeStreamingLaunchContext(input.worktree);
+  if (!launchContext.ok) return launchContext.response;
+  if (!launchContext.data) return null;
+
+  if (isBusyAgentStatus(input.worktree.status)) {
+    return errorResponse("Claude is already running in the terminal. Wait for it to finish before sending a web chat message.", 409);
+  }
+
+  const hasExistingSession = !isPendingClaudeConversationId(input.conversationId);
+  const sessionId = hasExistingSession ? input.conversationId : randomUUID();
+  if (!hasExistingSession) {
+    const saved = await claudeConversationService.setWorktreeConversationSession(input.worktree, sessionId);
+    if (!saved.ok) {
+      return errorResponse(saved.error, saved.status);
+    }
+  }
+
+  const turnId = `claude-turn:${randomUUID()}`;
+  const started = claudeConversationStreamService.startRun({
+    conversationId: sessionId,
+    turnId,
+    cwd: input.worktree.path,
+    prompt: input.text,
+    env: launchContext.data.env,
+    permissionMode: launchContext.data.permissionMode,
+    ...(hasExistingSession ? { resumeSessionId: sessionId } : { sessionId }),
+    ...(!hasExistingSession && launchContext.data.systemPrompt ? { systemPrompt: launchContext.data.systemPrompt } : {}),
+  });
+  if (!started.ok) {
+    return errorResponse(started.error, 409);
+  }
+
+  await setAgentTerminalStale(input.worktree, true);
+  return jsonResponse({
+    conversationId: sessionId,
+    turnId,
+    running: true,
+    streaming: true,
+  });
 }
 
 async function apiAttachAgentsWorktree(branch: string): Promise<Response> {
@@ -691,7 +806,7 @@ async function apiAttachAgentsWorktree(branch: string): Promise<Response> {
     ? await claudeConversationService.attachWorktreeConversation(resolved.worktree)
     : await worktreeConversationService.attachWorktreeConversation(resolved.worktree);
   return result.ok
-    ? jsonResponse(result.data)
+    ? jsonResponse(withClaudeLiveConversation(result.data))
     : errorResponse(result.error, result.status);
 }
 
@@ -709,7 +824,7 @@ async function apiGetAgentsWorktreeHistory(branch: string): Promise<Response> {
     ? await claudeConversationService.readWorktreeConversation(resolved.worktree)
     : await worktreeConversationService.readWorktreeConversation(resolved.worktree);
   return result.ok
-    ? jsonResponse(result.data)
+    ? jsonResponse(withClaudeLiveConversation(result.data))
     : errorResponse(result.error, result.status);
 }
 
@@ -746,6 +861,14 @@ async function apiSendAgentsWorktreeMessage(branch: string, req: Request): Promi
   if (!conversationResult.ok) {
     return errorResponse(conversationResult.error, conversationResult.status);
   }
+
+  const streamingResponse = await sendClaudeStreamingMessage({
+    worktree: resolved.worktree,
+    text: parsed.data.text,
+    conversationId: conversationResult.data.conversation.conversationId,
+  });
+  if (streamingResponse) return streamingResponse;
+
   const terminalWorktree = await resolveAgentsTerminalWorktree(branch);
   if (!terminalWorktree.ok) return terminalWorktree.response;
   const sendResult = await sendTerminalPrompt(
@@ -765,6 +888,7 @@ async function apiSendAgentsWorktreeMessage(branch: string, req: Request): Promi
     conversationId: conversationResult.data.conversation.conversationId,
     turnId: `tmux:${crypto.randomUUID()}`,
     running: true,
+    streaming: false,
   });
 }
 
@@ -795,6 +919,17 @@ async function apiInterruptAgentsWorktree(branch: string): Promise<Response> {
   if (!conversationResult.ok) {
     return errorResponse(conversationResult.error, conversationResult.status);
   }
+  const activeClaudeInterrupt = claudeConversationStreamService.interrupt(conversationResult.data.conversation.conversationId);
+  if (activeClaudeInterrupt.ok) {
+    await setAgentTerminalStale(resolved.worktree, true);
+    return jsonResponse({
+      conversationId: conversationResult.data.conversation.conversationId,
+      turnId: activeClaudeInterrupt.turnId,
+      interrupted: true,
+      streaming: true,
+    });
+  }
+
   const terminalWorktree = await resolveAgentsTerminalWorktree(branch);
   if (!terminalWorktree.ok) return terminalWorktree.response;
   const interruptResult = await interruptPrompt(terminalWorktree.data.attachTarget, 0);
@@ -806,6 +941,7 @@ async function apiInterruptAgentsWorktree(branch: string): Promise<Response> {
     conversationId: conversationResult.data.conversation.conversationId,
     turnId: conversationResult.data.conversation.activeTurnId ?? `tmux:${crypto.randomUUID()}`,
     interrupted: true,
+    streaming: false,
   });
 }
 
@@ -846,7 +982,7 @@ async function loadAgentsConversationInitialState(
     ? await claudeConversationService.readWorktreeConversation(resolved.worktree)
     : await worktreeConversationService.readWorktreeConversation(resolved.worktree);
   return result.ok
-    ? { ok: true, data: result.data }
+    ? { ok: true, data: withClaudeLiveConversation(result.data) }
     : { ok: false, message: result.error };
 }
 
@@ -879,6 +1015,7 @@ async function openAgentsSocket(
   let socketClosed = false;
   let streamSession: AgentsConversationStreamSession | null = null;
   const bufferedNotifications: CodexAppServerNotification[] = [];
+  let unsubscribeClaudeStream: (() => void) | null = null;
   const unsubscribeNotifications = codexAppServerClient.onNotification((notification) => {
     if (bufferingNotifications || !streamSession) {
       bufferedNotifications.push(notification);
@@ -894,6 +1031,7 @@ async function openAgentsSocket(
     socketClosed = true;
     streamSession?.close();
     unsubscribeNotifications();
+    unsubscribeClaudeStream?.();
   };
 
   const initialState = await loadAgentsConversationInitialState(data.branch);
@@ -911,6 +1049,15 @@ async function openAgentsSocket(
     send: (event) => sendAgentsWs(ws, event),
   });
   data.conversationId = streamSession.currentConversationId();
+  if (initialState.data.conversation.provider === "claudeCode") {
+    unsubscribeNotifications();
+    unsubscribeClaudeStream = claudeConversationStreamService.subscribe(
+      initialState.data.conversation.conversationId,
+      streamSession,
+    );
+    return;
+  }
+
   if (initialState.data.conversation.provider !== "codexAppServer") {
     unsubscribeNotifications();
     data.unsubscribe = null;
