@@ -1,7 +1,62 @@
 import { resolve } from "node:path";
-import { createApi } from "@webmux/api-contract";
+import { createApi, type ProjectInitPhase, type ProjectInitState } from "@webmux/api-contract";
 import { CommandUsageError, formatServerError } from "./shared";
-import { runMigrate, warnIfOtherInstances } from "./migrate.ts";
+import { runMigrate } from "./migrate.ts";
+
+const PROJECT_SETUP_POLL_INTERVAL_MS = 700;
+const PROJECT_SETUP_TIMEOUT_MS = 5 * 60_000;
+
+function projectSetupPhaseLabel(phase: ProjectInitPhase): string {
+  switch (phase) {
+    case "creating_config":
+      return "Creating .webmux.yaml";
+    case "analyzing":
+      return "Analyzing project structure";
+    case "ready":
+      return "Project ready";
+    case "failed":
+      return "Setup failed";
+  }
+}
+
+export interface ProjectSetupPoller {
+  poll: () => Promise<ProjectInitState[]>;
+  sleep: (ms: number) => Promise<void>;
+  log?: (message: string) => void;
+  now?: () => number;
+  timeoutMs?: number;
+}
+
+/** Follow an in-progress on-add project setup to completion, printing each
+ *  phase as it changes. Resolves with the ready state (carrying the prefix) or
+ *  throws on failure/timeout. Poller is injected so it's testable. */
+export async function awaitProjectSetup(path: string, deps: ProjectSetupPoller): Promise<ProjectInitState> {
+  const log = deps.log ?? ((message: string): void => console.log(message));
+  const now = deps.now ?? Date.now;
+  const deadline = now() + (deps.timeoutMs ?? PROJECT_SETUP_TIMEOUT_MS);
+  let lastPhase: ProjectInitPhase | null = null;
+
+  while (now() < deadline) {
+    // A transient poll failure shouldn't abort the flow — the backend job keeps
+    // running, so just retry until the deadline.
+    let state: ProjectInitState | undefined;
+    try {
+      state = (await deps.poll()).find((init) => init.path === path);
+    } catch {
+      state = undefined;
+    }
+    if (state && state.phase !== lastPhase) {
+      lastPhase = state.phase;
+      if (state.phase !== "ready" && state.phase !== "failed") {
+        log(`  ${projectSetupPhaseLabel(state.phase)}…`);
+      }
+    }
+    if (state?.phase === "ready") return state;
+    if (state?.phase === "failed") throw new Error(state.error ?? "Project setup failed.");
+    await deps.sleep(PROJECT_SETUP_POLL_INTERVAL_MS);
+  }
+  throw new Error("Project setup timed out.");
+}
 
 export type ParsedProjectCommand =
   | { subcommand: "ls" }
@@ -76,9 +131,6 @@ export async function runProjectCommand(args: string[], port: number): Promise<n
     return runMigrate(port);
   }
 
-  // Nudge toward consolidation when other servers are still running.
-  warnIfOtherInstances(port);
-
   const api = createApi(`http://localhost:${port}`);
   try {
     if (parsed.subcommand === "ls") {
@@ -96,8 +148,21 @@ export async function runProjectCommand(args: string[], port: number): Promise<n
 
     if (parsed.subcommand === "add") {
       const absolute = resolve(process.cwd(), parsed.path);
-      const project = await api.addProject({ body: { path: absolute } });
-      console.log(`Added ${project.name} (${project.prefix}) — ${project.path}`);
+      const res = await api.addProject({ body: { path: absolute } });
+      if (!res.initializing) {
+        if (!res.project) {
+          console.error("Server accepted the project but returned nothing to open.");
+          return 1;
+        }
+        console.log(`Added ${res.project.name} (${res.project.prefix}) — ${res.project.path}`);
+        return 0;
+      }
+      // Repo had no .webmux.yaml — webmux is setting it up. Show the phases.
+      const ready = await awaitProjectSetup(res.path, {
+        poll: async () => (await api.projectInits()).inits,
+        sleep: (ms) => Bun.sleep(ms),
+      });
+      console.log(`Added ${ready.name ?? ready.prefix} (${ready.prefix}) — ${res.path}`);
       return 0;
     }
 
