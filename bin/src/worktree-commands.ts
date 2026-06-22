@@ -2,7 +2,7 @@ import * as p from "@clack/prompts";
 import { createApi } from "@webmux/api-contract";
 import { basename, resolve } from "node:path";
 import { buildSeedFromLinear, defaultSeedFromLinearDeps } from "../../backend/src/services/conversation-export-service";
-import { CommandUsageError, withServerConnection } from "./shared";
+import { CommandUsageError, resolveProjectBaseUrl, withServerConnection } from "./shared";
 import { readWorktreeArchiveState, readWorktreeMeta } from "../../backend/src/adapters/fs";
 import { buildProjectSessionName, buildWorktreeWindowName } from "../../backend/src/adapters/tmux";
 import type { AgentId } from "../../backend/src/domain/config";
@@ -71,6 +71,9 @@ interface WorktreeCommandDependencies {
   stderr?: (message: string) => void;
   switchToTmuxWindow?: (projectDir: string, branch: string) => void;
   confirmPrune?: (worktreeCount: number) => Promise<boolean>;
+  /** Resolve the project-scoped base URL for server-backed commands (send/tab).
+   *  Injectable so tests can exercise the HTTP shape without a live server. */
+  resolveBaseUrl?: (port: number, projectDir: string) => Promise<string>;
 }
 
 export function getWorktreeCommandUsage(command: WorktreeSubcommand): string {
@@ -737,6 +740,7 @@ export async function runWorktreeCommand(
   const createRuntime = deps.createRuntime ?? ((options: { projectDir: string; port: number }) => createWebmuxRuntime(options));
   const stdout = deps.stdout ?? ((message: string) => console.log(message));
   const stderr = deps.stderr ?? ((message: string) => console.error(message));
+  const resolveBaseUrl = deps.resolveBaseUrl ?? resolveProjectBaseUrl;
   const switchToTmuxWindow = deps.switchToTmuxWindow ?? defaultSwitchToTmuxWindow;
   const confirmPrune = deps.confirmPrune ?? defaultConfirmPrune;
 
@@ -851,7 +855,7 @@ export async function runWorktreeCommand(
         return 0;
       }
 
-      const api = createApi(`http://localhost:${context.port}`);
+      const api = createApi(await withServerConnection(context.port, () => resolveBaseUrl(context.port, context.projectDir)));
       await withServerConnection(context.port, () =>
         api.sendWorktreePrompt({
           params: { name: parsed.branch },
@@ -873,7 +877,7 @@ export async function runWorktreeCommand(
         return 0;
       }
 
-      const api = createApi(`http://localhost:${context.port}`);
+      const api = createApi(await withServerConnection(context.port, () => resolveBaseUrl(context.port, context.projectDir)));
       await withServerConnection(context.port, async () => {
         if (parsed.action === "new") {
           const { tab } = await api.createWorktreeTab({ params: { name: parsed.branch } });

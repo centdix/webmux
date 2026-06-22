@@ -41,6 +41,12 @@ import {
   LinearIssuesResponseSchema,
   AutoNameConfigResponseSchema,
   InstancesResponseSchema,
+  ProjectsResponseSchema,
+  ProjectSummarySchema,
+  AddProjectRequestSchema,
+  ProjectPrefixParamsSchema,
+  MigrateProjectsRequestSchema,
+  MigrateProjectsResponseSchema,
 } from "./schemas";
 
 const c = initContract();
@@ -84,6 +90,10 @@ export const apiPaths = {
   fetchCiLogs: "/api/ci-logs/:runId",
   dismissNotification: "/api/notifications/:id/dismiss",
   fetchInstances: "/api/instances",
+  fetchProjects: "/api/projects",
+  addProject: "/api/projects",
+  migrateProjects: "/api/projects/migrate",
+  removeProject: "/api/projects/:prefix",
 } as const;
 
 const commonErrorResponses = {
@@ -447,6 +457,45 @@ export const apiContract = c.router({
     path: apiPaths.fetchInstances,
     responses: {
       200: InstancesResponseSchema,
+      500: ErrorResponseSchema,
+    },
+  },
+  fetchProjects: {
+    method: "GET",
+    path: apiPaths.fetchProjects,
+    responses: {
+      200: ProjectsResponseSchema,
+      500: ErrorResponseSchema,
+    },
+  },
+  addProject: {
+    method: "POST",
+    path: apiPaths.addProject,
+    body: AddProjectRequestSchema,
+    responses: {
+      200: ProjectSummarySchema,
+      400: ErrorResponseSchema,
+      500: ErrorResponseSchema,
+    },
+  },
+  migrateProjects: {
+    method: "POST",
+    path: apiPaths.migrateProjects,
+    body: MigrateProjectsRequestSchema,
+    responses: {
+      200: MigrateProjectsResponseSchema,
+      400: ErrorResponseSchema,
+      500: ErrorResponseSchema,
+    },
+  },
+  removeProject: {
+    method: "DELETE",
+    path: apiPaths.removeProject,
+    pathParams: ProjectPrefixParamsSchema,
+    body: c.noBody(),
+    responses: {
+      200: OkResponseSchema,
+      404: ErrorResponseSchema,
       500: ErrorResponseSchema,
     },
   },

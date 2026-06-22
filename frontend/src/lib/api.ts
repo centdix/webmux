@@ -12,6 +12,7 @@ import type {
   InstanceSummary,
   PostWorktreeToLinearResponse,
   PostWorktreeToLinearTarget,
+  ProjectSummary,
   ProjectWorktreeSnapshot,
   UpsertCustomAgentRequest,
   ValidateCustomAgentResponse,
@@ -19,7 +20,20 @@ import type {
   WorktreeTab,
 } from "./types";
 
-export const api = createApi("");
+/** The active project's URL prefix, taken from the first path segment (the
+ *  server serves each project under `/<prefix>/...` on the shared port). Empty
+ *  when at the root before the bootstrap redirect picks a project. */
+export const activePrefix: string = window.location.pathname.split("/")[1] ?? "";
+
+/** Base path for the active project's API + WebSocket calls. */
+export const apiBase: string = activePrefix ? `/${activePrefix}` : "";
+
+/** Per-project client — every worktree/agent/config call is scoped to the
+ *  active project. */
+export const api = createApi(apiBase);
+
+/** Hub client — project list/add/remove + the migration sensor are global (no prefix). */
+const hubApi = createApi("");
 
 function mapAgentStatus(status: string): string {
   switch (status) {
@@ -152,7 +166,7 @@ export function connectWorktreeConversationStream(
   },
 ): () => void {
   const socket = new WebSocket(
-    `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}${
+    `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}${apiBase}${
       withWorktreeName(apiPaths.streamAgentsWorktreeConversation, branch)
     }`,
   );
@@ -203,9 +217,42 @@ export function validateAgent(body: UpsertCustomAgentRequest): Promise<ValidateC
   return api.validateAgent({ body });
 }
 
+/** Other webmux servers running on this machine (migration sensor) — drives the
+ *  banner that prompts the user to consolidate them with `webmux project migrate`. */
 export async function fetchInstances(): Promise<InstanceSummary[]> {
-  const response = await api.fetchInstances();
+  const response = await hubApi.fetchInstances();
   return response.instances;
+}
+
+export async function fetchProjects(): Promise<ProjectSummary[]> {
+  const response = await hubApi.fetchProjects();
+  return response.projects;
+}
+
+export async function addProject(path: string): Promise<ProjectSummary> {
+  return hubApi.addProject({ body: { path } });
+}
+
+export async function removeProject(prefix: string): Promise<void> {
+  await hubApi.removeProject({ params: { prefix } });
+}
+
+export type ProjectBootstrap = "ready" | "redirecting" | "no-projects";
+
+/** Decide what to mount before the app loads, based on the URL prefix and the
+ *  known projects:
+ *  - `ready`        — the URL points at a real project; mount the dashboard.
+ *  - `redirecting`  — the URL has no/unknown prefix but projects exist; a
+ *                     redirect to the first project is in flight, mount nothing.
+ *  - `no-projects`  — nothing is registered; mount the empty state so the
+ *                     dashboard doesn't boot into 404-ing per-project calls. */
+export async function ensureProjectPrefix(): Promise<ProjectBootstrap> {
+  const projects = await fetchProjects().catch((): ProjectSummary[] => []);
+  if (projects.some((project) => project.prefix === activePrefix)) return "ready";
+  const target = projects[0]?.prefix;
+  if (!target) return "no-projects";
+  window.location.replace(`/${target}/`);
+  return "redirecting";
 }
 
 export function subscribeNotifications(
@@ -213,7 +260,7 @@ export function subscribeNotifications(
   onDismiss: (id: number) => void,
   onInitial?: (n: AppNotification) => void,
 ): () => void {
-  const es = new EventSource("/api/notifications/stream");
+  const es = new EventSource(`${apiBase}/api/notifications/stream`);
 
   es.addEventListener("initial", (e: MessageEvent) => {
     try {
@@ -244,7 +291,7 @@ export async function uploadFiles(worktree: string, files: File[]): Promise<File
   for (const file of files) {
     form.append("files", file);
   }
-  const res = await fetch(`/api/worktrees/${encodeURIComponent(worktree)}/upload`, {
+  const res = await fetch(`${apiBase}/api/worktrees/${encodeURIComponent(worktree)}/upload`, {
     method: "POST",
     body: form,
   });

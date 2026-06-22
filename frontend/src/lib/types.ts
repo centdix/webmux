@@ -54,6 +54,7 @@ export type {
   PrEntry,
   ProfileConfig,
   ProjectSnapshot,
+  ProjectSummary,
   ProjectWorktreeSnapshot,
   PullMainResult,
   ServiceConfig,
