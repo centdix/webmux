@@ -3,7 +3,8 @@ import { createApi } from "@webmux/api-contract";
 import { basename, resolve } from "node:path";
 import { buildSeedFromLinear, defaultSeedFromLinearDeps } from "../../backend/src/services/conversation-export-service";
 import { CommandUsageError, resolveProjectBaseUrl, withServerConnection } from "./shared";
-import { readWorktreeArchiveState, readWorktreeMeta } from "../../backend/src/adapters/fs";
+import { readOpenSessionsState, readWorktreeArchiveState, readWorktreeMeta } from "../../backend/src/adapters/fs";
+import type { OpenSessionsState } from "../../backend/src/domain/model";
 import { buildProjectSessionName, buildWorktreeWindowName } from "../../backend/src/adapters/tmux";
 import type { AgentId } from "../../backend/src/domain/config";
 import type { WorktreeCreationPhase } from "../../backend/src/domain/model";
@@ -20,7 +21,7 @@ const PHASE_LABELS: Record<WorktreeCreationPhase, string> = {
   reconciling: "Reconciling",
 };
 
-export type WorktreeSubcommand = "add" | "list" | "open" | "close" | "refresh" | "remove" | "merge" | "send" | "prune" | "archive" | "unarchive" | "label" | "tab";
+export type WorktreeSubcommand = "add" | "list" | "open" | "close" | "refresh" | "remove" | "merge" | "send" | "prune" | "restore" | "archive" | "unarchive" | "label" | "tab";
 
 type WorktreeListMode = "active" | "all" | "archived";
 
@@ -74,6 +75,9 @@ interface WorktreeCommandDependencies {
   /** Resolve the project-scoped base URL for server-backed commands (send/tab).
    *  Injectable so tests can exercise the HTTP shape without a live server. */
   resolveBaseUrl?: (port: number, projectDir: string) => Promise<string>;
+  /** Read the saved open-sessions snapshot (used by `restore`). Injectable so
+   *  tests can drive restore without touching the filesystem. */
+  readOpenSessions?: (gitDir: string) => Promise<OpenSessionsState>;
 }
 
 export function getWorktreeCommandUsage(command: WorktreeSubcommand): string {
@@ -143,6 +147,8 @@ export function getWorktreeCommandUsage(command: WorktreeSubcommand): string {
       ].join("\n");
     case "prune":
       return "Usage:\n  webmux prune";
+    case "restore":
+      return "Usage:\n  webmux restore\n\nRe-open every worktree session that was open the last time sessions were saved.";
     case "tab":
       return [
         "Usage:",
@@ -533,6 +539,22 @@ function parsePruneCommandArgs(args: string[]): boolean {
   return true;
 }
 
+function parseRestoreCommandArgs(args: string[]): boolean {
+  for (const arg of args) {
+    if (arg === "--help" || arg === "-h") {
+      return false;
+    }
+
+    if (arg.startsWith("-")) {
+      throw new CommandUsageError(`Unknown option: ${arg}`);
+    }
+
+    throw new CommandUsageError(`Unexpected argument: ${arg}`);
+  }
+
+  return true;
+}
+
 export function parseListCommandArgs(args: string[]): ParsedListCommand | null {
   let mode: WorktreeListMode = "active";
   let search = "";
@@ -746,6 +768,7 @@ export async function runWorktreeCommand(
   const resolveBaseUrl = deps.resolveBaseUrl ?? resolveProjectBaseUrl;
   const switchToTmuxWindow = deps.switchToTmuxWindow ?? defaultSwitchToTmuxWindow;
   const confirmPrune = deps.confirmPrune ?? defaultConfirmPrune;
+  const readOpenSessions = deps.readOpenSessions ?? readOpenSessionsState;
 
   try {
     if (context.command === "add") {
@@ -860,6 +883,79 @@ export async function runWorktreeCommand(
       return 0;
     }
 
+    if (context.command === "restore") {
+      if (!parseRestoreCommandArgs(context.args)) {
+        stdout(getWorktreeCommandUsage("restore"));
+        return 0;
+      }
+
+      const runtime = createRuntime({
+        projectDir: context.projectDir,
+        port: context.port,
+      });
+      const projectDir = resolve(runtime.projectDir);
+      const gitDir = runtime.git.resolveWorktreeGitDir(projectDir);
+      const state = await readOpenSessions(gitDir);
+
+      if (state.branches.length === 0) {
+        stdout("No saved sessions to restore.");
+        return 0;
+      }
+
+      const sessionName = buildProjectSessionName(projectDir);
+      let openWindows = new Set<string>();
+      try {
+        openWindows = new Set(
+          runtime.tmux.listWindows()
+            .filter((w) => w.sessionName === sessionName)
+            .map((w) => w.windowName),
+        );
+      } catch {
+        openWindows = new Set();
+      }
+
+      const existingBranches = new Set(
+        listProjectWorktrees(runtime).map((entry) => entry.branch ?? basename(entry.path)),
+      );
+
+      let restored = 0;
+      let skipped = 0;
+      let failed = 0;
+      let firstRestored: string | null = null;
+
+      for (const branch of state.branches) {
+        if (openWindows.has(buildWorktreeWindowName(branch))) {
+          stdout(`Already open: ${branch}`);
+          skipped++;
+          continue;
+        }
+        if (!existingBranches.has(branch)) {
+          stderr(`Skipping ${branch}: worktree no longer exists`);
+          skipped++;
+          continue;
+        }
+        try {
+          await runtime.lifecycleService.openWorktree(branch);
+          stdout(`Restored ${branch}`);
+          restored++;
+          if (!firstRestored) firstRestored = branch;
+        } catch (error) {
+          stderr(`Failed to restore ${branch}: ${error instanceof Error ? error.message : String(error)}`);
+          failed++;
+        }
+      }
+
+      const summaryParts = [`Restored ${restored} session${restored === 1 ? "" : "s"}`];
+      if (skipped > 0) summaryParts.push(`skipped ${skipped}`);
+      if (failed > 0) summaryParts.push(`${failed} failed`);
+      stdout(`${summaryParts.join(", ")}.`);
+
+      if (firstRestored) {
+        switchToTmuxWindow(runtime.projectDir, firstRestored);
+      }
+      return failed > 0 ? 1 : 0;
+    }
+
     if (context.command === "send") {
       const parsed = parseSendCommandArgs(context.args);
       if (!parsed) {
@@ -940,7 +1036,7 @@ export async function runWorktreeCommand(
       return 0;
     }
 
-    const command: Exclude<WorktreeSubcommand, "add" | "list" | "send" | "prune" | "label" | "tab"> = context.command;
+    const command: Exclude<WorktreeSubcommand, "add" | "list" | "send" | "prune" | "restore" | "label" | "tab"> = context.command;
     const branch = parseBranchCommandArgs(context.args);
     if (!branch) {
       stdout(getWorktreeCommandUsage(command));
