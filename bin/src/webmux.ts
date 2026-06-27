@@ -32,7 +32,7 @@ Usage:
   webmux merge        Merge a worktree into the main branch and remove it
   webmux send         Send a prompt to a running worktree agent
   webmux tab          List, create, switch, or close agent tabs in a worktree
-  webmux prune        Remove all worktrees in the current project
+  webmux prune        Remove all closed (not open) worktrees in the current project
   webmux linear       Post a worktree conversation to a Linear issue/team
   webmux project      List, add, or remove projects served by the dashboard
   webmux completion   Generate shell completion script (bash, zsh)
