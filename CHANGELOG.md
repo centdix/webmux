@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.40.0](https://github.com/windmill-labs/webmux/compare/v0.39.0...v0.40.0) (2026-06-27)
+
+
+### Features
+
+* periodically save open sessions and add webmux restore ([a96f16d](https://github.com/windmill-labs/webmux/commit/a96f16d70bbc5cb700a015a578e9a6865d0adcee))
+* periodically save open sessions and add webmux restore ([0b41b19](https://github.com/windmill-labs/webmux/commit/0b41b199a911cfc60245305d4b0fd8f1ee13b2c4))
+* prune only closed worktrees instead of all ([0fa2da6](https://github.com/windmill-labs/webmux/commit/0fa2da67d05a705820a38643cb71f3a72cad2063))
+* prune only closed worktrees instead of all ([164e7fc](https://github.com/windmill-labs/webmux/commit/164e7fcbc1a699a94dace10b0d095f8896c497e1))
+
 ## [0.39.0](https://github.com/windmill-labs/webmux/compare/v0.38.0...v0.39.0) (2026-06-22)
 
 
