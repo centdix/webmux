@@ -604,9 +604,24 @@ function listProjectWorktrees(
     .filter((entry) => !entry.bare && resolve(entry.path) !== projectDir);
 }
 
+function buildOpenWorktreeWindowSet(runtime: WorktreeRuntimeLike): Set<string> {
+  const sessionName = buildProjectSessionName(resolve(runtime.projectDir));
+  let windows: Array<{ sessionName: string; windowName: string }> = [];
+  try {
+    windows = runtime.tmux.listWindows();
+  } catch {
+    windows = [];
+  }
+  return new Set(
+    windows
+      .filter((w) => w.sessionName === sessionName)
+      .map((w) => w.windowName),
+  );
+}
+
 async function defaultConfirmPrune(worktreeCount: number): Promise<boolean> {
   const response = await p.confirm({
-    message: `Prune all ${worktreeCount} worktree${worktreeCount === 1 ? "" : "s"}? This action cannot be undone.`,
+    message: `Prune ${worktreeCount} closed worktree${worktreeCount === 1 ? "" : "s"}? This action cannot be undone.`,
     initialValue: false,
   });
   return !p.isCancel(response) && response;
@@ -669,19 +684,7 @@ async function listWorktrees(
     return;
   }
 
-  const sessionName = buildProjectSessionName(projectDir);
-  let windows: Array<{ sessionName: string; windowName: string }> = [];
-  try {
-    windows = runtime.tmux.listWindows();
-  } catch {
-    windows = [];
-  }
-
-  const openWindows = new Set(
-    windows
-      .filter((w) => w.sessionName === sessionName)
-      .map((w) => w.windowName),
-  );
+  const openWindows = buildOpenWorktreeWindowSet(runtime);
 
   const projectGitDir = runtime.git.resolveWorktreeGitDir(projectDir);
   const archivedPaths = buildArchivedWorktreePathSet(await readWorktreeArchiveState(projectGitDir));
@@ -855,14 +858,23 @@ export async function runWorktreeCommand(
         return 0;
       }
 
-      if (!await confirmPrune(worktrees.length)) {
+      const openWindows = buildOpenWorktreeWindowSet(runtime);
+      const closedWorktrees = worktrees.filter(
+        (entry) => !openWindows.has(buildWorktreeWindowName(entry.branch ?? basename(entry.path))),
+      );
+      if (closedWorktrees.length === 0) {
+        stdout("No closed worktrees to prune.");
+        return 0;
+      }
+
+      if (!await confirmPrune(closedWorktrees.length)) {
         stdout("Aborted.");
         return 0;
       }
 
       const result = await runtime.lifecycleService.pruneWorktrees();
       if (result.removedBranches.length === 0) {
-        stdout("No worktrees found.");
+        stdout("No closed worktrees to prune.");
         return 0;
       }
       stdout(
