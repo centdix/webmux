@@ -690,10 +690,14 @@ export class LifecycleService {
   async pruneWorktrees(): Promise<PruneWorktreesResult> {
     try {
       const resolvedWorktrees = await this.resolveAllWorktrees();
+      const sessionName = buildProjectSessionName(this.deps.projectRoot);
       const removedBranches: string[] = [];
 
       for (const resolved of resolvedWorktrees) {
         const branch = resolved.entry.branch ?? resolved.entry.path;
+        if (this.deps.tmux.hasWindow(sessionName, buildWorktreeWindowName(branch))) {
+          continue;
+        }
         await this.removeResolvedWorktree(resolved);
         removedBranches.push(branch);
       }

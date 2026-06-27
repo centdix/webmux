@@ -133,7 +133,7 @@ _webmux() {
     'remove:Remove a worktree'
     'merge:Merge a worktree into main'
     'send:Send a prompt to a running worktree agent'
-    'prune:Remove all worktrees in the current project'
+    'prune:Remove all closed (not open) worktrees in the current project'
     'linear:Post a worktree conversation to a Linear issue/team'
     'project:List, add, or remove projects served by the dashboard'
     'completion:Generate shell completion script'

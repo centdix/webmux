@@ -629,7 +629,7 @@ describe("runWorktreeCommand", () => {
     expect(stdout).toEqual(["Merged feature/search into develop"]);
   });
 
-  it("prunes all worktrees after confirmation", async () => {
+  it("prunes closed worktrees after confirmation", async () => {
     const { runtime, calls } = makeRuntime();
     runtime.git = stubGit([
       { path: "/repo", branch: "main", bare: false },
@@ -660,6 +660,71 @@ describe("runWorktreeCommand", () => {
     expect(confirmCalls).toEqual([2]);
     expect(calls).toEqual([{ method: "pruneWorktrees", value: null }]);
     expect(stdout).toEqual(["Pruned 2 worktrees: feature/search, feature/api"]);
+  });
+
+  it("counts only closed worktrees toward the prune confirmation", async () => {
+    const { runtime, calls } = makeRuntime();
+    runtime.git = stubGit([
+      { path: "/repo", branch: "main", bare: false },
+      { path: "/repo/.worktrees/feature-search", branch: "feature/search", bare: false },
+      { path: "/repo/.worktrees/feature-api", branch: "feature/api", bare: false },
+    ]);
+    runtime.tmux = stubTmux([
+      { sessionName: buildProjectSessionName("/repo"), windowName: buildWorktreeWindowName("feature/api") },
+    ]);
+    const stdout: string[] = [];
+    const confirmCalls: number[] = [];
+
+    const exitCode = await runWorktreeCommand(
+      {
+        command: "prune",
+        args: [],
+        projectDir: "/repo",
+        port: 5111,
+      },
+      {
+        createRuntime: () => runtime,
+        confirmPrune: async (count) => {
+          confirmCalls.push(count);
+          return true;
+        },
+        stdout: (message) => stdout.push(message),
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(confirmCalls).toEqual([1]);
+    expect(calls).toEqual([{ method: "pruneWorktrees", value: null }]);
+  });
+
+  it("does not prune when every worktree is open", async () => {
+    const { runtime, calls } = makeRuntime();
+    runtime.git = stubGit([
+      { path: "/repo", branch: "main", bare: false },
+      { path: "/repo/.worktrees/feature-search", branch: "feature/search", bare: false },
+    ]);
+    runtime.tmux = stubTmux([
+      { sessionName: buildProjectSessionName("/repo"), windowName: buildWorktreeWindowName("feature/search") },
+    ]);
+    const stdout: string[] = [];
+
+    const exitCode = await runWorktreeCommand(
+      {
+        command: "prune",
+        args: [],
+        projectDir: "/repo",
+        port: 5111,
+      },
+      {
+        createRuntime: () => runtime,
+        confirmPrune: async () => true,
+        stdout: (message) => stdout.push(message),
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(calls).toEqual([]);
+    expect(stdout).toEqual(["No closed worktrees to prune."]);
   });
 
   it("aborts prune when confirmation is declined", async () => {
