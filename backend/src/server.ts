@@ -102,6 +102,7 @@ import { startLinearAutoCreateMonitor, resetProcessedIssues } from "./services/l
 import { startOneshotWatcher } from "./services/oneshot-watcher-service";
 import { runAutoRemove, type AutoRemoveDependencies } from "./services/auto-remove-service";
 import { pullMainBranch, forcePullMainBranch, startAutoPullMonitor } from "./services/auto-pull-service";
+import { startSessionSnapshotMonitor } from "./services/session-restore-service";
 import {
   AgentsConversationStreamSession,
   readAgentsNotificationThreadId,
@@ -234,6 +235,7 @@ let autoRemoveOnMergeEnabled = config.integrations.github.autoRemoveOnMerge;
 let stopPrMonitor: (() => void) | null = null;
 let stopOneshotWatcher: (() => void) | null = null;
 let stopAutoPullMonitor: (() => void) | null = null;
+let stopSessionSnapshot: (() => void) | null = null;
 
 /** Create a worktree in oneshot mode for the given Linear issue and arm the
  *  server-side watcher to post results back + close the session when done. Returns
@@ -2312,6 +2314,7 @@ function parseAgentIdParam(params: Record<string, string>):
         config.workspace.autoPull.intervalSeconds * 1000,
       );
     }
+    stopSessionSnapshot = startSessionSnapshotMonitor({ git, tmux, projectRoot: PROJECT_DIR });
   }
 
   function stopLight(): void {
@@ -2322,6 +2325,8 @@ function parseAgentIdParam(params: Record<string, string>):
     stopOneshotWatcher = null;
     stopAutoPullMonitor?.();
     stopAutoPullMonitor = null;
+    stopSessionSnapshot?.();
+    stopSessionSnapshot = null;
   }
 
   return { prefix: instancePrefix, routes, wsHandlers, startLight, stopLight };

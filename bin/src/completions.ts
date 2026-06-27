@@ -134,6 +134,7 @@ _webmux() {
     'merge:Merge a worktree into main'
     'send:Send a prompt to a running worktree agent'
     'prune:Remove all worktrees in the current project'
+    'restore:Re-open all worktree sessions that were open before'
     'linear:Post a worktree conversation to a Linear issue/team'
     'project:List, add, or remove projects served by the dashboard'
     'completion:Generate shell completion script'
@@ -205,7 +206,7 @@ const BASH_SCRIPT = `_webmux() {
   prev="\${COMP_WORDS[COMP_CWORD-1]}"
 
   if [[ \${COMP_CWORD} -eq 1 ]]; then
-    COMPREPLY=($(compgen -W "serve init service update add oneshot list open close refresh archive unarchive label remove merge send prune linear project completion" -- "\${cur}"))
+    COMPREPLY=($(compgen -W "serve init service update add oneshot list open close refresh archive unarchive label remove merge send prune restore linear project completion" -- "\${cur}"))
     return
   fi
 
