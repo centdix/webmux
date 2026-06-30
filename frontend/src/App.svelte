@@ -140,6 +140,7 @@
   let baseBranches = $state<AvailableBranch[]>([]);
   let baseBranchesLoading = $state(false);
   let baseBranchesError = $state<string | null>(null);
+  let lockedBaseBranch = $state<string | null>(null);
   let includeRemoteBranches = $state(false);
   let searchQuery = $state("");
   let worktreeSearchInput = $state<HTMLInputElement | null>(null);
@@ -613,6 +614,14 @@
   function openCreateDialog(issue: LinearIssue | null = null): void {
     includeRemoteBranches = false;
     assignIssue = issue;
+    lockedBaseBranch = null;
+    showCreateDialog = true;
+  }
+
+  function openSubworktreeDialog(parentBranch: string): void {
+    includeRemoteBranches = false;
+    assignIssue = null;
+    lockedBaseBranch = parentBranch;
     showCreateDialog = true;
   }
 
@@ -644,6 +653,7 @@
       : request;
     showCreateDialog = false;
     assignIssue = null;
+    lockedBaseBranch = null;
 
     try {
       const createPromise = api.createWorktree({ body: finalRequest });
@@ -1218,6 +1228,7 @@
           mergeBranch = branch;
         }}
         onremove={(b) => (removeBranch = b)}
+        oncreatesubworktree={openSubworktreeDialog}
         onposttolinear={handlePostToLinear}
       />
       {#if config.projectDir}
@@ -1415,11 +1426,12 @@
     {baseBranches}
     {baseBranchesLoading}
     {baseBranchesError}
+    {lockedBaseBranch}
     startupEnvs={config.startupEnvs ?? {}}
     linearCreateTicketOption={config.linearCreateTicketOption}
     openedFromLinearIssue={assignIssue !== null}
     oncreate={handleCreate}
-    oncancel={() => { showCreateDialog = false; assignIssue = null; }}
+    oncancel={() => { showCreateDialog = false; assignIssue = null; lockedBaseBranch = null; }}
   />
 {/if}
 
