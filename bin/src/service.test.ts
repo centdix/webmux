@@ -1,16 +1,39 @@
 import { describe, expect, it } from "bun:test";
 import {
   generateServiceFile,
+  migrateServedRepoFromUnit,
   parseEnvCliArgs,
   parseInstalledServiceConfig,
   readEnvVarsFromUnit,
   readPortFromUnit,
+  resolveConfirmDecision,
   resolveEnvVars,
+  shouldPersistProject,
   type ServiceConfig,
 } from "./service.ts";
+import type { ProjectEntry } from "../../backend/src/domain/projects";
+import type { ProjectsRegistry } from "../../backend/src/adapters/projects-registry";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+/** In-memory ProjectsRegistry stub so the migration is testable without
+ *  touching ~/.webmux/projects.json. */
+function fakeRegistry(initial: ProjectEntry[] = []): ProjectsRegistry {
+  const entries = [...initial];
+  return {
+    list: () => [...entries],
+    add: (entry) => {
+      const idx = entries.findIndex((e) => e.path === entry.path);
+      if (idx >= 0) entries[idx] = entry;
+      else entries.push(entry);
+    },
+    remove: (path) => {
+      const idx = entries.findIndex((e) => e.path === path);
+      if (idx >= 0) entries.splice(idx, 1);
+    },
+  };
+}
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "webmux-service-env-"));
@@ -20,6 +43,92 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
     await rm(dir, { recursive: true, force: true });
   }
 }
+
+describe("resolveConfirmDecision", () => {
+  it("proceeds outright with --yes, regardless of TTY", () => {
+    expect(resolveConfirmDecision(true, true)).toBe("proceed");
+    expect(resolveConfirmDecision(true, false)).toBe("proceed");
+  });
+
+  it("prompts in an interactive shell without --yes", () => {
+    expect(resolveConfirmDecision(false, true)).toBe("prompt");
+  });
+
+  it("bails in a non-interactive shell without --yes", () => {
+    expect(resolveConfirmDecision(false, false)).toBe("abort-noninteractive");
+  });
+});
+
+describe("shouldPersistProject", () => {
+  it("persists a webmux repo that isn't registered yet", () => {
+    expect(shouldPersistProject("/some/repo", true, ["/other/repo"])).toBe(true);
+  });
+
+  it("does not persist when there's no path", () => {
+    expect(shouldPersistProject(null, true, [])).toBe(false);
+  });
+
+  it("does not persist a repo without a webmux config", () => {
+    expect(shouldPersistProject("/some/repo", false, [])).toBe(false);
+  });
+
+  it("does not persist a repo that is already registered", () => {
+    expect(shouldPersistProject("/some/repo", true, ["/some/repo"])).toBe(false);
+  });
+});
+
+describe("migrateServedRepoFromUnit", () => {
+  it("persists the repo an old systemd unit served via WorkingDirectory", async () => {
+    await withTempDir(async (repo) => {
+      await writeFile(join(repo, ".webmux.yaml"), "name: served\n");
+      const unitPath = join(repo, "webmux.service");
+      await writeFile(unitPath, `[Service]\nWorkingDirectory=${repo}\nExecStart=/x serve --port 5111\n`);
+      const registry = fakeRegistry();
+
+      const migrated = migrateServedRepoFromUnit(unitPath, "linux", registry);
+
+      expect(migrated).toBe(repo);
+      expect(registry.list().map((e) => e.path)).toEqual([repo]);
+    });
+  });
+
+  it("is a no-op when the served dir has no webmux config (e.g. $HOME)", async () => {
+    await withTempDir(async (dir) => {
+      const unitPath = join(dir, "webmux.service");
+      await writeFile(unitPath, `[Service]\nWorkingDirectory=${dir}\n`);
+      const registry = fakeRegistry();
+
+      expect(migrateServedRepoFromUnit(unitPath, "linux", registry)).toBeNull();
+      expect(registry.list()).toEqual([]);
+    });
+  });
+
+  it("is a no-op when the served repo is already registered", async () => {
+    await withTempDir(async (repo) => {
+      await writeFile(join(repo, ".webmux.yaml"), "name: served\n");
+      const unitPath = join(repo, "webmux.service");
+      await writeFile(unitPath, `[Service]\nWorkingDirectory=${repo}\n`);
+      const registry = fakeRegistry([{ path: repo, name: "served", addedAt: 1 }]);
+
+      expect(migrateServedRepoFromUnit(unitPath, "linux", registry)).toBeNull();
+      expect(registry.list().length).toBe(1);
+    });
+  });
+
+  it("reads WorkingDirectory out of a launchd plist", async () => {
+    await withTempDir(async (repo) => {
+      await writeFile(join(repo, ".webmux.yaml"), "name: served\n");
+      const unitPath = join(repo, "com.webmux.webmux.plist");
+      await writeFile(
+        unitPath,
+        `<plist><dict>\n  <key>WorkingDirectory</key>\n  <string>${repo}</string>\n</dict></plist>\n`,
+      );
+      const registry = fakeRegistry();
+
+      expect(migrateServedRepoFromUnit(unitPath, "darwin", registry)).toBe(repo);
+    });
+  });
+});
 
 describe("parseEnvCliArgs", () => {
   it("collects multiple --env KEY=VAL pairs", () => {
@@ -132,10 +241,8 @@ describe("generateServiceFile + readEnvVarsFromUnit (round-trip)", () => {
       const filePath = join(dir, "webmux-roundtrip.service");
       const config: ServiceConfig = {
         platform: "linux",
-        projectName: "roundtrip",
         serviceName: "webmux-roundtrip",
         webmuxPath: "/usr/local/bin/webmux",
-        projectDir: dir,
         port: 5111,
         envVars: { LINEAR_API_KEY: "lin_xyz", FOO: "bar=baz" },
       };
@@ -150,10 +257,8 @@ describe("generateServiceFile + readEnvVarsFromUnit (round-trip)", () => {
       const filePath = join(dir, "webmux-roundtrip.service");
       const config: ServiceConfig = {
         platform: "linux",
-        projectName: "roundtrip",
         serviceName: "webmux-roundtrip",
         webmuxPath: "/usr/local/bin/webmux",
-        projectDir: dir,
         port: 5111,
         envVars: { LINEAR_API_KEY: "x" },
       };
@@ -169,10 +274,8 @@ describe("generateServiceFile + readEnvVarsFromUnit (round-trip)", () => {
       const filePath = join(dir, "com.webmux.webmux-roundtrip.plist");
       const config: ServiceConfig = {
         platform: "darwin",
-        projectName: "roundtrip",
         serviceName: "webmux-roundtrip",
         webmuxPath: "/usr/local/bin/webmux",
-        projectDir: dir,
         port: 5222,
         envVars: { TOKEN: "needs <escaping> & a&mp", PLAIN: "ok" },
       };
@@ -188,10 +291,8 @@ describe("generateServiceFile + readEnvVarsFromUnit (round-trip)", () => {
       await writeFile(join(dir, "package.json"), JSON.stringify({ name: "roundtrip" }));
       const original: ServiceConfig = {
         platform: "linux",
-        projectName: "roundtrip",
         serviceName: "webmux-roundtrip",
         webmuxPath: "/usr/local/bin/webmux",
-        projectDir: dir,
         port: 5117,
         envVars: { LINEAR_API_KEY: "lin_xyz" },
       };
@@ -265,10 +366,8 @@ describe("readPortFromUnit", () => {
     await withTempDir(async (dir) => {
       const config: ServiceConfig = {
         platform: "linux",
-        projectName: "roundtrip",
         serviceName: "webmux",
         webmuxPath: "/usr/local/bin/webmux",
-        projectDir: "/home/x/proj",
         port: 5117,
         envVars: {},
       };
@@ -283,10 +382,8 @@ describe("readPortFromUnit", () => {
     await withTempDir(async (dir) => {
       const config: ServiceConfig = {
         platform: "darwin",
-        projectName: "roundtrip",
         serviceName: "webmux",
         webmuxPath: "/usr/local/bin/webmux",
-        projectDir: "/Users/x/proj",
         port: 5222,
         envVars: {},
       };
