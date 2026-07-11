@@ -1,7 +1,12 @@
 import { resolve } from "node:path";
 import type { PaneTemplate, PaneKind } from "../domain/config";
 import type { TmuxGateway } from "../adapters/tmux";
-import { buildProjectSessionName, buildWorktreeWindowName } from "../adapters/tmux";
+import {
+  buildProjectSessionName,
+  buildWorktreeWindowName,
+  WM_WINDOW_ROLE_OPTION,
+  WM_WORKTREE_ID_OPTION,
+} from "../adapters/tmux";
 
 export interface PaneCommandSet {
   agent: string;
@@ -28,6 +33,7 @@ export interface PlannedPane {
 export interface SessionLayoutPlan {
   sessionName: string;
   windowName: string;
+  worktreeId: string;
   shellCommand: string;
   panes: PlannedPane[];
   focusPaneIndex: number;
@@ -67,6 +73,7 @@ function resolvePaneStartupCommand(template: PaneTemplate, ctx: SessionLayoutCon
 export function planSessionLayout(
   projectRoot: string,
   branch: string,
+  worktreeId: string,
   templates: PaneTemplate[],
   ctx: SessionLayoutContext,
 ): SessionLayoutPlan {
@@ -97,6 +104,7 @@ export function planSessionLayout(
   return {
     sessionName: buildProjectSessionName(projectRoot),
     windowName: buildWorktreeWindowName(branch),
+    worktreeId,
     shellCommand: ctx.paneCommands.shell,
     panes,
     focusPaneIndex,
@@ -134,6 +142,9 @@ export function ensureSessionLayout(
   tmux.setWindowOption(plan.sessionName, plan.windowName, "pane-base-index", "0");
   tmux.setWindowOption(plan.sessionName, plan.windowName, "automatic-rename", "off");
   tmux.setWindowOption(plan.sessionName, plan.windowName, "allow-rename", "off");
+  // Stable identity: the window name tracks the branch and drifts on rename, this does not.
+  tmux.setWindowOption(plan.sessionName, plan.windowName, WM_WORKTREE_ID_OPTION, plan.worktreeId);
+  tmux.setWindowOption(plan.sessionName, plan.windowName, WM_WINDOW_ROLE_OPTION, "main");
 
   for (const pane of plan.panes.slice(1)) {
     const target = `${plan.sessionName}:${plan.windowName}.${pane.index - 1}`;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { TmuxGateway } from "../adapters/tmux";
+import { WM_WINDOW_ROLE_OPTION, WM_WORKTREE_ID_OPTION, type TmuxGateway } from "../adapters/tmux";
 import { ensureSessionLayout, isWorktreeOpen, planSessionLayout } from "../services/session-service";
 
 class FakeTmuxGateway implements TmuxGateway {
@@ -10,7 +10,13 @@ class FakeTmuxGateway implements TmuxGateway {
     return "%0";
   }
 
-  createParkedPane(_opts: { sessionName: string; parkingWindow: string; cwd: string; command: string }): string {
+  createParkedPane(_opts: {
+    sessionName: string;
+    parkingWindow: string;
+    cwd: string;
+    command: string;
+    worktreeId: string;
+  }): string {
     return "%99";
   }
 
@@ -33,6 +39,10 @@ class FakeTmuxGateway implements TmuxGateway {
 
   killWindow(sessionName: string, windowName: string): void {
     this.calls.push(`killWindow:${sessionName}:${windowName}`);
+  }
+
+  renameWindow(sessionName: string, windowName: string, newName: string): void {
+    this.calls.push(`renameWindow:${sessionName}:${windowName}:${newName}`);
   }
 
   createWindow(opts: { sessionName: string; windowName: string; cwd: string; command?: string }): void {
@@ -71,6 +81,7 @@ describe("planSessionLayout", () => {
     const plan = planSessionLayout(
       "/repo/project",
       "feature/search",
+      "wt_test",
       [
         { id: "agent", kind: "agent", focus: true },
         { id: "shell", kind: "shell", split: "right", sizePct: 25 },
@@ -130,6 +141,7 @@ describe("planSessionLayout", () => {
     const plan = planSessionLayout(
       "/repo/project",
       "feature/search",
+      "wt_test",
       [
         {
           id: "dev",
@@ -156,6 +168,7 @@ describe("planSessionLayout", () => {
       planSessionLayout(
         "/repo/project",
         "feature/search",
+        "wt_test",
         [{ id: "dev", kind: "command" }],
         {
           repoRoot: "/repo/project",
@@ -176,6 +189,7 @@ describe("ensureSessionLayout", () => {
     const plan = planSessionLayout(
       "/repo/project",
       "feature/search",
+      "wt_test",
       [
         { id: "agent", kind: "agent", focus: true },
         { id: "shell", kind: "shell", split: "right", sizePct: 25 },
@@ -199,6 +213,13 @@ describe("ensureSessionLayout", () => {
       ),
     ).toBe(true);
     expect(tmux.calls).toContain(`setWindowOption:${plan.sessionName}:${plan.windowName}:pane-base-index:0`);
+    // The stable identity anchor: survives a branch rename, unlike the window name.
+    expect(tmux.calls).toContain(
+      `setWindowOption:${plan.sessionName}:${plan.windowName}:${WM_WORKTREE_ID_OPTION}:wt_test`,
+    );
+    expect(tmux.calls).toContain(
+      `setWindowOption:${plan.sessionName}:${plan.windowName}:${WM_WINDOW_ROLE_OPTION}:main`,
+    );
     expect(
       tmux.calls.some((call) =>
         call.startsWith(`splitWindow:${plan.sessionName}:${plan.windowName}.0:right:25:/repo/project/__worktrees/feature-search:shell-cmd`),
@@ -213,6 +234,7 @@ describe("ensureSessionLayout", () => {
     const plan = planSessionLayout(
       "/repo/project",
       "feature/search",
+      "wt_test",
       [{ id: "agent", kind: "agent", focus: true }],
       {
         repoRoot: "/repo/project",

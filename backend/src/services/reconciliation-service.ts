@@ -2,7 +2,16 @@ import { basename, resolve } from "node:path";
 import { expandTemplate } from "../adapters/config";
 import type { GitGateway, GitWorktreeEntry } from "../adapters/git";
 import type { PortProbe } from "../adapters/port-probe";
-import { buildProjectSessionName, buildWorktreeWindowName, type TmuxGateway, type TmuxWindowSummary } from "../adapters/tmux";
+import {
+  buildProjectSessionName,
+  buildWorktreeParkingWindowName,
+  buildWorktreeWindowName,
+  WM_WINDOW_ROLE_OPTION,
+  WM_WORKTREE_ID_OPTION,
+  type TmuxGateway,
+  type TmuxWindowRole,
+  type TmuxWindowSummary,
+} from "../adapters/tmux";
 import { buildRuntimeEnvMap, readWorktreeMeta, readWorktreePrs } from "../adapters/fs";
 import type { AgentId, ProjectConfig } from "../domain/config";
 import type { OneshotMeta, PrEntry, ServiceRuntimeState, WorktreeSource, WorktreeTab } from "../domain/model";
@@ -57,14 +66,31 @@ async function buildServiceStates(
   }));
 }
 
+/** Locate a worktree's window by its stable id anchor, falling back to the legacy name match for
+ *  windows created before the anchor existed (they get backfilled by healWindowNames). Matching on
+ *  the anchor is what survives an in-worktree `git checkout -b`, which changes the branch — and so
+ *  the expected window name — while the live window keeps the name it was born with. */
 function findWindow(
   windows: TmuxWindowSummary[],
   sessionName: string,
+  worktreeId: string,
   branch: string,
+  role: TmuxWindowRole = "main",
 ): TmuxWindowSummary | null {
-  const windowName = buildWorktreeWindowName(branch);
+  const anchored = windows.find((window) =>
+    window.sessionName === sessionName
+    && window.worktreeId === worktreeId
+    && window.role === role
+  );
+  if (anchored) return anchored;
+
+  const windowName = role === "parking"
+    ? buildWorktreeParkingWindowName(branch)
+    : buildWorktreeWindowName(branch);
   return windows.find((window) =>
-    window.sessionName === sessionName && window.windowName === windowName
+    window.sessionName === sessionName
+    && window.windowName === windowName
+    && window.worktreeId === null
   ) ?? null;
 }
 
@@ -114,6 +140,11 @@ interface ReconciledWorktreeState {
     exists: boolean;
     sessionName: string | null;
     paneCount: number;
+  };
+  /** Live windows owned by this worktree, used by the heal pass to realign drifted names. */
+  windows: {
+    main: TmuxWindowSummary | null;
+    parking: TmuxWindowSummary | null;
   };
   services: ServiceRuntimeState[];
   prs: PrEntry[];
@@ -176,7 +207,8 @@ export class ReconciliationService {
       const branch = resolveBranch(entry, meta?.branch ?? null);
       const worktreeId = meta?.worktreeId ?? makeUnmanagedWorktreeId(entry.path);
       const gitStatus = this.deps.git.readWorktreeStatus(entry.path);
-      const window = findWindow(windows, sessionName, branch);
+      const window = findWindow(windows, sessionName, worktreeId, branch);
+      const parkingWindow = findWindow(windows, sessionName, worktreeId, branch, "parking");
 
       return {
         worktreeId,
@@ -202,6 +234,10 @@ export class ReconciliationService {
           sessionName: window?.sessionName ?? null,
           paneCount: window?.paneCount ?? 0,
         },
+        windows: {
+          main: window,
+          parking: parkingWindow,
+        },
         services: meta
           ? await buildServiceStates(this.deps, {
               allocatedPorts: meta.allocatedPorts,
@@ -216,6 +252,8 @@ export class ReconciliationService {
         prs: await readWorktreePrs(gitDir),
       } satisfies ReconciledWorktreeState;
     });
+
+    this.healWindows(sessionName, reconciledStates, windows);
 
     for (const state of reconciledStates) {
       seenWorktreeIds.add(state.worktreeId);
@@ -259,5 +297,66 @@ export class ReconciliationService {
         this.deps.runtime.removeWorktree(state.worktreeId);
       }
     }
+  }
+
+  /** Realign live windows with the worktree's current branch.
+   *
+   *  Window names encode the branch (`wm-<branch>`), but a `git checkout -b` inside a worktree
+   *  changes the branch under a running window. Without this, the window no longer matches the
+   *  name every other lookup computes, so the worktree reads as closed and reopening it spawns a
+   *  duplicate window. Identity comes from the id anchor, so here we simply rename the window back
+   *  into agreement with the branch — restoring the `wm-<live-branch>` invariant the rest of the
+   *  system relies on. Runs sequentially: renames and collision kills mutate shared window names.
+   */
+  private healWindows(
+    sessionName: string,
+    states: ReconciledWorktreeState[],
+    windows: TmuxWindowSummary[],
+  ): void {
+    const liveWorktreeIds = new Set(states.map((state) => state.worktreeId));
+
+    for (const state of states) {
+      this.healWindow(sessionName, state, state.windows.main, "main", liveWorktreeIds, windows);
+      this.healWindow(sessionName, state, state.windows.parking, "parking", liveWorktreeIds, windows);
+    }
+  }
+
+  private healWindow(
+    sessionName: string,
+    state: ReconciledWorktreeState,
+    window: TmuxWindowSummary | null,
+    role: TmuxWindowRole,
+    liveWorktreeIds: Set<string>,
+    windows: TmuxWindowSummary[],
+  ): void {
+    if (!window) return;
+
+    // Backfill the anchor onto windows that predate it, so they survive the next branch rename.
+    if (window.worktreeId === null) {
+      this.deps.tmux.setWindowOption(sessionName, window.windowName, WM_WORKTREE_ID_OPTION, state.worktreeId);
+      this.deps.tmux.setWindowOption(sessionName, window.windowName, WM_WINDOW_ROLE_OPTION, role);
+      window.worktreeId = state.worktreeId;
+      window.role = role;
+    }
+
+    const expectedName = role === "parking"
+      ? buildWorktreeParkingWindowName(state.branch)
+      : buildWorktreeWindowName(state.branch);
+    if (window.windowName === expectedName) return;
+
+    const squatter = windows.find((other) =>
+      other !== window && other.sessionName === sessionName && other.windowName === expectedName
+    );
+    if (squatter) {
+      // Git forbids two worktrees on one branch, so a live worktree can never legitimately hold
+      // this name. Anything else squatting on it is a leftover from an earlier rename — reap it.
+      // If some live worktree somehow does own it, leave both alone rather than duplicate names.
+      if (squatter.worktreeId !== null && liveWorktreeIds.has(squatter.worktreeId)) return;
+      this.deps.tmux.killWindow(sessionName, expectedName);
+      windows.splice(windows.indexOf(squatter), 1);
+    }
+
+    this.deps.tmux.renameWindow(sessionName, window.windowName, expectedName);
+    window.windowName = expectedName;
   }
 }

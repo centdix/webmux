@@ -156,10 +156,11 @@ describe("buildWorktreeWindowName", () => {
 });
 
 describe("parseWindowSummaries", () => {
-  it("parses tmux list-windows output", () => {
+  it("parses tmux list-windows output with the worktree id anchor", () => {
     const output = [
-      "wm-project-a1b2c3d4\twm-main\t2",
-      "wm-project-a1b2c3d4\twm-feature/search\t3",
+      "wm-project-a1b2c3d4\twm-main\t2\twt_main\tmain",
+      "wm-project-a1b2c3d4\twm-feature/search\t3\twt_search\tmain",
+      "wm-project-a1b2c3d4\twm-feature/search-tabs\t1\twt_search\tparking",
     ].join("\n");
 
     expect(parseWindowSummaries(output)).toEqual([
@@ -167,13 +168,112 @@ describe("parseWindowSummaries", () => {
         sessionName: "wm-project-a1b2c3d4",
         windowName: "wm-main",
         paneCount: 2,
+        worktreeId: "wt_main",
+        role: "main",
       },
       {
         sessionName: "wm-project-a1b2c3d4",
         windowName: "wm-feature/search",
         paneCount: 3,
+        worktreeId: "wt_search",
+        role: "main",
+      },
+      {
+        sessionName: "wm-project-a1b2c3d4",
+        windowName: "wm-feature/search-tabs",
+        paneCount: 1,
+        worktreeId: "wt_search",
+        role: "parking",
       },
     ]);
+  });
+
+  it("treats unset tmux user options as null without dropping the window", () => {
+    // An unset @option renders as an empty field — e.g. a window created before the anchor
+    // existed, or a plain user-made window. It must still parse.
+    const output = "wm-project-a1b2c3d4\twm-legacy\t1\t\t";
+
+    expect(parseWindowSummaries(output)).toEqual([
+      {
+        sessionName: "wm-project-a1b2c3d4",
+        windowName: "wm-legacy",
+        paneCount: 1,
+        worktreeId: null,
+        role: null,
+      },
+    ]);
+  });
+});
+
+describe("BunTmuxGateway worktree id anchor", () => {
+  it("round-trips the anchor through listWindows and preserves it across a rename", async () => {
+    // The whole fix rests on two tmux behaviours: a window user option is readable back via a
+    // list-windows format string, and it survives rename-window. Prove both against real tmux.
+    const testRoot = await mkdtemp(join(tmpdir(), "webmux-anchor-"));
+    const projectRoot = join(testRoot, "repo");
+    await mkdir(projectRoot, { recursive: true });
+
+    const runnerPath = join(testRoot, "run-anchor.ts");
+    const tmuxModuleUrl = new URL("../adapters/tmux.ts", import.meta.url).href;
+
+    await Bun.write(
+      runnerPath,
+      [
+        `import { BunTmuxGateway, WM_WORKTREE_ID_OPTION, WM_WINDOW_ROLE_OPTION } from ${JSON.stringify(tmuxModuleUrl)};`,
+        "",
+        "const projectRoot = process.argv[2];",
+        'if (!projectRoot) throw new Error("expected projectRoot");',
+        "",
+        "const gateway = new BunTmuxGateway();",
+        'const session = "anchor-session";',
+        "gateway.ensureServer();",
+        "gateway.ensureSession(session, projectRoot);",
+        'gateway.createWindow({ sessionName: session, windowName: "wm-old", cwd: projectRoot });',
+        'gateway.setWindowOption(session, "wm-old", WM_WORKTREE_ID_OPTION, "wt_anchor");',
+        'gateway.setWindowOption(session, "wm-old", WM_WINDOW_ROLE_OPTION, "main");',
+        "",
+        "// A window with no anchor at all must still list, with null fields.",
+        'gateway.createWindow({ sessionName: session, windowName: "plain", cwd: projectRoot });',
+        "",
+        "const before = gateway.listWindows().filter((w) => w.sessionName === session);",
+        'gateway.renameWindow(session, "wm-old", "wm-new");',
+        "const after = gateway.listWindows().filter((w) => w.sessionName === session);",
+        "",
+        "console.log(JSON.stringify({",
+        '  anchoredBefore: before.find((w) => w.windowName === "wm-old") ?? null,',
+        '  unanchored: before.find((w) => w.windowName === "plain") ?? null,',
+        '  anchoredAfter: after.find((w) => w.windowName === "wm-new") ?? null,',
+        '  oldNameGone: !after.some((w) => w.windowName === "wm-old"),',
+        "}));",
+        "",
+      ].join("\n"),
+    );
+
+    try {
+      const raw = readWithIsolatedTmux(["bun", runnerPath, projectRoot], buildEnv({}));
+      const result = JSON.parse(raw) as {
+        anchoredBefore: { worktreeId: string | null; role: string | null } | null;
+        unanchored: { worktreeId: string | null; role: string | null } | null;
+        anchoredAfter: { worktreeId: string | null; role: string | null } | null;
+        oldNameGone: boolean;
+      };
+
+      // The anchor is readable back off a real tmux window.
+      expect(result.anchoredBefore?.worktreeId).toBe("wt_anchor");
+      expect(result.anchoredBefore?.role).toBe("main");
+
+      // An unstamped window still lists, with null anchor fields (not dropped).
+      expect(result.unanchored).not.toBeNull();
+      expect(result.unanchored?.worktreeId).toBeNull();
+      expect(result.unanchored?.role).toBeNull();
+
+      // The identity survives the rename — this is what keeps a renamed branch's window findable.
+      expect(result.oldNameGone).toBe(true);
+      expect(result.anchoredAfter?.worktreeId).toBe("wt_anchor");
+      expect(result.anchoredAfter?.role).toBe("main");
+    } finally {
+      await rm(testRoot, { recursive: true, force: true });
+    }
   });
 });
 
@@ -221,6 +321,7 @@ describe("ensureSessionLayout", () => {
         "const plan = planSessionLayout(",
         "  projectRoot,",
         '  "feature/search",',
+        '  "wt_layout",',
         "  [",
         '    { id: "agent", kind: "agent", focus: true },',
         '    { id: "shell", kind: "shell", split: "right", sizePct: 25 },',

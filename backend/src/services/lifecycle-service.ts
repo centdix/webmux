@@ -454,6 +454,7 @@ export class LifecycleService {
         parkingWindow: ctx.parkingWindow,
         cwd: ctx.worktreePath,
         command: buildManagedShellCommand(ctx.initialized.paths.runtimeEnvPath),
+        worktreeId: meta.worktreeId,
       });
       this.deps.tmux.runCommand(paneId, agentCommand);
       const sessionId = pinSessionId
@@ -635,6 +636,7 @@ export class LifecycleService {
         parkingWindow,
         cwd: input.worktreePath,
         command: buildManagedShellCommand(input.runtimeEnvPath),
+        worktreeId: meta.worktreeId,
       });
       this.deps.tmux.runCommand(paneId, command);
       restored.push({ ...fork, paneId });
@@ -1141,6 +1143,7 @@ export class LifecycleService {
     return planSessionLayout(
       this.deps.projectRoot,
       input.branch,
+      input.initialized.meta.worktreeId,
       input.profile.panes,
       {
         repoRoot: this.deps.projectRoot,

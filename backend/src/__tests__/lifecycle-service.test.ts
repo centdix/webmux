@@ -6,7 +6,15 @@ import type { ProjectConfig } from "../domain/config";
 import { BunGitGateway, type GitGateway } from "../adapters/git";
 import type { LifecycleHookRunner, RunLifecycleHookInput } from "../adapters/hooks";
 import type { PortProbe } from "../adapters/port-probe";
-import { buildProjectSessionName, buildWorktreeParkingWindowName, buildWorktreeWindowName, type TmuxGateway, type TmuxWindowSummary } from "../adapters/tmux";
+import {
+  buildProjectSessionName,
+  buildWorktreeParkingWindowName,
+  buildWorktreeWindowName,
+  WM_WINDOW_ROLE_OPTION,
+  WM_WORKTREE_ID_OPTION,
+  type TmuxGateway,
+  type TmuxWindowSummary,
+} from "../adapters/tmux";
 import { getWorktreeStoragePaths, readWorktreeArchiveState, readWorktreeMeta, writeWorktreeMeta } from "../adapters/fs";
 import type { DockerGateway, LaunchContainerOpts } from "../adapters/docker";
 import type { SessionDiscoveryGateway } from "../adapters/session-discovery";
@@ -50,7 +58,13 @@ class FakeTmuxGateway implements TmuxGateway {
     return `%pane-${this.paneCounter++}`;
   }
 
-  createParkedPane(opts: { sessionName: string; parkingWindow: string; cwd: string; command: string }): string {
+  createParkedPane(opts: {
+    sessionName: string;
+    parkingWindow: string;
+    cwd: string;
+    command: string;
+    worktreeId: string;
+  }): string {
     const window = this.windows.get(this.key(opts.sessionName, opts.parkingWindow));
     if (window) {
       window.paneCount += 1;
@@ -59,6 +73,8 @@ class FakeTmuxGateway implements TmuxGateway {
         sessionName: opts.sessionName,
         windowName: opts.parkingWindow,
         paneCount: 1,
+        worktreeId: opts.worktreeId,
+        role: "parking",
       });
     }
     return `%parked-${this.paneCounter++}`;
@@ -84,12 +100,22 @@ class FakeTmuxGateway implements TmuxGateway {
     this.windows.delete(this.key(sessionName, windowName));
   }
 
+  renameWindow(sessionName: string, windowName: string, newName: string): void {
+    const window = this.windows.get(this.key(sessionName, windowName));
+    if (!window) return;
+    this.windows.delete(this.key(sessionName, windowName));
+    window.windowName = newName;
+    this.windows.set(this.key(sessionName, newName), window);
+  }
+
   createWindow(opts: { sessionName: string; windowName: string; cwd: string; command?: string }): void {
     this.createdWindows.push({ ...opts });
     this.windows.set(this.key(opts.sessionName, opts.windowName), {
       sessionName: opts.sessionName,
       windowName: opts.windowName,
       paneCount: 1,
+      worktreeId: null,
+      role: null,
     });
   }
 
@@ -108,7 +134,12 @@ class FakeTmuxGateway implements TmuxGateway {
     window.paneCount += 1;
   }
 
-  setWindowOption(_sessionName: string, _windowName: string, _option: string, _value: string): void {}
+  setWindowOption(sessionName: string, windowName: string, option: string, value: string): void {
+    const window = this.windows.get(this.key(sessionName, windowName));
+    if (!window) return;
+    if (option === WM_WORKTREE_ID_OPTION) window.worktreeId = value;
+    if (option === WM_WINDOW_ROLE_OPTION) window.role = value === "parking" ? "parking" : "main";
+  }
 
   runCommand(target: string, command: string): void {
     this.commands.push({ target, command });
@@ -399,6 +430,8 @@ describe("LifecycleService", () => {
         sessionName: buildProjectSessionName(repoRoot),
         windowName: buildWorktreeWindowName("feature/search"),
         paneCount: 2,
+        worktreeId: expect.any(String),
+        role: "main",
       },
     ]);
 
@@ -1454,6 +1487,8 @@ describe("LifecycleService", () => {
         sessionName: buildProjectSessionName(repoRoot),
         windowName: buildWorktreeWindowName("feature-sandbox"),
         paneCount: 1,
+        worktreeId: expect.any(String),
+        role: "main",
       },
     ]);
 
