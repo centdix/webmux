@@ -688,25 +688,6 @@ describe("App create selection", () => {
     expect(searchInput).toHaveValue("");
   });
 
-  it("archives the selected worktree through the API", async () => {
-    vi.mocked(fetchWorktrees)
-      .mockResolvedValueOnce([createWorktree("feature/active")])
-      .mockResolvedValueOnce([createWorktree("feature/active", { archived: true })])
-      .mockResolvedValue([createWorktree("feature/active", { archived: true })]);
-
-    render(App);
-
-    await screen.findByTitle("feature/active");
-    await fireEvent.click(screen.getByRole("button", { name: "Archive" }));
-
-    await waitFor(() => {
-      expect(api.setWorktreeArchived).toHaveBeenCalledWith({
-        params: { name: "feature/active" },
-        body: { archived: true },
-      });
-    });
-  });
-
   it("reconnects the visible terminal after refreshing a stale terminal", async () => {
     localStorage.setItem("wt-last-selected-worktree", "feature/active");
     const staleWorktree = createWorktree("feature/active", {

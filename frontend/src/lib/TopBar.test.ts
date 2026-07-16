@@ -50,7 +50,6 @@ function renderTopBar(
       notificationHistory: [],
       unreadCount: 0,
       onclose: vi.fn(),
-      onarchive: vi.fn(),
       onmerge: vi.fn(),
       onremove: vi.fn(),
       onsettings: vi.fn(),
@@ -61,6 +60,12 @@ function renderTopBar(
 }
 
 describe("TopBar", () => {
+  it("does not render an archive action", () => {
+    renderTopBar("feature/no-header-archive");
+
+    expect(screen.queryByRole("button", { name: "Archive" })).not.toBeInTheDocument();
+  });
+
   it("truncates worktree names longer than 30 characters in the header", () => {
     const branch = "feature/abcdefghijklmnopqrstuvwxyz-1234567890";
 
@@ -95,7 +100,6 @@ describe("TopBar", () => {
         notificationHistory: [],
         unreadCount: 0,
         onclose: vi.fn(),
-        onarchive: vi.fn(),
         onmerge: vi.fn(),
         onremove: vi.fn(),
         oneditlabel: vi.fn(),
@@ -142,7 +146,6 @@ describe("TopBar", () => {
         notificationHistory: [],
         unreadCount: 0,
         onclose: vi.fn(),
-        onarchive: vi.fn(),
         onmerge: vi.fn(),
         onremove: vi.fn(),
         onsettings: vi.fn(),

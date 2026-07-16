@@ -448,7 +448,6 @@
     && (selectedWorktree?.agentName === "claude" || selectedWorktree?.agentName === "codex"),
   );
   let isSelectedOpening = $derived(selectedBranch ? openingBranches.has(selectedBranch) : false);
-  let isSelectedArchiving = $derived(selectedBranch ? archivingBranches.has(selectedBranch) : false);
   let isSelectedAgentTerminalRefreshing = $derived(
     selectedBranch ? refreshingAgentTerminalBranches.has(selectedBranch) : false,
   );
@@ -978,12 +977,6 @@
     }
   }
 
-  async function handleArchiveToggle() {
-    const branch = selectedBranch;
-    if (!branch) return;
-    await toggleWorktreeArchived(branch);
-  }
-
   async function handleClose() {
     const branch = selectedBranch;
     if (!branch) return;
@@ -1302,7 +1295,6 @@
       {unreadCount}
       ontogglesidebar={() => (sidebarOpen = !sidebarOpen)}
       onclose={handleClose}
-      onarchive={handleArchiveToggle}
       onmerge={() => {
         if (selectedBranch) mergeBranch = selectedBranch;
       }}
@@ -1316,7 +1308,6 @@
       onReviewsClick={(pr) => (commentReviewPr = pr)}
       onbellopen={handleBellOpen}
       onnotificationselect={handleSelectWorktree}
-      archiving={isSelectedArchiving}
     />
 
     {#if showWebChat}
