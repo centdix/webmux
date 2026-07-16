@@ -285,6 +285,12 @@
       try {
         const msg = JSON.parse(raw);
         switch (msg.type) {
+          case "attached":
+            canRetryVisibleClose = true;
+            if (announceReconnect) {
+              term.writeln(RECONNECTED_NOTICE);
+            }
+            break;
           case "exit":
             term.writeln(`\r\n\x1b[33m[Process exited with code ${msg.exitCode}]\x1b[0m`);
             break;
@@ -301,11 +307,7 @@
 
     nextWs.onopen = () => {
       if (ws !== nextWs) return;
-      canRetryVisibleClose = true;
       fitAddon.fit();
-      if (announceReconnect) {
-        term.writeln(RECONNECTED_NOTICE);
-      }
       requestAnimationFrame(() => {
         fitAddon.fit();
         term.focus();
