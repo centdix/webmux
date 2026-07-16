@@ -777,9 +777,11 @@ export async function runWorktreeCommand(
   const readOpenSessions = deps.readOpenSessions ?? readOpenSessionsState;
 
   // The project's route prefix, resolved from the running server at most once.
-  // Only commands that write control.env (add/open/refresh) need it; skip the
-  // lookup entirely when a test injects createRuntime but no prefix resolver, so
-  // offline commands stay offline.
+  // Only commands that write control.env (add/open/refresh) need it.
+  //
+  // `createRuntime === undefined` is the production sentinel: real callers never
+  // inject deps, so production always resolves. A test that injects createRuntime
+  // without a prefix resolver skips the lookup, keeping offline commands offline.
   const shouldResolvePrefix = deps.resolveProjectPrefix !== undefined || deps.createRuntime === undefined;
   let prefixPromise: Promise<string | undefined> | null = null;
   const resolvePrefix = (): Promise<string | undefined> => {
