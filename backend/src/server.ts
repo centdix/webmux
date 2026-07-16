@@ -2688,7 +2688,7 @@ BOUND_PORT = actualPort(server, PORT);
 manager = new ProjectManager({
   registry: createProjectsRegistry(),
   port: BOUND_PORT,
-  createRuntime: ({ projectDir, port }) => createWebmuxRuntime({ projectDir, port }),
+  createRuntime: ({ projectDir, port, prefix }) => createWebmuxRuntime({ projectDir, port, prefix }),
   createLoops: (project): ProjectLoopController => {
     const app = createProjectApp(project.runtime, project.prefix);
     apps.set(project.prefix, app);
