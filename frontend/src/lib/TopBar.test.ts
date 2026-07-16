@@ -130,6 +130,19 @@ describe("TopBar", () => {
     );
   });
 
+  it("uses the configured service URL in the header", () => {
+    const url = "https://localhost:2100";
+
+    renderTopBar("feature/service-url", {
+      services: [{ name: "mappings-v2", port: 2100, running: true, url }],
+    });
+
+    expect(screen.getByRole("link", { name: "mappings-v2 :2100" })).toHaveAttribute(
+      "href",
+      url,
+    );
+  });
+
   it("does not render stale terminal state in the web top bar", () => {
     const branch = "feature/stale-terminal";
 
