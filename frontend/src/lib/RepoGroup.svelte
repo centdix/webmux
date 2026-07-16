@@ -30,7 +30,7 @@
   {#each services as svc}
     {#if svc.port}
       <a
-        href="{window.location.protocol}//{window.location.hostname}:{svc.port}"
+        href={svc.url ?? `${window.location.protocol}//${window.location.hostname}:${svc.port}`}
         target="_blank"
         rel="noopener"
         class="shrink-0 text-[11px] px-1.5 py-0.5 rounded border font-mono no-underline hover:opacity-80 {svc.running
