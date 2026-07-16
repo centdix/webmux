@@ -136,7 +136,9 @@ export class ProjectRuntime {
   removeWorktree(worktreeId: string): boolean {
     const state = this.worktrees.get(worktreeId);
     if (!state) return false;
-    this.worktreeIdsByBranch.delete(state.branch);
+    if (this.worktreeIdsByBranch.get(state.branch) === worktreeId) {
+      this.worktreeIdsByBranch.delete(state.branch);
+    }
     return this.worktrees.delete(worktreeId);
   }
 

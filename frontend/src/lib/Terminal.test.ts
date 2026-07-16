@@ -99,6 +99,10 @@ class MockWebSocket {
     this.onopen?.(new Event("open"));
   }
 
+  emitMessage(message: object): void {
+    this.onmessage?.(new MessageEvent("message", { data: JSON.stringify(message) }));
+  }
+
   emitClose(code = 1006, reason = ""): void {
     this.readyState = MockWebSocket.CLOSED;
     this.onclose?.(new CloseEvent("close", { code, reason, wasClean: false }));
@@ -143,6 +147,7 @@ describe("Terminal reconnect", () => {
     expect(MockWebSocket.instances).toHaveLength(1);
     const firstSocket = MockWebSocket.instances[0]!;
     firstSocket.emitOpen();
+    firstSocket.emitMessage({ type: "attached" });
 
     expect(firstSocket.sent).toContain('{"type":"resize","cols":80,"rows":24}');
 
@@ -151,6 +156,7 @@ describe("Terminal reconnect", () => {
     expect(MockWebSocket.instances).toHaveLength(2);
     const secondSocket = MockWebSocket.instances[1]!;
     secondSocket.emitOpen();
+    secondSocket.emitMessage({ type: "attached" });
 
     const terminal = MockTerminal.instances[0]!;
     expect(terminal.writeln).toHaveBeenCalledWith("\r\n\x1b[90m[Disconnected]\x1b[0m");
@@ -167,7 +173,9 @@ describe("Terminal reconnect", () => {
     expect(MockWebSocket.instances).toHaveLength(2);
 
     const secondSocket = MockWebSocket.instances[1]!;
-    secondSocket.emitClose();
+    secondSocket.emitOpen();
+    secondSocket.emitMessage({ type: "error", message: "Worktree not found" });
+    secondSocket.emitClose(1011, "Worktree not found");
 
     expect(MockWebSocket.instances).toHaveLength(2);
   });

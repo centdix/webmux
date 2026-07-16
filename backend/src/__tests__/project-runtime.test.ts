@@ -112,6 +112,26 @@ describe("ProjectRuntime", () => {
     expect(runtime.getWorktreeByBranch("feature/search-v2")?.worktreeId).toBe("wt_search");
   });
 
+  it("preserves a replacement branch index when removing the previous worktree id", () => {
+    const runtime = new ProjectRuntime();
+    runtime.upsertWorktree({
+      worktreeId: "unmanaged:/repo/__worktrees/feature-search",
+      branch: "feature/search",
+      path: "/repo/__worktrees/feature-search",
+      runtime: "host",
+    });
+    runtime.upsertWorktree({
+      worktreeId: "wt_search",
+      branch: "feature/search",
+      path: "/repo/__worktrees/feature-search",
+      runtime: "host",
+    });
+
+    runtime.removeWorktree("unmanaged:/repo/__worktrees/feature-search");
+
+    expect(runtime.getWorktreeByBranch("feature/search")?.worktreeId).toBe("wt_search");
+  });
+
   it("updates label metadata without changing branch lookups", () => {
     const runtime = new ProjectRuntime();
     runtime.upsertWorktree({

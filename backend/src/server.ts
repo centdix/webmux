@@ -408,6 +408,7 @@ type WsInboundMessage =
   | { type: "resize"; cols: number; rows: number; initialPane?: number };
 
 type WsOutboundMessage =
+  | { type: "attached" }
   | { type: "output"; data: string }
   | { type: "exit"; exitCode: number }
   | { type: "error"; message: string }
@@ -2244,6 +2245,7 @@ function parseAgentIdParam(params: Record<string, string>):
               );
               const { onData, onExit } = makeCallbacks(ws);
               setCallbacks(attachId, onData, onExit);
+              sendWs(ws, { type: "attached" });
               const scrollback = getScrollback(attachId);
               log.debug(
                 `[ws] attached branch=${branch} worktreeId=${terminalWorktree.worktreeId} attachId=${attachId} scrollback=${scrollback.length} bytes`,
