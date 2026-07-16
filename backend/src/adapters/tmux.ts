@@ -3,10 +3,21 @@ import { basename, resolve } from "node:path";
 import type { PaneSplit } from "../domain/config";
 import { leakedProjectEnvKeys, stripProjectEnv } from "./project-env";
 
+/** Stable identity anchor stamped on every webmux window. Window *names* track the branch and
+ *  therefore drift when a branch is renamed; this option never does. */
+export const WM_WORKTREE_ID_OPTION = "@wm_worktree_id";
+/** Distinguishes a worktree's visible window from its hidden parked-tabs window (both carry the same id). */
+export const WM_WINDOW_ROLE_OPTION = "@wm_window_role";
+
+export type TmuxWindowRole = "main" | "parking";
+
 export interface TmuxWindowSummary {
   sessionName: string;
   windowName: string;
   paneCount: number;
+  /** Value of WM_WORKTREE_ID_OPTION; null for windows webmux did not stamp. */
+  worktreeId: string | null;
+  role: TmuxWindowRole | null;
 }
 
 export interface TmuxGateway {
@@ -14,6 +25,7 @@ export interface TmuxGateway {
   ensureSession(sessionName: string, cwd: string): void;
   hasWindow(sessionName: string, windowName: string): boolean;
   killWindow(sessionName: string, windowName: string): void;
+  renameWindow(sessionName: string, windowName: string, newName: string): void;
   createWindow(opts: {
     sessionName: string;
     windowName: string;
@@ -35,7 +47,13 @@ export interface TmuxGateway {
   getPaneId(target: string): string;
   /** Create a detached "parked" pane that holds a tab's session off-screen, returning its pane id.
    *  Creates the parking window on first use, then splits it for subsequent panes. */
-  createParkedPane(opts: { sessionName: string; parkingWindow: string; cwd: string; command: string }): string;
+  createParkedPane(opts: {
+    sessionName: string;
+    parkingWindow: string;
+    cwd: string;
+    command: string;
+    worktreeId: string;
+  }): string;
   /** Exchange the contents of two panes in place (used to bring a tab into the visible agent slot). */
   swapPanes(source: string, destination: string): void;
   /** Remove a pane (used when deleting a tab). Tolerates an already-gone pane. */
@@ -117,17 +135,25 @@ export function buildWorktreeParkingWindowName(branch: string): string {
   return `wm-${branch}-tabs`;
 }
 
+function parseWindowRole(raw: string): TmuxWindowRole | null {
+  if (raw === "main" || raw === "parking") return raw;
+  return null;
+}
+
 export function parseWindowSummaries(output: string): TmuxWindowSummary[] {
   return output
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => {
-      const [sessionName = "", windowName = "", paneCountRaw = "0"] = line.split("\t");
+      // An unset tmux user option renders as an empty field.
+      const [sessionName = "", windowName = "", paneCountRaw = "0", worktreeId = "", role = ""] = line.split("\t");
       return {
         sessionName,
         windowName,
         paneCount: parseInt(paneCountRaw, 10) || 0,
+        worktreeId: worktreeId.length > 0 ? worktreeId : null,
+        role: parseWindowRole(role),
       };
     })
     .filter((entry) => entry.sessionName.length > 0 && entry.windowName.length > 0);
@@ -188,6 +214,13 @@ export class BunTmuxGateway implements TmuxGateway {
     }
   }
 
+  renameWindow(sessionName: string, windowName: string, newName: string): void {
+    const result = runTmux(["rename-window", "-t", `${sessionName}:${windowName}`, newName]);
+    if (result.exitCode !== 0 && !isIgnorableKillWindowError(result.stderr)) {
+      throw new Error(`rename tmux window ${sessionName}:${windowName} failed: ${result.stderr}`);
+    }
+  }
+
   createWindow(opts: {
     sessionName: string;
     windowName: string;
@@ -230,7 +263,12 @@ export class BunTmuxGateway implements TmuxGateway {
 
   listWindows(): TmuxWindowSummary[] {
     const output = assertTmuxOk(
-      ["list-windows", "-a", "-F", "#{session_name}\t#{window_name}\t#{window_panes}"],
+      [
+        "list-windows",
+        "-a",
+        "-F",
+        `#{session_name}\t#{window_name}\t#{window_panes}\t#{${WM_WORKTREE_ID_OPTION}}\t#{${WM_WINDOW_ROLE_OPTION}}`,
+      ],
       "list tmux windows",
     );
     return parseWindowSummaries(output);
@@ -243,12 +281,21 @@ export class BunTmuxGateway implements TmuxGateway {
     );
   }
 
-  createParkedPane(opts: { sessionName: string; parkingWindow: string; cwd: string; command: string }): string {
+  createParkedPane(opts: {
+    sessionName: string;
+    parkingWindow: string;
+    cwd: string;
+    command: string;
+    worktreeId: string;
+  }): string {
     if (!this.hasWindow(opts.sessionName, opts.parkingWindow)) {
-      return assertTmuxOk(
+      const paneId = assertTmuxOk(
         ["new-window", "-d", "-P", "-F", "#{pane_id}", "-t", opts.sessionName, "-n", opts.parkingWindow, "-c", opts.cwd, opts.command],
         `create parking window ${opts.sessionName}:${opts.parkingWindow}`,
       );
+      this.setWindowOption(opts.sessionName, opts.parkingWindow, WM_WORKTREE_ID_OPTION, opts.worktreeId);
+      this.setWindowOption(opts.sessionName, opts.parkingWindow, WM_WINDOW_ROLE_OPTION, "parking");
+      return paneId;
     }
     return assertTmuxOk(
       ["split-window", "-d", "-P", "-F", "#{pane_id}", "-t", `${opts.sessionName}:${opts.parkingWindow}`, "-c", opts.cwd, opts.command],

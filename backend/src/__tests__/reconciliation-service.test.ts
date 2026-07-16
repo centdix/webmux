@@ -6,7 +6,13 @@ import type { ProjectConfig } from "../domain/config";
 import type { GitGateway, GitWorktreeEntry, GitWorktreeStatus, TryGitCommandResult, UnpushedCommit } from "../adapters/git";
 import type { PortProbe } from "../adapters/port-probe";
 import type { TmuxGateway, TmuxWindowSummary } from "../adapters/tmux";
-import { buildProjectSessionName, buildWorktreeWindowName } from "../adapters/tmux";
+import {
+  buildProjectSessionName,
+  buildWorktreeParkingWindowName,
+  buildWorktreeWindowName,
+  WM_WINDOW_ROLE_OPTION,
+  WM_WORKTREE_ID_OPTION,
+} from "../adapters/tmux";
 import { writeWorktreeMeta, writeWorktreePrs } from "../adapters/fs";
 import { ProjectRuntime } from "../services/project-runtime";
 import { ReconciliationService } from "../services/reconciliation-service";
@@ -104,13 +110,23 @@ class FakeGitGateway implements GitGateway {
 }
 
 class FakeTmuxGateway implements TmuxGateway {
+  readonly renamed: Array<{ sessionName: string; windowName: string; newName: string }> = [];
+  readonly options: Array<{ sessionName: string; windowName: string; option: string; value: string }> = [];
+  readonly killedWindows: Array<{ sessionName: string; windowName: string }> = [];
+
   constructor(private readonly windows: TmuxWindowSummary[]) {}
 
   getPaneId(_target: string): string {
     return "%0";
   }
 
-  createParkedPane(_opts: { sessionName: string; parkingWindow: string; cwd: string; command: string }): string {
+  createParkedPane(_opts: {
+    sessionName: string;
+    parkingWindow: string;
+    cwd: string;
+    command: string;
+    worktreeId?: string;
+  }): string {
     return "%99";
   }
 
@@ -126,12 +142,18 @@ class FakeTmuxGateway implements TmuxGateway {
     throw new Error("not implemented");
   }
 
-  hasWindow(): boolean {
-    throw new Error("not implemented");
+  hasWindow(sessionName: string, windowName: string): boolean {
+    return this.windows.some(
+      (window) => window.sessionName === sessionName && window.windowName === windowName,
+    );
   }
 
-  killWindow(): void {
-    throw new Error("not implemented");
+  killWindow(sessionName: string, windowName: string): void {
+    this.killedWindows.push({ sessionName, windowName });
+    const index = this.windows.findIndex(
+      (window) => window.sessionName === sessionName && window.windowName === windowName,
+    );
+    if (index >= 0) this.windows.splice(index, 1);
   }
 
   createWindow(): void {
@@ -142,8 +164,22 @@ class FakeTmuxGateway implements TmuxGateway {
     throw new Error("not implemented");
   }
 
-  setWindowOption(): void {
-    throw new Error("not implemented");
+  renameWindow(sessionName: string, windowName: string, newName: string): void {
+    this.renamed.push({ sessionName, windowName, newName });
+    const window = this.windows.find(
+      (entry) => entry.sessionName === sessionName && entry.windowName === windowName,
+    );
+    if (window) window.windowName = newName;
+  }
+
+  setWindowOption(sessionName: string, windowName: string, option: string, value: string): void {
+    this.options.push({ sessionName, windowName, option, value });
+    const window = this.windows.find(
+      (entry) => entry.sessionName === sessionName && entry.windowName === windowName,
+    );
+    if (!window) return;
+    if (option === WM_WORKTREE_ID_OPTION) window.worktreeId = value;
+    if (option === WM_WINDOW_ROLE_OPTION) window.role = value === "parking" ? "parking" : "main";
   }
 
   runCommand(): void {
@@ -155,8 +191,17 @@ class FakeTmuxGateway implements TmuxGateway {
   }
 
   listWindows(): TmuxWindowSummary[] {
-    return this.windows;
+    return this.windows.map((window) => ({ ...window }));
   }
+}
+
+function fakeWindow(overrides: Partial<TmuxWindowSummary> & Pick<TmuxWindowSummary, "sessionName" | "windowName">): TmuxWindowSummary {
+  return {
+    paneCount: 1,
+    worktreeId: null,
+    role: null,
+    ...overrides,
+  };
 }
 
 class FakePortProbe implements PortProbe {
@@ -272,11 +317,11 @@ describe("ReconciliationService", () => {
       new Map([[managedPath, { dirty: true, aheadCount: 2, currentCommit: "bbb222" }]]),
     );
     const tmux = new FakeTmuxGateway([
-      {
+      fakeWindow({
         sessionName: buildProjectSessionName(repoRoot),
         windowName: buildWorktreeWindowName("feature/search"),
         paneCount: 3,
-      },
+      }),
     ]);
 
     const service = new ReconciliationService({
@@ -320,6 +365,219 @@ describe("ReconciliationService", () => {
       },
     ]);
     expect(runtime.getWorktree("wt_stale")).toBeNull();
+  });
+
+  it("keeps the existing window after an in-worktree branch rename and renames it in place", async () => {
+    // Repro: `git checkout -b feature/new` inside the worktree. The live tmux window is still
+    // named after the old branch. Identity must come from the @wm_worktree_id anchor, so the
+    // worktree stays "open" and the window is renamed in place instead of being orphaned.
+    const repoRoot = "/repo/project";
+    const managedPath = "/repo/project/__worktrees/feature-rename";
+    const managedGitDir = await mkdtemp(join(tmpdir(), "webmux-reconcile-rename-"));
+    tempDirs.push(managedGitDir);
+
+    await writeWorktreeMeta(managedGitDir, {
+      schemaVersion: 1,
+      worktreeId: "wt_rename",
+      branch: "feature/old",
+      createdAt: "2026-07-11T00:00:00.000Z",
+      profile: "default",
+      agent: "claude",
+      runtime: "host",
+      startupEnvValues: {},
+      allocatedPorts: {},
+    });
+
+    const sessionName = buildProjectSessionName(repoRoot);
+    const runtime = new ProjectRuntime();
+    const git = new FakeGitGateway(
+      [
+        { path: repoRoot, branch: "main", head: "aaa111", detached: false, bare: false },
+        // git now reports the NEW branch, while tmux still holds the OLD window name.
+        { path: managedPath, branch: "feature/new", head: "bbb222", detached: false, bare: false },
+      ],
+      new Map([[managedPath, managedGitDir]]),
+      new Map([[managedPath, { dirty: false, aheadCount: 0, currentCommit: "bbb222" }]]),
+    );
+    const tmux = new FakeTmuxGateway([
+      fakeWindow({
+        sessionName,
+        windowName: buildWorktreeWindowName("feature/old"),
+        paneCount: 2,
+        worktreeId: "wt_rename",
+        role: "main",
+      }),
+      fakeWindow({
+        sessionName,
+        windowName: buildWorktreeParkingWindowName("feature/old"),
+        paneCount: 1,
+        worktreeId: "wt_rename",
+        role: "parking",
+      }),
+    ]);
+
+    const service = new ReconciliationService({
+      config: TEST_CONFIG,
+      git,
+      tmux,
+      portProbe: new FakePortProbe(),
+      runtime,
+    });
+
+    await service.reconcile(repoRoot);
+
+    const state = runtime.getWorktree("wt_rename");
+    expect(state?.branch).toBe("feature/new");
+    // The session must still be considered open — this is the bug.
+    expect(state?.session.exists).toBe(true);
+    expect(state?.session.paneCount).toBe(2);
+
+    // The window is renamed in place, restoring the wm-<live-branch> invariant.
+    expect(tmux.renamed).toContainEqual({
+      sessionName,
+      windowName: buildWorktreeWindowName("feature/old"),
+      newName: buildWorktreeWindowName("feature/new"),
+    });
+    expect(tmux.renamed).toContainEqual({
+      sessionName,
+      windowName: buildWorktreeParkingWindowName("feature/old"),
+      newName: buildWorktreeParkingWindowName("feature/new"),
+    });
+    // No window was killed — the original session survives.
+    expect(tmux.killedWindows).toEqual([]);
+  });
+
+  it("backfills the worktree id anchor onto pre-existing unanchored windows", async () => {
+    const repoRoot = "/repo/project";
+    const managedPath = "/repo/project/__worktrees/feature-legacy";
+    const managedGitDir = await mkdtemp(join(tmpdir(), "webmux-reconcile-legacy-"));
+    tempDirs.push(managedGitDir);
+
+    await writeWorktreeMeta(managedGitDir, {
+      schemaVersion: 1,
+      worktreeId: "wt_legacy",
+      branch: "feature/legacy",
+      createdAt: "2026-07-11T00:00:00.000Z",
+      profile: "default",
+      agent: "claude",
+      runtime: "host",
+      startupEnvValues: {},
+      allocatedPorts: {},
+    });
+
+    const sessionName = buildProjectSessionName(repoRoot);
+    const runtime = new ProjectRuntime();
+    const git = new FakeGitGateway(
+      [
+        { path: repoRoot, branch: "main", head: "aaa111", detached: false, bare: false },
+        { path: managedPath, branch: "feature/legacy", head: "bbb222", detached: false, bare: false },
+      ],
+      new Map([[managedPath, managedGitDir]]),
+      new Map([[managedPath, { dirty: false, aheadCount: 0, currentCommit: "bbb222" }]]),
+    );
+    // Window created before this feature existed: correct name, no anchor.
+    const tmux = new FakeTmuxGateway([
+      fakeWindow({
+        sessionName,
+        windowName: buildWorktreeWindowName("feature/legacy"),
+        paneCount: 1,
+      }),
+    ]);
+
+    const service = new ReconciliationService({
+      config: TEST_CONFIG,
+      git,
+      tmux,
+      portProbe: new FakePortProbe(),
+      runtime,
+    });
+
+    await service.reconcile(repoRoot);
+
+    expect(runtime.getWorktree("wt_legacy")?.session.exists).toBe(true);
+    expect(tmux.options).toContainEqual({
+      sessionName,
+      windowName: buildWorktreeWindowName("feature/legacy"),
+      option: WM_WORKTREE_ID_OPTION,
+      value: "wt_legacy",
+    });
+    expect(tmux.options).toContainEqual({
+      sessionName,
+      windowName: buildWorktreeWindowName("feature/legacy"),
+      option: WM_WINDOW_ROLE_OPTION,
+      value: "main",
+    });
+    expect(tmux.renamed).toEqual([]);
+  });
+
+  it("kills a stale orphan window that squats on the renamed window's target name", async () => {
+    const repoRoot = "/repo/project";
+    const managedPath = "/repo/project/__worktrees/feature-collide";
+    const managedGitDir = await mkdtemp(join(tmpdir(), "webmux-reconcile-collide-"));
+    tempDirs.push(managedGitDir);
+
+    await writeWorktreeMeta(managedGitDir, {
+      schemaVersion: 1,
+      worktreeId: "wt_collide",
+      branch: "feature/old",
+      createdAt: "2026-07-11T00:00:00.000Z",
+      profile: "default",
+      agent: "claude",
+      runtime: "host",
+      startupEnvValues: {},
+      allocatedPorts: {},
+    });
+
+    const sessionName = buildProjectSessionName(repoRoot);
+    const runtime = new ProjectRuntime();
+    const git = new FakeGitGateway(
+      [
+        { path: repoRoot, branch: "main", head: "aaa111", detached: false, bare: false },
+        { path: managedPath, branch: "feature/new", head: "bbb222", detached: false, bare: false },
+      ],
+      new Map([[managedPath, managedGitDir]]),
+      new Map([[managedPath, { dirty: false, aheadCount: 0, currentCommit: "bbb222" }]]),
+    );
+    const tmux = new FakeTmuxGateway([
+      fakeWindow({
+        sessionName,
+        windowName: buildWorktreeWindowName("feature/old"),
+        paneCount: 2,
+        worktreeId: "wt_collide",
+        role: "main",
+      }),
+      // A dead leftover window already squatting on wm-feature/new, owned by nobody live.
+      fakeWindow({
+        sessionName,
+        windowName: buildWorktreeWindowName("feature/new"),
+        paneCount: 1,
+        worktreeId: "wt_dead",
+        role: "main",
+      }),
+    ]);
+
+    const service = new ReconciliationService({
+      config: TEST_CONFIG,
+      git,
+      tmux,
+      portProbe: new FakePortProbe(),
+      runtime,
+    });
+
+    await service.reconcile(repoRoot);
+
+    expect(tmux.killedWindows).toContainEqual({
+      sessionName,
+      windowName: buildWorktreeWindowName("feature/new"),
+    });
+    expect(tmux.renamed).toContainEqual({
+      sessionName,
+      windowName: buildWorktreeWindowName("feature/old"),
+      newName: buildWorktreeWindowName("feature/new"),
+    });
+    const state = runtime.getWorktree("wt_collide");
+    expect(state?.session.exists).toBe(true);
+    expect(state?.session.paneCount).toBe(2);
   });
 
   it("ignores stale worktree registrations whose directory no longer exists", async () => {

@@ -17,7 +17,7 @@ function worktree(path: string, branch: string | null): GitWorktreeEntry {
 }
 
 function window(windowName: string, sessionName = SESSION): TmuxWindowSummary {
-  return { sessionName, windowName, paneCount: 1 };
+  return { sessionName, windowName, paneCount: 1, worktreeId: null, role: null };
 }
 
 describe("computeOpenBranches", () => {

@@ -50,7 +50,12 @@ interface WorktreeRuntimeLike {
     resolveWorktreeGitDir(cwd: string): string;
   };
   tmux: {
-    listWindows(): Array<{ sessionName: string; windowName: string }>;
+    listWindows(): Array<{
+      sessionName: string;
+      windowName: string;
+      worktreeId?: string | null;
+      role?: string | null;
+    }>;
   };
   lifecycleService: LifecycleServiceLike;
 }
@@ -610,19 +615,56 @@ function listProjectWorktrees(
     .filter((entry) => !entry.bare && resolve(entry.path) !== projectDir);
 }
 
-function buildOpenWorktreeWindowSet(runtime: WorktreeRuntimeLike): Set<string> {
+/** Open windows for this project, indexed both by the stable worktree id anchor and by window name.
+ *  The id is authoritative: a window's name is derived from the branch and goes stale when the
+ *  branch is renamed inside the worktree. The name set remains as a fallback for windows created
+ *  before the anchor existed (the server backfills those on its next reconcile). */
+interface OpenWorktreeWindows {
+  names: Set<string>;
+  worktreeIds: Set<string>;
+}
+
+type ListedTmuxWindow = ReturnType<WorktreeRuntimeLike["tmux"]["listWindows"]>[number];
+
+function buildOpenWorktreeWindows(runtime: WorktreeRuntimeLike): OpenWorktreeWindows {
   const sessionName = buildProjectSessionName(resolve(runtime.projectDir));
-  let windows: Array<{ sessionName: string; windowName: string }> = [];
+  let windows: ListedTmuxWindow[] = [];
   try {
     windows = runtime.tmux.listWindows();
   } catch {
     windows = [];
   }
-  return new Set(
-    windows
-      .filter((w) => w.sessionName === sessionName)
-      .map((w) => w.windowName),
-  );
+  const scoped = windows.filter((w) => w.sessionName === sessionName);
+  return {
+    names: new Set(scoped.map((w) => w.windowName)),
+    worktreeIds: new Set(
+      scoped
+        .filter((w) => w.role !== "parking")
+        .map((w) => w.worktreeId)
+        .filter((id): id is string => typeof id === "string" && id.length > 0),
+    ),
+  };
+}
+
+function isWorktreeWindowOpen(
+  open: OpenWorktreeWindows,
+  branch: string,
+  worktreeId: string | null | undefined,
+): boolean {
+  if (worktreeId && open.worktreeIds.has(worktreeId)) return true;
+  return open.names.has(buildWorktreeWindowName(branch));
+}
+
+async function readWorktreeId(
+  runtime: WorktreeRuntimeLike,
+  worktreePath: string,
+): Promise<string | null> {
+  try {
+    const meta = await readWorktreeMeta(runtime.git.resolveWorktreeGitDir(worktreePath));
+    return meta?.worktreeId ?? null;
+  } catch {
+    return null;
+  }
 }
 
 async function defaultConfirmPrune(worktreeCount: number): Promise<boolean> {
@@ -690,15 +732,15 @@ async function listWorktrees(
     return;
   }
 
-  const openWindows = buildOpenWorktreeWindowSet(runtime);
+  const openWindows = buildOpenWorktreeWindows(runtime);
 
   const projectGitDir = runtime.git.resolveWorktreeGitDir(projectDir);
   const archivedPaths = buildArchivedWorktreePathSet(await readWorktreeArchiveState(projectGitDir));
   const rows = await Promise.all(entries.map(async (entry) => {
     const branch = entry.branch ?? basename(entry.path);
-    const isOpen = openWindows.has(buildWorktreeWindowName(branch));
     const gitDir = runtime.git.resolveWorktreeGitDir(entry.path);
     const meta = await readWorktreeMeta(gitDir);
+    const isOpen = isWorktreeWindowOpen(openWindows, branch, meta?.worktreeId);
     const info = meta ? `${meta.profile} / ${meta.agent}` : "";
     return {
       branch,
@@ -881,10 +923,14 @@ export async function runWorktreeCommand(
         return 0;
       }
 
-      const openWindows = buildOpenWorktreeWindowSet(runtime);
-      const closedWorktrees = worktrees.filter(
-        (entry) => !openWindows.has(buildWorktreeWindowName(entry.branch ?? basename(entry.path))),
-      );
+      const openWindows = buildOpenWorktreeWindows(runtime);
+      const closedWorktrees = (await Promise.all(
+        worktrees.map(async (entry) => {
+          const branch = entry.branch ?? basename(entry.path);
+          const worktreeId = await readWorktreeId(runtime, entry.path);
+          return isWorktreeWindowOpen(openWindows, branch, worktreeId) ? null : entry;
+        }),
+      )).filter((entry) => entry !== null);
       if (closedWorktrees.length === 0) {
         stdout("No closed worktrees to prune.");
         return 0;
@@ -926,20 +972,10 @@ export async function runWorktreeCommand(
         return 0;
       }
 
-      const sessionName = buildProjectSessionName(projectDir);
-      let openWindows = new Set<string>();
-      try {
-        openWindows = new Set(
-          runtime.tmux.listWindows()
-            .filter((w) => w.sessionName === sessionName)
-            .map((w) => w.windowName),
-        );
-      } catch {
-        openWindows = new Set();
-      }
+      const openWindows = buildOpenWorktreeWindows(runtime);
 
-      const existingBranches = new Set(
-        listProjectWorktrees(runtime).map((entry) => entry.branch ?? basename(entry.path)),
+      const existingWorktrees = new Map(
+        listProjectWorktrees(runtime).map((entry) => [entry.branch ?? basename(entry.path), entry]),
       );
 
       let restored = 0;
@@ -948,12 +984,14 @@ export async function runWorktreeCommand(
       let firstRestored: string | null = null;
 
       for (const branch of state.branches) {
-        if (openWindows.has(buildWorktreeWindowName(branch))) {
+        const entry = existingWorktrees.get(branch);
+        const worktreeId = entry ? await readWorktreeId(runtime, entry.path) : null;
+        if (isWorktreeWindowOpen(openWindows, branch, worktreeId)) {
           stdout(`Already open: ${branch}`);
           skipped++;
           continue;
         }
-        if (!existingBranches.has(branch)) {
+        if (!entry) {
           stderr(`Skipping ${branch}: worktree no longer exists`);
           skipped++;
           continue;

@@ -136,7 +136,13 @@ class FakeTmuxGateway implements TmuxGateway {
     return "%0";
   }
 
-  createParkedPane(_opts: { sessionName: string; parkingWindow: string; cwd: string; command: string }): string {
+  createParkedPane(_opts: {
+    sessionName: string;
+    parkingWindow: string;
+    cwd: string;
+    command: string;
+    worktreeId: string;
+  }): string {
     return "%99";
   }
 
@@ -159,6 +165,10 @@ class FakeTmuxGateway implements TmuxGateway {
 
   killWindow(sessionName: string, windowName: string): void {
     this.calls.push(`killWindow:${sessionName}:${windowName}`);
+  }
+
+  renameWindow(sessionName: string, windowName: string, newName: string): void {
+    this.calls.push(`renameWindow:${sessionName}:${windowName}:${newName}`);
   }
 
   createWindow(opts: { sessionName: string; windowName: string; cwd: string; command?: string }): void {
@@ -511,6 +521,7 @@ describe("initializeManagedWorktree", () => {
         sessionLayoutPlan: {
           sessionName: "wm-project-12345678",
           windowName: "wm-feature/search-panel",
+          worktreeId: "wt_test",
           shellCommand: "shell-cmd",
           focusPaneIndex: 0,
           panes: [
@@ -601,6 +612,7 @@ describe("initializeManagedWorktree", () => {
           sessionLayoutPlan: {
             sessionName: "wm-project-12345678",
             windowName: "wm-feature-tmux-rollback",
+            worktreeId: "wt_tmux_rollback",
             shellCommand: "shell-cmd",
             focusPaneIndex: 0,
             panes: [
