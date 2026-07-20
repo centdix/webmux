@@ -52,6 +52,17 @@ Each issue is processed once while it stays in Todo + labeled. Remove the label 
 
 When the auto-create watcher picks up a `webmux_oneshot` issue, it posts a structured comment on the Linear issue (prefix `` **Webmux pickup — branch `<branch>`** ``) so external automation can track when the autonomous run starts. (Regular `webmux` pickups are user-driven and skip the comment.)
 
+**Setup — `LINEAR_API_KEY`.** Everything above needs a [Linear API key](https://linear.app/settings/account/security) in the server's environment. webmux runs as a single machine-wide service started from your home directory, so put the key in `~/.config/webmux/.env` — a `KEY=value` file the server loads at startup regardless of which directory it runs from, so it survives `webmux update`:
+
+```bash
+mkdir -p ~/.config/webmux
+echo 'LINEAR_API_KEY=lin_api_...' >> ~/.config/webmux/.env
+chmod 600 ~/.config/webmux/.env
+webmux service restart
+```
+
+Your assigned issues appear in the dashboard once the service restarts.
+
 ## Quick Start
 
 ```bash
