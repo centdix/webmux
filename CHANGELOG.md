@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.43.1](https://github.com/windmill-labs/webmux/compare/v0.43.0...v0.43.1) (2026-07-23)
+
+
+### Bug Fixes
+
+* **pr:** stop cancelled CI runs from masking the latest review status ([#298](https://github.com/windmill-labs/webmux/issues/298)) ([9001d9f](https://github.com/windmill-labs/webmux/commit/9001d9f92d94d151add9983dc32a7d1384fd3945))
+
+## [0.43.0](https://github.com/windmill-labs/webmux/compare/v0.42.0...v0.43.0) (2026-07-20)
+
+
+### Features
+
+* load global config env from ~/.config/webmux/.env ([#295](https://github.com/windmill-labs/webmux/issues/295)) ([d62612e](https://github.com/windmill-labs/webmux/commit/d62612e71e12c00664d3463d91f51f0acc9bf2c9))
+
+
+### Bug Fixes
+
+* **tmux:** force a UTF-8 locale for tmux control commands ([#293](https://github.com/windmill-labs/webmux/issues/293)) ([e725f3b](https://github.com/windmill-labs/webmux/commit/e725f3be7a0dd0bd7f960b7b2641a37b900e6fb8))
+
+## [0.42.0](https://github.com/windmill-labs/webmux/compare/v0.41.2...v0.42.0) (2026-07-17)
+
+
+### Features
+
+* order worktree list by session and pr state ([#289](https://github.com/windmill-labs/webmux/issues/289)) ([44bd900](https://github.com/windmill-labs/webmux/commit/44bd900efa85dae03cc0c3abd3c268cab2639b55))
+
+
+### Bug Fixes
+
+* **auto-remove:** sweep merged worktrees headlessly ([#291](https://github.com/windmill-labs/webmux/issues/291)) ([70c51e4](https://github.com/windmill-labs/webmux/commit/70c51e43e75b7208a7a9040bbf98762d6d22aa4a))
+
 ## [0.41.2](https://github.com/windmill-labs/webmux/compare/v0.41.1...v0.41.2) (2026-07-16)
 
 

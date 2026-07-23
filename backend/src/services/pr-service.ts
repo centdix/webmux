@@ -49,6 +49,8 @@ interface GhCheckRunEntry {
   status: GhCheckStatus;
   name: string;
   detailsUrl: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
 }
 
 // StatusContext entries from external CI (e.g. Vercel)
@@ -57,6 +59,7 @@ interface GhStatusContextEntry {
   context: string;
   state: "SUCCESS" | "FAILURE" | "PENDING" | "ERROR" | "EXPECTED";
   targetUrl: string | null;
+  createdAt?: string | null;
 }
 
 type GhCheckEntry = GhCheckRunEntry | GhStatusContextEntry;
@@ -88,18 +91,68 @@ const etagCache = new Map<string, { etag: string; comments: PrComment[] }>();
 
 // ── Pure helper functions (exported for unit testing) ─────────────────────────
 
+/** Group key for an entry: check-run name, or external status context. */
+function checkEntryKey(c: GhCheckEntry): string {
+  return c.__typename === "StatusContext" ? `status:${c.context}` : `check:${c.name}`;
+}
+
+/** Parse an ISO timestamp to epoch ms, 0 when absent/invalid. */
+function toEpoch(ts: string | null | undefined): number {
+  const t = ts ? new Date(ts).getTime() : NaN;
+  return Number.isNaN(t) ? 0 : t;
+}
+
+/**
+ * Recency of an entry (epoch ms) for latest-wins dedupe. For a check run, use
+ * the later of startedAt/completedAt: GitHub reports completedAt as a zero
+ * sentinel ("0001-01-01T00:00:00Z") while still running, so a live run would
+ * otherwise sort as ancient and lose to an older completed run.
+ */
+function checkEntryTime(c: GhCheckEntry): number {
+  if (c.__typename === "StatusContext") return toEpoch(c.createdAt);
+  return Math.max(toEpoch(c.startedAt), toEpoch(c.completedAt));
+}
+
+/** A CANCELLED check-run is a superseded/aborted run, not a failing verdict. */
+function isCancelled(c: GhCheckEntry): boolean {
+  return c.__typename === "CheckRun" && c.conclusion === "CANCELLED";
+}
+
+/**
+ * Collapse the rollup to the most recent entry per check name / status context.
+ * Re-triggering a workflow (e.g. `/review` re-running codex CI) leaves the prior
+ * run in the rollup under the same name; keeping only the latest lets the fresh
+ * result win instead of a stale run masking it. Latest wins by completion time,
+ * falling back to array order (GitHub returns oldest-first) on ties.
+ */
+export function dedupeLatestChecks(checks: GhCheckEntry[]): GhCheckEntry[] {
+  const latest = new Map<string, GhCheckEntry>();
+  for (const c of checks) {
+    const key = checkEntryKey(c);
+    const prev = latest.get(key);
+    if (!prev || checkEntryTime(c) >= checkEntryTime(prev)) latest.set(key, c);
+  }
+  return [...latest.values()];
+}
+
 /** Summarize CI check status from a statusCheckRollup array. */
 export function summarizeChecks(
   checks: GhCheckEntry[] | null,
 ): PrEntry["ciStatus"] {
   if (!checks || checks.length === 0) return "none";
-  const allDone = checks.every((c) =>
+  // Drop CANCELLED runs: a codex CI review cancelled when `/review` re-triggers
+  // it (concurrency cancel-in-progress) reports CANCELLED, which must not mask
+  // the latest run — otherwise the PR stays "failed" forever. Also dedupe so a
+  // same-name re-run's fresh result wins over the superseded one.
+  const relevant = dedupeLatestChecks(checks).filter((c) => !isCancelled(c));
+  if (relevant.length === 0) return "none";
+  const allDone = relevant.every((c) =>
     c.__typename === "StatusContext"
       ? c.state !== "PENDING" && c.state !== "EXPECTED"
       : c.status === "COMPLETED",
   );
   if (!allDone) return "pending";
-  const allPass = checks.every((c) => {
+  const allPass = relevant.every((c) => {
     if (c.__typename === "StatusContext") return c.state === "SUCCESS";
     return c.conclusion === "SUCCESS" || c.conclusion === "NEUTRAL" || c.conclusion === "SKIPPED";
   });
@@ -124,14 +177,15 @@ export function deriveCheckStatus(check: GhCheckEntry): CiCheck["status"] {
   if (check.status !== "COMPLETED") return "pending";
   const c = check.conclusion;
   if (c === "SUCCESS" || c === "NEUTRAL") return "success";
-  if (c === "SKIPPED") return "skipped";
+  // CANCELLED = superseded (e.g. codex CI re-triggered by `/review`); not a failure.
+  if (c === "SKIPPED" || c === "CANCELLED") return "skipped";
   return "failed";
 }
 
 /** Map raw GH check entries to typed CiCheck array. */
 export function mapChecks(checks: GhCheckEntry[] | null): CiCheck[] {
   if (!checks || checks.length === 0) return [];
-  return checks.map((c) => {
+  return dedupeLatestChecks(checks).map((c) => {
     const name = c.__typename === "StatusContext" ? c.context : c.name;
     const url = c.__typename === "StatusContext" ? c.targetUrl : c.detailsUrl;
     return {
@@ -492,7 +546,6 @@ export function startPrMonitor(
   projectDir?: string,
   intervalMs: number = 10_000,
   isActive?: () => boolean,
-  onAfterSync?: () => Promise<void>,
 ): () => void {
   const run = async (): Promise<void> => {
     if (isActive && !isActive()) {
@@ -504,12 +557,102 @@ export function startPrMonitor(
         log.error(`[pr] sync error: ${err}`);
       },
     );
-    if (onAfterSync) {
-      await onAfterSync().catch((err: unknown) => {
-        log.error(`[pr] after-sync hook error: ${err}`);
-      });
-    }
   };
 
   return startSerializedInterval(run, intervalMs);
+}
+
+/** Fetch the PR state for every branch across the current repo and all linked
+ *  repos, one `gh pr list --state all` call per repo. Unlike the display sync
+ *  (open-only), this sees merged/closed PRs, so the auto-remove sweep can detect a
+ *  merge even when no earlier open-state sync ever recorded the PR.
+ *
+ *  Returns null if any repo query failed: a failed query is indistinguishable from
+ *  "this branch has no PR here", and since auto-remove reads this live (no persisted
+ *  fallback), proceeding on partial data could drop an open cross-repo PR and wrongly
+ *  remove a merged-in-main worktree. Callers must treat null as "skip this sweep". */
+export async function fetchBranchPrStates(
+  linkedRepos: LinkedRepoConfig[],
+  projectDir?: string,
+): Promise<Map<string, PrEntry["state"][]> | null> {
+  const perRepo = await Promise.all([
+    fetchRepoBranchStates(undefined, projectDir),
+    ...linkedRepos.map(({ repo }) => fetchRepoBranchStates(repo, projectDir)),
+  ]);
+  if (perRepo.some((entries) => entries === null)) return null;
+
+  const states = new Map<string, PrEntry["state"][]>();
+  for (const entries of perRepo) {
+    for (const { branch, state } of entries!) {
+      const existing = states.get(branch) ?? [];
+      existing.push(state);
+      states.set(branch, existing);
+    }
+  }
+  return states;
+}
+
+/** Returns null (not []) on any failure so the caller can distinguish a failed
+ *  query from a repo that genuinely has no matching PRs. */
+async function fetchRepoBranchStates(
+  repoSlug: string | undefined,
+  cwd: string | undefined,
+): Promise<Array<{ branch: string; state: PrEntry["state"] }> | null> {
+  const args = [
+    "gh",
+    "pr",
+    "list",
+    "--state",
+    "all",
+    "--json",
+    "headRefName,state",
+    // Shares the display-sync limit. On a repo with heavy merged/closed history an
+    // older PR for a still-checked-out branch may fall outside the window and never
+    // be swept -- best-effort, but fails safe (a missed cleanup, never a wrong one).
+    "--limit",
+    String(PR_FETCH_LIMIT),
+  ];
+  if (repoSlug) args.push("--repo", repoSlug);
+
+  const proc = Bun.spawn(args, {
+    stdout: "pipe",
+    stderr: "pipe",
+    ...(cwd ? { cwd } : {}),
+  });
+
+  const timeout = Bun.sleep(GH_TIMEOUT_MS).then(() => {
+    proc.kill();
+    return "timeout" as const;
+  });
+
+  const raceResult = await Promise.race([proc.exited, timeout]);
+  if (raceResult === "timeout" || raceResult !== 0) return null;
+
+  try {
+    const raw = JSON.parse(await new Response(proc.stdout).text()) as Array<{
+      headRefName: string;
+      state: string;
+    }>;
+    return raw.map((r) => ({
+      branch: r.headRefName,
+      state: r.state.toLowerCase() as PrEntry["state"],
+    }));
+  } catch {
+    return null;
+  }
+}
+
+/** Periodically sweep merged worktrees. Runs independently of dashboard activity:
+ *  PRs merge while nobody is watching the dashboard, and cleanup must happen anyway. */
+export function startAutoRemoveMonitor(
+  run: () => Promise<void>,
+  intervalMs: number = 60_000,
+): () => void {
+  return startSerializedInterval(
+    () =>
+      run().catch((err: unknown) => {
+        log.error(`[auto-remove] sweep error: ${err}`);
+      }),
+    intervalMs,
+  );
 }
