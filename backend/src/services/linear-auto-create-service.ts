@@ -37,6 +37,8 @@ export interface LinearAutoCreateDependencies {
 
 export interface LinearAutoCreateMonitorOptions {
   intervalDeps?: SerializedIntervalDependencies<unknown>;
+  /** Overrides {@link LINEAR_AUTO_CREATE_POLL_INTERVAL_MS}. */
+  pollIntervalMs?: number;
 }
 
 /** Issue IDs the poller has already acted on. Prevents duplicate triggers
@@ -217,10 +219,11 @@ export function startLinearAutoCreateMonitor(
   deps: LinearAutoCreateDependencies,
   options: LinearAutoCreateMonitorOptions = {},
 ): () => void {
-  log.info(`[linear-auto-create] monitor started (interval: ${LINEAR_AUTO_CREATE_POLL_INTERVAL_MS}ms)`);
+  const pollIntervalMs = options.pollIntervalMs ?? LINEAR_AUTO_CREATE_POLL_INTERVAL_MS;
+  log.info(`[linear-auto-create] monitor started (interval: ${pollIntervalMs}ms)`);
   return startSerializedInterval<unknown>(
     () => runLinearAutoCreateOnce(deps),
-    LINEAR_AUTO_CREATE_POLL_INTERVAL_MS,
+    pollIntervalMs,
     options.intervalDeps,
   );
 }

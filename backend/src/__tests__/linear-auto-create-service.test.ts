@@ -509,4 +509,29 @@ describe("startLinearAutoCreateMonitor", () => {
     expect(scheduledInterval).toBe(LINEAR_AUTO_CREATE_POLL_INTERVAL_MS);
     expect(LINEAR_AUTO_CREATE_POLL_INTERVAL_MS).toBe(60_000);
   });
+
+  it("uses pollIntervalMs override when provided", async () => {
+    let scheduledInterval = -1;
+    const fetchStarted = createDeferred<void>();
+    const { deps } = createDeps({
+      onFetch: () => fetchStarted.resolve(),
+    });
+
+    const stop = startLinearAutoCreateMonitor(deps, {
+      pollIntervalMs: 5_000,
+      intervalDeps: {
+        scheduleEvery: (handler: () => void, intervalMs: number) => {
+          scheduledInterval = intervalMs;
+          handler();
+          return 1;
+        },
+        cancelSchedule: () => {},
+      },
+    });
+
+    await fetchStarted.promise;
+    stop();
+
+    expect(scheduledInterval).toBe(5_000);
+  });
 });
