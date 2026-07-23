@@ -103,7 +103,11 @@ import {
   startPrMonitor,
   syncPrStatus,
 } from "./services/pr-service";
-import { startLinearAutoCreateMonitor, resetProcessedIssues } from "./services/linear-auto-create-service";
+import {
+  startLinearAutoCreateMonitor,
+  resetProcessedIssues,
+  LINEAR_AUTO_CREATE_POLL_INTERVAL_MS,
+} from "./services/linear-auto-create-service";
 import { startOneshotWatcher } from "./services/oneshot-watcher-service";
 import { runAutoRemove, type AutoRemoveDependencies } from "./services/auto-remove-service";
 import { pullMainBranch, forcePullMainBranch, startAutoPullMonitor } from "./services/auto-pull-service";
@@ -278,14 +282,22 @@ async function runOneshotForIssue(issueId: string): Promise<{ branch: string }> 
 function startLinearAutoCreate(): void {
   if (stopLinearAutoCreate) return;
   const watchTeamKeys = config.integrations.linear.watchTeams;
-  stopLinearAutoCreate = startLinearAutoCreateMonitor({
-    lifecycleService,
-    git,
-    projectRoot: PROJECT_DIR,
-    runOneshotForIssue,
-    onOneshotPickedUp: postLinearOneshotPickupComment,
-    ...(watchTeamKeys && watchTeamKeys.length > 0 ? { watchTeamKeys } : {}),
-  });
+  const pollIntervalMsEnv = parseInt(Bun.env.LINEAR_AUTO_CREATE_POLL_INTERVAL_MS ?? "", 10);
+  const pollIntervalMs =
+    Number.isFinite(pollIntervalMsEnv) && pollIntervalMsEnv > 0
+      ? pollIntervalMsEnv
+      : LINEAR_AUTO_CREATE_POLL_INTERVAL_MS;
+  stopLinearAutoCreate = startLinearAutoCreateMonitor(
+    {
+      lifecycleService,
+      git,
+      projectRoot: PROJECT_DIR,
+      runOneshotForIssue,
+      onOneshotPickedUp: postLinearOneshotPickupComment,
+      ...(watchTeamKeys && watchTeamKeys.length > 0 ? { watchTeamKeys } : {}),
+    },
+    { pollIntervalMs },
+  );
 }
 
 /** Post the structured pickup comment on the Linear issue when the auto-create watcher
