@@ -34,7 +34,8 @@ chmod +x "$wrapper_path"
 child_pid=""
 
 cleanup() {
-  trap - EXIT INT TERM
+  trap '' INT TERM
+  trap - EXIT
   if [ -n "$child_pid" ] && kill -0 "$child_pid" >/dev/null 2>&1; then
     kill "$child_pid" >/dev/null 2>&1 || true
     wait "$child_pid" >/dev/null 2>&1 || true
