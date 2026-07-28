@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { apiContract } from "./contract";
 import {
   ComponentCatalogStateSchema,
   ComponentRuntimeStatusSchema,
@@ -7,6 +8,10 @@ import {
 } from "./schemas";
 
 describe("component API contracts", () => {
+  it("declares lifecycle validation failures on create", () => {
+    expect(apiContract.createWorktree.responses).toHaveProperty("422");
+  });
+
   it("accepts selected component ids on create", () => {
     expect(CreateWorktreeRequestSchema.parse({
       branch: "feature/catalog",
