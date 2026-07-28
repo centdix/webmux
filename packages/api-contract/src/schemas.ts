@@ -92,18 +92,6 @@ export const ComponentCatalogStateSchema = z.object({
   error: z.string().nullable(),
 });
 
-export const ComponentRuntimeStatusSchema = z.object({
-  id: ComponentIdSchema,
-  label: z.string(),
-  kind: z.string(),
-  paneIndex: z.number().int().nonnegative().nullable(),
-  processStatus: z.enum(["running", "exited", "stopped"]),
-  healthStatus: z.enum(["starting", "ready", "unhealthy", "unavailable"]),
-  ports: z.record(z.number().int().positive()),
-  urls: z.record(z.string()),
-  exitCode: z.number().int().nullable(),
-});
-
 export const AgentSummarySchema = z.object({
   id: AgentIdSchema,
   label: z.string(),
@@ -382,7 +370,6 @@ export const ProjectWorktreeSnapshotSchema = z.object({
   status: z.string(),
   elapsed: z.string(),
   services: z.array(ServiceStatusSchema),
-  components: z.array(ComponentRuntimeStatusSchema).default([]),
   prs: z.array(PrEntrySchema),
   linearIssue: LinkedLinearIssueSchema.nullable(),
   creation: WorktreeCreationStateSchema.nullable(),
@@ -718,7 +705,6 @@ export type AgentResponse = z.infer<typeof AgentResponseSchema>;
 export type ValidateCustomAgentResponse = z.infer<typeof ValidateCustomAgentResponseSchema>;
 export type ComponentSummary = z.infer<typeof ComponentSummarySchema>;
 export type ComponentCatalogState = z.infer<typeof ComponentCatalogStateSchema>;
-export type ComponentRuntimeStatus = z.infer<typeof ComponentRuntimeStatusSchema>;
 export type WorktreeCreateMode = z.infer<typeof WorktreeCreateModeSchema>;
 export type LinearIssueId = z.infer<typeof LinearIssueIdSchema>;
 export type LinearTeamKey = z.infer<typeof LinearTeamKeySchema>;

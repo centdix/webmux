@@ -9,18 +9,16 @@ import {
   WM_WINDOW_ROLE_OPTION,
   WM_WORKTREE_ID_OPTION,
   type TmuxGateway,
-  type TmuxPaneSummary,
   type TmuxWindowRole,
   type TmuxWindowSummary,
 } from "../adapters/tmux";
 import { buildRuntimeEnvMap, readWorktreeMeta, readWorktreePrs } from "../adapters/fs";
 import type { AgentId, ProjectConfig } from "../domain/config";
+import type { ComponentDefinition } from "../domain/components";
 import type { OneshotMeta, PrEntry, ServiceRuntimeState, WorktreeSource, WorktreeTab } from "../domain/model";
 import { mapWithConcurrency } from "../lib/async";
 import { ProjectRuntime } from "./project-runtime";
 import type { ComponentCatalogService } from "./component-catalog-service";
-import { ComponentMonitorService } from "./component-monitor-service";
-import type { ComponentRuntimeState } from "../domain/components";
 
 function makeUnmanagedWorktreeId(path: string): string {
   return `unmanaged:${resolve(path)}`;
@@ -28,6 +26,18 @@ function makeUnmanagedWorktreeId(path: string): string {
 
 function isValidPort(port: number | null): port is number {
   return port !== null && Number.isInteger(port) && port >= 1 && port <= 65535;
+}
+
+async function buildServiceState(
+  portProbe: PortProbe,
+  input: Omit<ServiceRuntimeState, "running">,
+): Promise<ServiceRuntimeState> {
+  return {
+    ...input,
+    running: isValidPort(input.port)
+      ? await portProbe.isListening(input.port)
+      : false,
+  };
 }
 
 async function buildServiceStates(
@@ -56,17 +66,42 @@ async function buildServiceStates(
 
   return Promise.all(deps.config.services.map(async (service) => {
     const port = input.allocatedPorts[service.portEnv] ?? null;
-    const running = isValidPort(port)
-      ? await deps.portProbe.isListening(port)
-      : false;
-    return {
+    return await buildServiceState(deps.portProbe, {
       name: service.name,
       port,
-      running,
       url: port !== null && service.urlTemplate
         ? expandTemplate(service.urlTemplate, runtimeEnv)
         : null,
-    };
+    });
+  }));
+}
+
+async function buildComponentServiceStates(
+  portProbe: PortProbe,
+  input: {
+    selectedComponentIds: string[];
+    componentPorts: Record<string, Record<string, number>>;
+    definitions: ComponentDefinition[];
+  },
+): Promise<ServiceRuntimeState[]> {
+  const definitionsById = new Map(input.definitions.map((component) => [component.id, component]));
+  const selectedComponents = input.selectedComponentIds
+    .map((componentId) => definitionsById.get(componentId))
+    .filter((component): component is ComponentDefinition => component !== undefined);
+
+  return await Promise.all(selectedComponents.map(async (component) => {
+    const portDefinition = component.ports[0];
+    const port = portDefinition
+      ? input.componentPorts[component.id]?.[portDefinition.name] ?? null
+      : null;
+    const url = port !== null && portDefinition && portDefinition.protocol !== "tcp"
+      ? `${portDefinition.protocol}://localhost:${port}`
+      : null;
+    return await buildServiceState(portProbe, {
+      name: component.label,
+      port,
+      url,
+    });
   }));
 }
 
@@ -152,7 +187,6 @@ interface ReconciledWorktreeState {
     parking: TmuxWindowSummary | null;
   };
   services: ServiceRuntimeState[];
-  components: ComponentRuntimeState[];
   prs: PrEntry[];
 }
 
@@ -162,7 +196,6 @@ export class ReconciliationService {
   private readonly concurrency: number;
   private inFlight: Promise<void> | null = null;
   private lastReconciledAt = 0;
-  private readonly componentMonitor: ComponentMonitorService;
 
   constructor(
     private readonly deps: ReconciliationServiceDependencies,
@@ -171,7 +204,6 @@ export class ReconciliationService {
     this.freshnessMs = options.freshnessMs ?? 500;
     this.now = options.now ?? Date.now;
     this.concurrency = options.concurrency ?? 4;
-    this.componentMonitor = new ComponentMonitorService(deps.portProbe, { now: this.now });
   }
 
   async reconcile(repoRoot: string, options: ReconcileOptions = {}): Promise<void> {
@@ -198,16 +230,10 @@ export class ReconciliationService {
     const sessionName = buildProjectSessionName(normalizedRepoRoot);
 
     let windows: TmuxWindowSummary[] = [];
-    let panes: TmuxPaneSummary[] = [];
     try {
       windows = this.deps.tmux.listWindows();
     } catch {
       windows = [];
-    }
-    try {
-      panes = this.deps.tmux.listPanes?.() ?? [];
-    } catch {
-      panes = [];
     }
     const componentDefinitions = await this.deps.componentCatalog?.getComponents() ?? [];
 
@@ -224,6 +250,24 @@ export class ReconciliationService {
       const gitStatus = this.deps.git.readWorktreeStatus(entry.path);
       const window = findWindow(windows, sessionName, worktreeId, branch);
       const parkingWindow = findWindow(windows, sessionName, worktreeId, branch, "parking");
+      const [configuredServices, componentServices] = meta
+        ? await Promise.all([
+            buildServiceStates(this.deps, {
+              allocatedPorts: meta.allocatedPorts,
+              startupEnvValues: meta.startupEnvValues,
+              worktreeId: meta.worktreeId,
+              branch,
+              profile: meta.profile,
+              agent: meta.agent,
+              runtime: meta.runtime,
+            }),
+            buildComponentServiceStates(this.deps.portProbe, {
+              selectedComponentIds: meta.selectedComponents ?? [],
+              componentPorts: meta.componentPorts ?? {},
+              definitions: componentDefinitions,
+            }),
+          ])
+        : [[], []];
 
       return {
         worktreeId,
@@ -253,31 +297,7 @@ export class ReconciliationService {
           main: window,
           parking: parkingWindow,
         },
-        services: meta
-          ? await buildServiceStates(this.deps, {
-              allocatedPorts: meta.allocatedPorts,
-              startupEnvValues: meta.startupEnvValues,
-              worktreeId: meta.worktreeId,
-              branch,
-              profile: meta.profile,
-              agent: meta.agent,
-              runtime: meta.runtime,
-            })
-          : [],
-        components: meta
-          ? await this.componentMonitor.buildStates({
-              worktreeId,
-              selectedComponentIds: meta.selectedComponents ?? [],
-              componentPorts: meta.componentPorts ?? {},
-              definitions: componentDefinitions,
-              session: {
-                exists: window !== null,
-                sessionName: window?.sessionName ?? null,
-                windowName: window?.windowName ?? buildWorktreeWindowName(branch),
-              },
-              panes,
-            })
-          : [],
+        services: [...configuredServices, ...componentServices],
         prs: await readWorktreePrs(gitDir),
       } satisfies ReconciledWorktreeState;
     });
@@ -318,7 +338,6 @@ export class ReconciliationService {
       });
 
       this.deps.runtime.setServices(state.worktreeId, state.services);
-      this.deps.runtime.setComponents(state.worktreeId, state.components);
       this.deps.runtime.setPrs(state.worktreeId, state.prs);
     }
 

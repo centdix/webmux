@@ -1,7 +1,6 @@
 import type {
   AgentId,
   BuiltInAgentId,
-  ComponentRuntimeStatus,
   LinkedLinearIssue,
   OneshotConfig,
   PrEntry,
@@ -37,7 +36,6 @@ export type {
   BranchListResponse,
   CiCheck,
   ComponentCatalogState,
-  ComponentRuntimeStatus,
   ComponentSummary,
   CreateWorktreeRequest,
   CreateWorktreeResponse,
@@ -125,7 +123,6 @@ export interface WorktreeInfo {
   agentLabel: string | null;
   agentTerminalStale: boolean;
   services: ServiceStatus[];
-  components: ComponentRuntimeStatus[];
   paneCount: number;
   prs: PrEntry[];
   linearIssue: LinkedLinearIssue | null;

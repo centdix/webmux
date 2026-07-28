@@ -4,11 +4,9 @@ import { basename, resolve } from "node:path";
 import { buildSeedFromLinear, defaultSeedFromLinearDeps } from "../../backend/src/services/conversation-export-service";
 import { CommandUsageError, resolveProjectBaseUrl, resolveProjectPrefix, withServerConnection } from "./shared";
 import { readOpenSessionsState, readWorktreeArchiveState, readWorktreeMeta, readWorktreePrs } from "../../backend/src/adapters/fs";
-import type { OpenSessionsState, PrEntry } from "../../backend/src/domain/model";
-import type { ComponentRuntimeState } from "../../backend/src/domain/components";
+import type { OpenSessionsState, PrEntry, ServiceRuntimeState, WorktreeCreationPhase } from "../../backend/src/domain/model";
 import { buildProjectSessionName, buildWorktreeWindowName } from "../../backend/src/adapters/tmux";
 import type { AgentId } from "../../backend/src/domain/config";
-import type { WorktreeCreationPhase } from "../../backend/src/domain/model";
 import { compareWorktreeOrder, isValidWorktreeName } from "../../backend/src/domain/policies";
 import { buildArchivedWorktreePathSet } from "../../backend/src/services/archive-service";
 import { createWebmuxRuntime } from "../../backend/src/runtime";
@@ -62,7 +60,7 @@ interface WorktreeRuntimeLike {
     reconcile(repoRoot: string, options?: { force?: boolean }): Promise<void>;
   };
   projectRuntime?: {
-    getWorktreeByBranch(branch: string): { components: ComponentRuntimeState[] } | null;
+    getWorktreeByBranch(branch: string): { services: ServiceRuntimeState[] } | null;
   };
   lifecycleService: LifecycleServiceLike;
 }
@@ -740,15 +738,12 @@ interface ListedWorktreeRow {
   searchText: string;
 }
 
-function formatComponentStatus(components: ComponentRuntimeState[]): string {
-  if (components.length === 0) return "";
-  const statuses = components.map((component) => {
-    const status = component.processStatus === "running"
-      ? component.healthStatus
-      : component.processStatus;
-    return `${component.id}=${status}`;
-  });
-  return `components: ${statuses.join(", ")}`;
+function formatServiceStatus(services: ServiceRuntimeState[]): string {
+  if (services.length === 0) return "";
+  const statuses = services.map((service) =>
+    `${service.name}=${service.running ? "running" : "stopped"}`
+  );
+  return `services: ${statuses.join(", ")}`;
 }
 
 function matchesListSearch(row: ListedWorktreeRow, query: string): boolean {
@@ -781,10 +776,10 @@ async function listWorktrees(
     const meta = await readWorktreeMeta(gitDir);
     const isOpen = isWorktreeWindowOpen(openWindows, branch, meta?.worktreeId);
     const prs = await readWorktreePrs(gitDir);
-    const componentStates = runtime.projectRuntime?.getWorktreeByBranch(branch)?.components ?? [];
-    const componentInfo = formatComponentStatus(componentStates);
+    const serviceStates = runtime.projectRuntime?.getWorktreeByBranch(branch)?.services ?? [];
+    const serviceInfo = formatServiceStatus(serviceStates);
     const worktreeInfo = meta ? `${meta.profile} / ${meta.agent}` : "";
-    const info = [worktreeInfo, componentInfo].filter(Boolean).join(" / ");
+    const info = [worktreeInfo, serviceInfo].filter(Boolean).join(" / ");
     return {
       branch,
       label: meta?.label ?? null,
@@ -799,7 +794,7 @@ async function listWorktrees(
         meta?.profile ?? "",
         meta?.agent ?? "",
         ...(meta?.selectedComponents ?? []),
-        ...componentStates.map((component) => component.id),
+        ...serviceStates.map((service) => service.name),
       ].join(" "),
     } satisfies ListedWorktreeRow;
   }));

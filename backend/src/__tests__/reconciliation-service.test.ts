@@ -375,7 +375,7 @@ describe("ReconciliationService", () => {
     expect(runtime.getWorktree("wt_stale")).toBeNull();
   });
 
-  it("reconciles tagged component panes and TCP readiness", async () => {
+  it("reconciles selected components as regular service health", async () => {
     const repoRoot = "/repo/project";
     const worktreePath = "/repo/project/__worktrees/feature-components";
     const gitDir = await mkdtemp(join(tmpdir(), "webmux-reconcile-components-"));
@@ -423,16 +423,6 @@ describe("ReconciliationService", () => {
           worktreeId: "wt_components",
           role: "main",
         })],
-        [{
-          sessionName,
-          windowName,
-          paneId: "%2",
-          paneIndex: 1,
-          pid: 123,
-          dead: false,
-          exitCode: null,
-          componentId: "service-alerts",
-        }],
       ),
       portProbe: new FakePortProbe(new Set([24_000])),
       runtime,
@@ -456,17 +446,20 @@ describe("ReconciliationService", () => {
 
     await service.reconcile(repoRoot, { force: true });
 
-    expect(runtime.getWorktreeByBranch("feature/components")?.components).toEqual([{
-      id: "service-alerts",
-      label: "Alerts",
-      kind: "service",
-      paneIndex: 1,
-      processStatus: "running",
-      healthStatus: "ready",
-      ports: { http: 24_000 },
-      urls: { http: "http://localhost:24000" },
-      exitCode: null,
-    }]);
+    expect(runtime.getWorktreeByBranch("feature/components")?.services).toEqual([
+      {
+        name: "frontend",
+        port: null,
+        running: false,
+        url: null,
+      },
+      {
+        name: "Alerts",
+        port: 24_000,
+        running: true,
+        url: "http://localhost:24000",
+      },
+    ]);
   });
 
   it("keeps the existing window after an in-worktree branch rename and renames it in place", async () => {

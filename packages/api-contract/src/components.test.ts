@@ -2,7 +2,6 @@ import { describe, expect, it } from "bun:test";
 import { apiContract } from "./contract";
 import {
   ComponentCatalogStateSchema,
-  ComponentRuntimeStatusSchema,
   CreateWorktreeRequestSchema,
   ProjectWorktreeSnapshotSchema,
 } from "./schemas";
@@ -19,27 +18,15 @@ describe("component API contracts", () => {
     }).components).toEqual(["service-alerts", "gateway-web"]);
   });
 
-  it("validates catalog and runtime component status", () => {
+  it("validates the component catalog", () => {
     expect(ComponentCatalogStateSchema.parse({
       status: "ready",
       components: [{ id: "service-alerts", label: "Alerts", kind: "service" }],
       error: null,
     }).components).toHaveLength(1);
-
-    expect(ComponentRuntimeStatusSchema.parse({
-      id: "service-alerts",
-      label: "Alerts",
-      kind: "service",
-      paneIndex: 1,
-      processStatus: "running",
-      healthStatus: "ready",
-      ports: { http: 24_000 },
-      urls: { http: "http://localhost:24000" },
-      exitCode: null,
-    }).healthStatus).toBe("ready");
   });
 
-  it("defaults components for older worktree snapshots", () => {
+  it("keeps runtime health in the shared services collection", () => {
     const snapshot = ProjectWorktreeSnapshotSchema.parse({
       branch: "feature/catalog",
       label: null,
@@ -64,6 +51,7 @@ describe("component API contracts", () => {
       oneshot: null,
     });
 
-    expect(snapshot.components).toEqual([]);
+    expect(snapshot.services).toEqual([]);
+    expect(snapshot).not.toHaveProperty("components");
   });
 });

@@ -915,7 +915,7 @@ describe("runWorktreeCommand", () => {
     expect(stdout[1]).toContain("closed");
   });
 
-  it("lists reconciled component statuses", async () => {
+  it("lists reconciled service health", async () => {
     const stdout: string[] = [];
     let reconciled = false;
 
@@ -937,16 +937,11 @@ describe("runWorktreeCommand", () => {
           },
           projectRuntime: {
             getWorktreeByBranch: () => ({
-              components: [{
-                id: "service-alerts",
-                label: "Alerts",
-                kind: "service",
-                paneIndex: 1,
-                processStatus: "running",
-                healthStatus: "ready",
-                ports: { http: 24_000 },
-                urls: { http: "http://localhost:24000" },
-                exitCode: null,
+              services: [{
+                name: "Alerts",
+                port: 24_000,
+                running: true,
+                url: "http://localhost:24000",
               }],
             }),
           },
@@ -958,7 +953,7 @@ describe("runWorktreeCommand", () => {
 
     expect(exitCode).toBe(0);
     expect(reconciled).toBe(true);
-    expect(stdout[0]).toContain("components: service-alerts=ready");
+    expect(stdout[0]).toContain("services: Alerts=running");
   });
 
   it("lists and searches workspace labels", async () => {

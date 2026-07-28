@@ -73,7 +73,6 @@ function mapWorktree(snapshot: ProjectWorktreeSnapshot): WorktreeInfo {
     agentLabel: snapshot.agentLabel,
     agentTerminalStale: snapshot.agentTerminalStale,
     services: snapshot.services,
-    components: snapshot.components,
     paneCount: snapshot.paneCount,
     prs: snapshot.prs,
     linearIssue: snapshot.linearIssue,

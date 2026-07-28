@@ -41,18 +41,3 @@ export type ComponentCatalogState =
       components: ComponentDefinition[];
       error: string;
     };
-
-export type ComponentProcessStatus = "running" | "exited" | "stopped";
-export type ComponentHealthStatus = "starting" | "ready" | "unhealthy" | "unavailable";
-
-export interface ComponentRuntimeState {
-  id: string;
-  label: string;
-  kind: string;
-  paneIndex: number | null;
-  processStatus: ComponentProcessStatus;
-  healthStatus: ComponentHealthStatus;
-  ports: Record<string, number>;
-  urls: Record<string, string>;
-  exitCode: number | null;
-}

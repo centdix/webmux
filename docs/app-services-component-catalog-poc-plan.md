@@ -4,7 +4,7 @@
 
 Deliver a narrow vertical slice in which a developer can select `app-services`
 components while creating a worktree, launch every selection in its own correctly
-arranged tmux pane, and see process and readiness status.
+arranged tmux pane, and see the same simple port health used for regular services.
 
 The POC must support both the frontend and CLI and must reconstruct the selected
 components after a worktree or Webmux restart.
@@ -20,8 +20,8 @@ components after a worktree or Webmux restart.
 - Host-runtime `componentGroup` panes.
 - An agent pane on the left and equally stacked component panes on the right.
 - One direct tmux process per component, retaining logs after process exit.
-- Process and TCP readiness monitoring.
-- Component status badges and meaningful mobile pane labels.
+- TCP health monitoring through the existing service-health model.
+- Component badges alongside regular service badges.
 - Reconstruction when a worktree is reopened or Webmux restarts.
 
 ### Excluded
@@ -88,19 +88,15 @@ interface ComponentPortDefinition {
 - The config response exposes catalog state and available component summaries.
 - Each profile reports whether component selection is enabled.
 - The create request accepts `components: string[]`.
-- Each worktree snapshot exposes component runtime statuses.
+- Each worktree snapshot includes selected components in its existing `services`
+  collection.
 
 ```ts
-interface ComponentRuntimeStatus {
-  id: string;
-  label: string;
-  kind: string;
-  paneIndex: number | null;
-  processStatus: "running" | "exited" | "stopped";
-  healthStatus: "starting" | "ready" | "unhealthy" | "unavailable";
-  ports: Record<string, number>;
-  urls: Record<string, string>;
-  exitCode: number | null;
+interface ServiceStatus {
+  name: string;
+  port: number | null;
+  running: boolean;
+  url: string | null;
 }
 ```
 
@@ -160,13 +156,10 @@ Old metadata normalizes both fields to empty values.
 
 ### 5. Monitoring
 
-- Extend tmux inspection with pane ID, index, PID, dead state, exit status, and
-  component tag.
-- Reconcile component panes alongside the existing worktree state.
-- Use TCP probing for readiness.
-- Report `starting` for a 60-second initial grace period, then `unhealthy`.
-- Report dead panes as `exited / unavailable` and closed worktrees as
-  `stopped / unavailable`.
+- Reconcile selected components into the existing worktree `services` state.
+- Use the first declared component port and the existing TCP port probe.
+- Report only the existing `running` boolean, with no pane process, grace-period,
+  or readiness state machine.
 - Reuse the dashboard's existing polling cadence.
 
 ### 6. Minimal frontend
@@ -176,14 +169,13 @@ Old metadata normalizes both fields to empty values.
 - Show it only for profiles containing `componentGroup`.
 - Display catalog errors inline.
 - Submit selected component IDs in the typed create request.
-- Add a compact component status strip.
-- Use real component pane indices for mobile pane labels.
+- Render component health through the existing service badges in the header.
 
 ### 7. CLI parity
 
 - Add repeatable `--component <id>` handling to `webmux add` and `oneshot`.
 - Update help, completions, parsers, runtime handlers, and tests.
-- Add compact component status summaries to `webmux list`.
+- Include components in the existing service-health summary in `webmux list`.
 - Do not add component management subcommands in the POC.
 
 ### 8. App Services integration
@@ -207,10 +199,10 @@ Selected services continue to use staging URLs for dependencies in this POC.
 - Duplicate IDs and unsafe path rejection.
 - Port uniqueness, occupied-port skipping, and metadata compatibility.
 - Layout planning for zero, one, and three components.
-- Monitoring transitions through starting, ready, unhealthy, exited, and
-  stopped.
+- Component and configured-service health through the same TCP probe and
+  `running` boolean.
 - API schema and snapshot coverage.
-- Frontend selector, profile, submission, status, and pane label tests.
+- Frontend selector, profile, submission, and shared service-badge tests.
 - CLI parser, help, handler, completion, and list tests.
 - App Services `PORT` override and generator tests.
 
@@ -221,8 +213,8 @@ All tmux checks run through `scripts/run-with-isolated-tmux.sh`.
 - Create an App Services worktree with three components.
 - Verify four panes, approximately equal columns, and equal right-side heights.
 - Verify each process starts in its declared directory.
-- Verify unique allocated ports and readiness transitions.
-- Terminate one command and verify retained logs and exited status.
+- Verify unique allocated ports and running/stopped service badges.
+- Terminate one command and verify retained logs and a stopped service badge.
 - Close/reopen the worktree and restart Webmux to verify reconstruction.
 - Create another worktree with the same component and verify a different port.
 - Confirm no tracked `conf/env-dev.json` file becomes dirty.

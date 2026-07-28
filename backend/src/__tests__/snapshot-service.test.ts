@@ -121,7 +121,6 @@ describe("buildProjectSnapshot", () => {
         services: [
           { name: "frontend", port: 3010, running: true, url: "http://127.0.0.1:3010" },
         ],
-        components: [],
         prs: [
           {
             repo: "org/repo",
@@ -246,7 +245,6 @@ describe("buildProjectSnapshot", () => {
         status: "creating",
         elapsed: "",
         services: [],
-        components: [],
         prs: [],
         linearIssue: {
           identifier: "ENG-999",

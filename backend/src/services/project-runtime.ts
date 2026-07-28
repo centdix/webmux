@@ -11,7 +11,6 @@ import type {
   WorktreeSource,
   WorktreeTab,
 } from "../domain/model";
-import type { ComponentRuntimeState } from "../domain/components";
 import { buildWorktreeWindowName } from "../adapters/tmux";
 
 function isoNow(now?: () => Date): string {
@@ -67,7 +66,6 @@ function makeDefaultState(input: {
       lastError: null,
     },
     services: [],
-    components: [],
     prs: [],
   };
 }
@@ -181,16 +179,6 @@ export class ProjectRuntime {
   setServices(worktreeId: string, services: ServiceRuntimeState[]): ManagedWorktreeRuntimeState {
     const state = this.requireWorktree(worktreeId);
     state.services = services.map((service) => ({ ...service }));
-    return state;
-  }
-
-  setComponents(worktreeId: string, components: ComponentRuntimeState[]): ManagedWorktreeRuntimeState {
-    const state = this.requireWorktree(worktreeId);
-    state.components = components.map((component) => ({
-      ...component,
-      ports: { ...component.ports },
-      urls: { ...component.urls },
-    }));
     return state;
   }
 

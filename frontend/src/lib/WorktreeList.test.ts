@@ -21,7 +21,6 @@ function createWorktree(branch: string): WorktreeInfo {
     agentLabel: null,
     agentTerminalStale: false,
     services: [],
-    components: [],
     paneCount: 1,
     prs: [],
     linearIssue: {
