@@ -250,6 +250,7 @@ export const apiContract = c.router({
     body: CreateWorktreeRequestSchema,
     responses: {
       201: CreateWorktreeResponseSchema,
+      422: ErrorResponseSchema,
       ...commonErrorResponses,
     },
   },

@@ -4,10 +4,9 @@ import { basename, resolve } from "node:path";
 import { buildSeedFromLinear, defaultSeedFromLinearDeps } from "../../backend/src/services/conversation-export-service";
 import { CommandUsageError, resolveProjectBaseUrl, resolveProjectPrefix, withServerConnection } from "./shared";
 import { readOpenSessionsState, readWorktreeArchiveState, readWorktreeMeta, readWorktreePrs } from "../../backend/src/adapters/fs";
-import type { OpenSessionsState, PrEntry } from "../../backend/src/domain/model";
+import type { OpenSessionsState, PrEntry, ServiceRuntimeState, WorktreeCreationPhase } from "../../backend/src/domain/model";
 import { buildProjectSessionName, buildWorktreeWindowName } from "../../backend/src/adapters/tmux";
 import type { AgentId } from "../../backend/src/domain/config";
-import type { WorktreeCreationPhase } from "../../backend/src/domain/model";
 import { compareWorktreeOrder, isValidWorktreeName } from "../../backend/src/domain/policies";
 import { buildArchivedWorktreePathSet } from "../../backend/src/services/archive-service";
 import { createWebmuxRuntime } from "../../backend/src/runtime";
@@ -57,6 +56,12 @@ interface WorktreeRuntimeLike {
       role?: string | null;
     }>;
   };
+  reconciliationService?: {
+    reconcile(repoRoot: string, options?: { force?: boolean }): Promise<void>;
+  };
+  projectRuntime?: {
+    getWorktreeByBranch(branch: string): { services: ServiceRuntimeState[] } | null;
+  };
   lifecycleService: LifecycleServiceLike;
 }
 
@@ -96,13 +101,14 @@ export function getWorktreeCommandUsage(command: WorktreeSubcommand): string {
     case "add":
       return [
         "Usage:",
-        "  webmux add [branch] [--existing] [--base <branch>] [--profile <name>] [--agent <id>] [--prompt <text>] [--env KEY=VALUE] [--detach] [--from-linear <issue-id>]",
+        "  webmux add [branch] [--existing] [--base <branch>] [--profile <name>] [--agent <id>] [--component <id>] [--prompt <text>] [--env KEY=VALUE] [--detach] [--from-linear <issue-id>]",
         "",
         "Options:",
         "  --existing               Use an existing local or remote branch instead of creating a new one",
         "  --base <branch>         Base branch for a new worktree (defaults to config)",
         "  --profile <name>         Worktree profile from .webmux.yaml",
         "  --agent <id>              Agent id to launch (repeatable)",
+        "  --component <id>          App component to launch (repeatable)",
         "  --prompt <text>          Initial agent prompt",
         "  --env KEY=VALUE          Runtime env override (repeatable)",
         "  -d, --detach             Create worktree without switching to it",
@@ -221,6 +227,7 @@ export function parseAddCommandArgs(args: string[]): ParsedAddCommand | null {
   const input: CreateLifecycleWorktreesInput = {};
   const envOverrides: Record<string, string> = {};
   const selectedAgents: AgentId[] = [];
+  const selectedComponents: string[] = [];
   let detach = false;
   let fromLinearIssueId: string | null = null;
   let branchExplicit = false;
@@ -260,6 +267,17 @@ export function parseAddCommandArgs(args: string[]): ParsedAddCommand | null {
     if (arg === "--agent" || arg.startsWith("--agent=")) {
       const { value, nextIndex } = readOptionValue(args, index, "--agent");
       selectedAgents.push(parseAgent(value));
+      index = nextIndex;
+      continue;
+    }
+
+    if (arg === "--component" || arg.startsWith("--component=")) {
+      const { value, nextIndex } = readOptionValue(args, index, "--component");
+      const componentId = value.trim();
+      if (!componentId) {
+        throw new CommandUsageError("Component id cannot be empty");
+      }
+      selectedComponents.push(componentId);
       index = nextIndex;
       continue;
     }
@@ -318,6 +336,10 @@ export function parseAddCommandArgs(args: string[]): ParsedAddCommand | null {
 
   if (selectedAgents.length > 0) {
     input.agents = selectedAgents;
+  }
+
+  if (selectedComponents.length > 0) {
+    input.components = [...new Set(selectedComponents)];
   }
 
   if (Object.keys(envOverrides).length > 0) {
@@ -716,6 +738,14 @@ interface ListedWorktreeRow {
   searchText: string;
 }
 
+function formatServiceStatus(services: ServiceRuntimeState[]): string {
+  if (services.length === 0) return "";
+  const statuses = services.map((service) =>
+    `${service.name}=${service.running ? "running" : "stopped"}`
+  );
+  return `services: ${statuses.join(", ")}`;
+}
+
 function matchesListSearch(row: ListedWorktreeRow, query: string): boolean {
   return query.length === 0 || row.searchText.toLowerCase().includes(query.toLowerCase());
 }
@@ -734,6 +764,9 @@ async function listWorktrees(
   }
 
   const openWindows = buildOpenWorktreeWindows(runtime);
+  if (runtime.reconciliationService && runtime.projectRuntime) {
+    await runtime.reconciliationService.reconcile(projectDir, { force: true });
+  }
 
   const projectGitDir = runtime.git.resolveWorktreeGitDir(projectDir);
   const archivedPaths = buildArchivedWorktreePathSet(await readWorktreeArchiveState(projectGitDir));
@@ -743,7 +776,10 @@ async function listWorktrees(
     const meta = await readWorktreeMeta(gitDir);
     const isOpen = isWorktreeWindowOpen(openWindows, branch, meta?.worktreeId);
     const prs = await readWorktreePrs(gitDir);
-    const info = meta ? `${meta.profile} / ${meta.agent}` : "";
+    const serviceStates = runtime.projectRuntime?.getWorktreeByBranch(branch)?.services ?? [];
+    const serviceInfo = formatServiceStatus(serviceStates);
+    const worktreeInfo = meta ? `${meta.profile} / ${meta.agent}` : "";
+    const info = [worktreeInfo, serviceInfo].filter(Boolean).join(" / ");
     return {
       branch,
       label: meta?.label ?? null,
@@ -757,6 +793,8 @@ async function listWorktrees(
         meta?.baseBranch ?? "",
         meta?.profile ?? "",
         meta?.agent ?? "",
+        ...(meta?.selectedComponents ?? []),
+        ...serviceStates.map((service) => service.name),
       ].join(" "),
     } satisfies ListedWorktreeRow;
   }));

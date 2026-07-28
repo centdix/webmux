@@ -69,6 +69,8 @@ export interface WorktreeMeta {
   runtime: RuntimeKind;
   startupEnvValues: Record<string, string>;
   allocatedPorts: Record<string, number>;
+  selectedComponents?: string[];
+  componentPorts?: Record<string, Record<string, number>>;
   source?: WorktreeSource;
   oneshot?: OneshotMeta;
   conversation?: WorktreeConversationMeta | null;

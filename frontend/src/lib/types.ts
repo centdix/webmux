@@ -35,6 +35,8 @@ export type {
   AvailableBranchesQuery,
   BranchListResponse,
   CiCheck,
+  ComponentCatalogState,
+  ComponentSummary,
   CreateWorktreeRequest,
   CreateWorktreeResponse,
   LinearIssue,

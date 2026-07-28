@@ -75,6 +75,11 @@
     return {
       name: "",
       services: [],
+      componentCatalog: {
+        status: "disabled",
+        components: [],
+        error: null,
+      },
       profiles: [],
       agents: [],
       defaultProfileName: "",
@@ -586,7 +591,7 @@
     if (count < 2) return [];
     return Array.from({ length: count }, (_, i) => ({
       index: i,
-      label: String(i + 1),
+      label: i === 0 ? "Agent" : String(i + 1),
     }));
   });
   let showPaneBar = $derived(isMobile && canConnect && !showWebChat && paneBarPanes.length > 0);
@@ -1413,6 +1418,7 @@
 {#if showCreateDialog}
   <CreateWorktreeDialog
     profiles={config.profiles}
+    componentCatalog={config.componentCatalog}
     agents={config.agents}
     defaultProfileName={config.defaultProfileName}
     defaultAgentId={config.defaultAgentId}
