@@ -6,7 +6,7 @@ description: Open a draft pull request on GitHub. MUST use when you want to crea
 
 # Pull Request Skill
 
-Create a draft pull request with a clear title and explicit description of changes.
+Create a draft pull request with a clear title and explicit description of changes. We are inside a fork, you MUST open the pr against the fork main, never against the original repo.
 
 ## Instructions
 
