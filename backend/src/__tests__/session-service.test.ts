@@ -128,10 +128,30 @@ describe("buildTmuxPaneSystemPrompt", () => {
   it("documents pane creation even when the profile has no other panes", () => {
     const prompt = buildTmuxPaneSystemPrompt([{ id: "agent", kind: "agent", focus: true }]);
 
+    // No right-hand column yet: open one horizontally off the agent's own pane.
     expect(prompt).toContain(
-      "tmux split-window -d -v -l 25% -c \"$PWD\" -t \"$TMUX_PANE\" -P -F '#{pane_id}' 'your-command'",
+      "tmux split-window -d -h -l 35% -c \"$PWD\" -t \"$TMUX_PANE\" -P -F '#{pane_id}'",
+    );
+    // A column already exists: stack under its rightmost pane, leaving the agent's pane alone.
+    expect(prompt).toContain(
+      "tmux split-window -d -v -l 50% -c \"$PWD\" -t \"$right\" -P -F '#{pane_id}'",
+    );
+    expect(prompt).toContain(
+      "right=$(tmux list-panes -t \"$TMUX_PANE\" -F '#{pane_left} #{pane_id}' | sort -rn | head -1 | cut -d\" \" -f2)",
     );
     expect(prompt).not.toContain("can be inspected");
+  });
+
+  it("never launches a created pane's command as the pane process", () => {
+    const prompt = buildTmuxPaneSystemPrompt([{ id: "agent", kind: "agent", focus: true }]);
+
+    // A command passed to split-window becomes the pane's process, so tmux destroys the pane — and
+    // its scrollback — as soon as that process exits or takes a Ctrl-C. send-keys into a shell pane
+    // survives both.
+    expect(prompt).toContain("tmux send-keys -t %7 -l -- 'your-command'; tmux send-keys -t %7 C-m");
+    expect(prompt).not.toContain("-F '#{pane_id}' 'your-command'");
+    // The agent's own pane must never be the thing that gets split vertically.
+    expect(prompt).not.toContain("-v -l 25% -c \"$PWD\" -t \"$TMUX_PANE\"");
   });
 });
 

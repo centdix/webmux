@@ -83,8 +83,11 @@ function paneCaptureCommand(paneName: string): string {
 
 export function buildTmuxPaneSystemPrompt(templates: PaneTemplate[]): string {
   const inspectablePanes = templates.filter((template) => template.kind !== "agent");
-  const splitCommand =
-    "tmux split-window -d -v -l 25% -c \"$PWD\" -t \"$TMUX_PANE\" -P -F '#{pane_id}' 'your-command'";
+  const rightmostLookup =
+    "right=$(tmux list-panes -t \"$TMUX_PANE\" -F '#{pane_left} #{pane_id}' | sort -rn | head -1 | cut -d\" \" -f2)";
+  const splitNewColumn = "tmux split-window -d -h -l 35% -c \"$PWD\" -t \"$TMUX_PANE\" -P -F '#{pane_id}'";
+  const splitBelowColumn = "tmux split-window -d -v -l 50% -c \"$PWD\" -t \"$right\" -P -F '#{pane_id}'";
+  const sendKeysCommand = "tmux send-keys -t %7 -l -- 'your-command'; tmux send-keys -t %7 C-m";
 
   return [
     "You are running inside a webmux-managed tmux window, in the pane the user is looking at.",
@@ -98,11 +101,17 @@ export function buildTmuxPaneSystemPrompt(templates: PaneTemplate[]): string {
         ]
       : []),
     "",
-    "You can add panes to this window — useful for a long-lived process (dev server, log tail, watcher) that the user should be able to watch, instead of blocking a tool call or backgrounding it invisibly:",
-    `- \`${splitCommand}\``,
+    "You can add panes to this window — useful for a long-lived process (dev server, log tail, watcher) that the user should be able to watch, instead of blocking a tool call or backgrounding it invisibly.",
+    "",
+    "New panes belong in the window's right-hand column, so your own pane is resized at most once no matter how many you add. Find the rightmost pane, then split accordingly:",
+    `- \`${rightmostLookup}\``,
+    `- If \`$right\` is your own pane there is no right-hand column yet, so start one: \`${splitNewColumn}\``,
+    `- Otherwise stack underneath the column that already exists: \`${splitBelowColumn}\``,
+    "- Never split your own pane vertically: you would give up half your height, and again on every later pane.",
+    "",
+    `Either split prints the new pane's id, e.g. \`%7\`. Type the command into that pane rather than launching it as the pane's own process: \`${sendKeysCommand}\``,
+    "- Never pass the command to `split-window` itself. It then becomes the pane's process, and tmux destroys the pane — along with everything it printed — the moment that process exits or is interrupted, so a crash takes its own stack trace with it. A pane left running its shell survives, and `tmux capture-pane -p -S -50 -t %7` still reads back the failure.",
     "- `-d` leaves the focus where it is, so the user's cursor is not yanked into the new pane.",
-    "- `-P -F '#{pane_id}'` prints the new pane's id (e.g. `%7`); reuse it to read output later with `tmux capture-pane -p -S -50 -t %7`.",
-    "- Prefer `-v` (splitting off the bottom) over `-h`: your own pane keeps its full width, so your output does not wrap.",
     "",
     "Always address panes by pane id (`%7`) or by the label lookup shown above, never by pane index — indexes shift whenever a pane is added or removed.",
   ].join("\n");
