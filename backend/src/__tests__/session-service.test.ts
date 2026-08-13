@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { WM_WINDOW_ROLE_OPTION, WM_WORKTREE_ID_OPTION, type TmuxGateway } from "../adapters/tmux";
+import {
+  WM_PANE_ID_OPTION,
+  WM_WINDOW_ROLE_OPTION,
+  WM_WORKTREE_ID_OPTION,
+  type TmuxGateway,
+} from "../adapters/tmux";
 import {
   buildTmuxPaneSystemPrompt,
   ensureSessionLayout,
@@ -68,6 +73,10 @@ class FakeTmuxGateway implements TmuxGateway {
     this.calls.push(`setWindowOption:${sessionName}:${windowName}:${option}:${value}`);
   }
 
+  setPaneOption(target: string, option: string, value: string): void {
+    this.calls.push(`setPaneOption:${target}:${option}:${value}`);
+  }
+
   runCommand(target: string, command: string): void {
     this.calls.push(`runCommand:${target}:${command}`);
   }
@@ -82,24 +91,34 @@ class FakeTmuxGateway implements TmuxGateway {
 }
 
 describe("buildTmuxPaneSystemPrompt", () => {
-  it("maps configured pane ids to stable tmux indexes and capture commands", () => {
+  it("addresses each non-agent pane by label lookup rather than by index", () => {
     const prompt = buildTmuxPaneSystemPrompt([
       { id: "agent", kind: "agent", focus: true },
       { id: "backend", kind: "command", command: "bun run dev" },
       { id: "frontend", kind: "shell" },
     ]);
 
-    expect(prompt).toBe([
-      "You are running inside a webmux-managed tmux window. You can inspect other panes without interrupting them:",
-      "- Pane 1 (`backend`, command): `tmux capture-pane -t \"$(tmux display-message -t \"$TMUX_PANE\" -p '#{session_name}:#{window_name}').1\" -p -S -50`",
-      "- Pane 2 (`frontend`, shell): `tmux capture-pane -t \"$(tmux display-message -t \"$TMUX_PANE\" -p '#{session_name}:#{window_name}').2\" -p -S -50`",
-    ].join("\n"));
+    expect(prompt).toContain(
+      "- `backend` (command): `tmux capture-pane -p -S -50 -t \"$(tmux list-panes -t \"$TMUX_PANE\" "
+        + `-f '#{==:#{${WM_PANE_ID_OPTION}},backend}' -F '#{pane_id}')"\``,
+    );
+    expect(prompt).toContain(
+      "- `frontend` (shell): `tmux capture-pane -p -S -50 -t \"$(tmux list-panes -t \"$TMUX_PANE\" "
+        + `-f '#{==:#{${WM_PANE_ID_OPTION}},frontend}' -F '#{pane_id}')"\``,
+    );
+    // The agent's own pane is not something it should be capturing from.
+    expect(prompt).not.toContain("`agent` (agent)");
+    // Index-based targeting is the bug this replaces: a split renumbers every pane after it.
+    expect(prompt).not.toContain("#{window_name}').1");
   });
 
-  it("omits tmux context when the profile has no non-agent panes", () => {
-    expect(buildTmuxPaneSystemPrompt([
-      { id: "agent", kind: "agent", focus: true },
-    ])).toBeUndefined();
+  it("documents pane creation even when the profile has no other panes", () => {
+    const prompt = buildTmuxPaneSystemPrompt([{ id: "agent", kind: "agent", focus: true }]);
+
+    expect(prompt).toContain(
+      "tmux split-window -d -v -l 25% -c \"$PWD\" -t \"$TMUX_PANE\" -P -F '#{pane_id}' 'your-command'",
+    );
+    expect(prompt).not.toContain("can be inspected");
   });
 });
 
@@ -254,6 +273,18 @@ describe("ensureSessionLayout", () => {
     ).toBe(true);
     expect(tmux.calls).toContain(`runCommand:${plan.sessionName}:${plan.windowName}.0:agent-start`);
     expect(tmux.calls.at(-1)).toBe(`selectPane:${plan.sessionName}:${plan.windowName}.0`);
+    // Every pane carries its template id, so later lookups never rely on an index.
+    expect(tmux.calls).toContain(
+      `setPaneOption:${plan.sessionName}:${plan.windowName}.0:${WM_PANE_ID_OPTION}:agent`,
+    );
+    expect(tmux.calls).toContain(
+      `setPaneOption:${plan.sessionName}:${plan.windowName}.1:${WM_PANE_ID_OPTION}:shell`,
+    );
+    // Labelling must happen while the planned indexes still hold — before any startup command runs
+    // and can split the window itself.
+    const lastLabel = tmux.calls.findLastIndex((call) => call.startsWith("setPaneOption:"));
+    const firstStartup = tmux.calls.findIndex((call) => call.startsWith("runCommand:"));
+    expect(lastLabel).toBeLessThan(firstStartup);
   });
 
   it("replaces an existing window before recreating it", () => {

@@ -4,6 +4,7 @@ import type { TmuxGateway } from "../adapters/tmux";
 import {
   buildProjectSessionName,
   buildWorktreeWindowName,
+  WM_PANE_ID_OPTION,
   WM_WINDOW_ROLE_OPTION,
   WM_WORKTREE_ID_OPTION,
 } from "../adapters/tmux";
@@ -70,18 +71,36 @@ function resolvePaneStartupCommand(template: PaneTemplate, ctx: SessionLayoutCon
   }
 }
 
-export function buildTmuxPaneSystemPrompt(templates: PaneTemplate[]): string | undefined {
-  const inspectablePanes = templates
-    .map((template, index) => ({ template, index }))
-    .filter(({ template }) => template.kind !== "agent");
-  if (inspectablePanes.length === 0) return undefined;
+/** Resolve a pane's `@wm_pane_id` label to a tmux pane id, scoped to the agent's own window.
+ *  `list-panes -t "$TMUX_PANE"` lists the window containing that pane. */
+function paneIdLookup(paneName: string): string {
+  return `$(tmux list-panes -t "$TMUX_PANE" -f '#{==:#{${WM_PANE_ID_OPTION}},${paneName}}' -F '#{pane_id}')`;
+}
 
-  const windowTarget = "$(tmux display-message -t \"$TMUX_PANE\" -p '#{session_name}:#{window_name}')";
+export function buildTmuxPaneSystemPrompt(templates: PaneTemplate[]): string {
+  const inspectablePanes = templates.filter((template) => template.kind !== "agent");
+  const splitCommand =
+    "tmux split-window -d -v -l 25% -c \"$PWD\" -t \"$TMUX_PANE\" -P -F '#{pane_id}' 'your-command'";
+
   return [
-    "You are running inside a webmux-managed tmux window. You can inspect other panes without interrupting them:",
-    ...inspectablePanes.map(({ template, index }) =>
-      `- Pane ${index} (\`${template.id}\`, ${template.kind}): \`tmux capture-pane -t "${windowTarget}.${index}" -p -S -50\``
-    ),
+    "You are running inside a webmux-managed tmux window, in the pane the user is looking at.",
+    ...(inspectablePanes.length > 0
+      ? [
+          "",
+          "These sibling panes are labelled and can be inspected without interrupting them:",
+          ...inspectablePanes.map((template) =>
+            `- \`${template.id}\` (${template.kind}): \`tmux capture-pane -p -S -50 -t "${paneIdLookup(template.id)}"\``
+          ),
+        ]
+      : []),
+    "",
+    "You can add panes to this window — useful for a long-lived process (dev server, log tail, watcher) that the user should be able to watch, instead of blocking a tool call or backgrounding it invisibly:",
+    `- \`${splitCommand}\``,
+    "- `-d` leaves the focus where it is, so the user's cursor is not yanked into the new pane.",
+    "- `-P -F '#{pane_id}'` prints the new pane's id (e.g. `%7`); reuse it to read output later with `tmux capture-pane -p -S -50 -t %7`.",
+    "- Prefer `-v` (splitting off the bottom) over `-h`: your own pane keeps its full width, so your output does not wrap.",
+    "",
+    "Always address panes by pane id (`%7`) or by the label lookup shown above, never by pane index — indexes shift whenever a pane is added or removed.",
   ].join("\n");
 }
 
@@ -170,6 +189,16 @@ export function ensureSessionLayout(
       cwd: pane.cwd,
       command: plan.shellCommand,
     });
+  }
+
+  // Label every pane before anything can renumber it: indexes are only trustworthy here, while the
+  // layout is exactly as planned. From now on panes are addressed through this label.
+  for (const pane of plan.panes) {
+    tmux.setPaneOption(
+      `${plan.sessionName}:${plan.windowName}.${pane.index}`,
+      WM_PANE_ID_OPTION,
+      pane.id,
+    );
   }
 
   for (const pane of plan.panes) {

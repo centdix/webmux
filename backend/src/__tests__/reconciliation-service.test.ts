@@ -182,6 +182,8 @@ class FakeTmuxGateway implements TmuxGateway {
     if (option === WM_WINDOW_ROLE_OPTION) window.role = value === "parking" ? "parking" : "main";
   }
 
+  setPaneOption(): void {}
+
   runCommand(): void {
     throw new Error("not implemented");
   }
