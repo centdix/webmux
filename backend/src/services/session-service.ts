@@ -71,10 +71,14 @@ function resolvePaneStartupCommand(template: PaneTemplate, ctx: SessionLayoutCon
   }
 }
 
-/** Resolve a pane's `@wm_pane_id` label to a tmux pane id, scoped to the agent's own window.
- *  `list-panes -t "$TMUX_PANE"` lists the window containing that pane. */
-function paneIdLookup(paneName: string): string {
-  return `$(tmux list-panes -t "$TMUX_PANE" -f '#{==:#{${WM_PANE_ID_OPTION}},${paneName}}' -F '#{pane_id}')`;
+/** Capture a labelled pane, resolving its `@wm_pane_id` to a pane id scoped to the agent's own
+ *  window (`list-panes -t "$TMUX_PANE"` lists the window containing that pane).
+ *  The `${pane:?}` guard matters: a label that resolves to nothing — the pane was closed, or its
+ *  command exited — would otherwise collapse to `-t ""`, which tmux resolves to the *calling* pane,
+ *  handing the agent its own output with exit code 0. */
+function paneCaptureCommand(paneName: string): string {
+  const lookup = `tmux list-panes -t "$TMUX_PANE" -f '#{==:#{${WM_PANE_ID_OPTION}},${paneName}}' -F '#{pane_id}'`;
+  return `pane=$(${lookup}) && tmux capture-pane -p -S -50 -t "\${pane:?${paneName} pane not found}"`;
 }
 
 export function buildTmuxPaneSystemPrompt(templates: PaneTemplate[]): string {
@@ -89,7 +93,7 @@ export function buildTmuxPaneSystemPrompt(templates: PaneTemplate[]): string {
           "",
           "These sibling panes are labelled and can be inspected without interrupting them:",
           ...inspectablePanes.map((template) =>
-            `- \`${template.id}\` (${template.kind}): \`tmux capture-pane -p -S -50 -t "${paneIdLookup(template.id)}"\``
+            `- \`${template.id}\` (${template.kind}): \`${paneCaptureCommand(template.id)}\``
           ),
         ]
       : []),

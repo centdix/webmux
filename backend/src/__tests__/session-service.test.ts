@@ -99,17 +99,30 @@ describe("buildTmuxPaneSystemPrompt", () => {
     ]);
 
     expect(prompt).toContain(
-      "- `backend` (command): `tmux capture-pane -p -S -50 -t \"$(tmux list-panes -t \"$TMUX_PANE\" "
-        + `-f '#{==:#{${WM_PANE_ID_OPTION}},backend}' -F '#{pane_id}')"\``,
+      "- `backend` (command): `pane=$(tmux list-panes -t \"$TMUX_PANE\" "
+        + `-f '#{==:#{${WM_PANE_ID_OPTION}},backend}' -F '#{pane_id}') `
+        + "&& tmux capture-pane -p -S -50 -t \"${pane:?backend pane not found}\"`",
     );
     expect(prompt).toContain(
-      "- `frontend` (shell): `tmux capture-pane -p -S -50 -t \"$(tmux list-panes -t \"$TMUX_PANE\" "
-        + `-f '#{==:#{${WM_PANE_ID_OPTION}},frontend}' -F '#{pane_id}')"\``,
+      "- `frontend` (shell): `pane=$(tmux list-panes -t \"$TMUX_PANE\" "
+        + `-f '#{==:#{${WM_PANE_ID_OPTION}},frontend}' -F '#{pane_id}') `
+        + "&& tmux capture-pane -p -S -50 -t \"${pane:?frontend pane not found}\"`",
     );
     // The agent's own pane is not something it should be capturing from.
     expect(prompt).not.toContain("`agent` (agent)");
     // Index-based targeting is the bug this replaces: a split renumbers every pane after it.
     expect(prompt).not.toContain("#{window_name}').1");
+  });
+
+  it("never targets a capture at an unguarded label lookup", () => {
+    const prompt = buildTmuxPaneSystemPrompt([
+      { id: "agent", kind: "agent", focus: true },
+      { id: "backend", kind: "command", command: "bun run dev" },
+    ]);
+
+    // A label resolving to nothing collapses `-t "$(lookup)"` to `-t ""`, which tmux resolves to the
+    // calling pane: the agent silently captures its own output, exit code 0.
+    expect(prompt).not.toContain("-t \"$(tmux list-panes");
   });
 
   it("documents pane creation even when the profile has no other panes", () => {
