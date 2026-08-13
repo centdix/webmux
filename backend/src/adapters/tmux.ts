@@ -8,6 +8,10 @@ import { leakedProjectEnvKeys, stripProjectEnv } from "./project-env";
 export const WM_WORKTREE_ID_OPTION = "@wm_worktree_id";
 /** Distinguishes a worktree's visible window from its hidden parked-tabs window (both carry the same id). */
 export const WM_WINDOW_ROLE_OPTION = "@wm_window_role";
+/** Per-pane label carrying the profile's pane template id. Pane *indexes* shift whenever a pane is
+ *  added or removed, so anything addressing a pane by name resolves through this option instead.
+ *  A pane option (not the pane title) because a shell prompt's OSC title sequence clobbers titles. */
+export const WM_PANE_ID_OPTION = "@wm_pane_id";
 
 export type TmuxWindowRole = "main" | "parking";
 
@@ -40,6 +44,7 @@ export interface TmuxGateway {
     command?: string;
   }): void;
   setWindowOption(sessionName: string, windowName: string, option: string, value: string): void;
+  setPaneOption(target: string, option: string, value: string): void;
   runCommand(target: string, command: string): void;
   selectPane(target: string): void;
   listWindows(): TmuxWindowSummary[];
@@ -294,6 +299,13 @@ export class BunTmuxGateway implements TmuxGateway {
     assertTmuxOk(
       ["set-window-option", "-t", `${sessionName}:${windowName}`, option, value],
       `set tmux option ${option} on ${sessionName}:${windowName}`,
+    );
+  }
+
+  setPaneOption(target: string, option: string, value: string): void {
+    assertTmuxOk(
+      ["set-option", "-p", "-t", target, option, value],
+      `set tmux pane option ${option} on ${target}`,
     );
   }
 

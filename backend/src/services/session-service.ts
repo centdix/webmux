@@ -4,6 +4,7 @@ import type { TmuxGateway } from "../adapters/tmux";
 import {
   buildProjectSessionName,
   buildWorktreeWindowName,
+  WM_PANE_ID_OPTION,
   WM_WINDOW_ROLE_OPTION,
   WM_WORKTREE_ID_OPTION,
 } from "../adapters/tmux";
@@ -70,18 +71,49 @@ function resolvePaneStartupCommand(template: PaneTemplate, ctx: SessionLayoutCon
   }
 }
 
-export function buildTmuxPaneSystemPrompt(templates: PaneTemplate[]): string | undefined {
-  const inspectablePanes = templates
-    .map((template, index) => ({ template, index }))
-    .filter(({ template }) => template.kind !== "agent");
-  if (inspectablePanes.length === 0) return undefined;
+/** Capture a labelled pane, resolving its `@wm_pane_id` to a pane id scoped to the agent's own
+ *  window (`list-panes -t "$TMUX_PANE"` lists the window containing that pane).
+ *  The `${pane:?}` guard matters: a label that resolves to nothing — the pane was closed, or its
+ *  command exited — would otherwise collapse to `-t ""`, which tmux resolves to the *calling* pane,
+ *  handing the agent its own output with exit code 0. */
+function paneCaptureCommand(paneName: string): string {
+  const lookup = `tmux list-panes -t "$TMUX_PANE" -f '#{==:#{${WM_PANE_ID_OPTION}},${paneName}}' -F '#{pane_id}'`;
+  return `pane=$(${lookup}) && tmux capture-pane -p -S -50 -t "\${pane:?${paneName} pane not found}"`;
+}
 
-  const windowTarget = "$(tmux display-message -t \"$TMUX_PANE\" -p '#{session_name}:#{window_name}')";
+export function buildTmuxPaneSystemPrompt(templates: PaneTemplate[]): string {
+  const inspectablePanes = templates.filter((template) => template.kind !== "agent");
+  const rightmostLookup =
+    "right=$(tmux list-panes -t \"$TMUX_PANE\" -F '#{pane_left} #{pane_id}' | sort -rn | head -1 | cut -d\" \" -f2)";
+  const splitNewColumn = "tmux split-window -d -h -l 35% -c \"$PWD\" -t \"$TMUX_PANE\" -P -F '#{pane_id}'";
+  const splitBelowColumn = "tmux split-window -d -v -l 50% -c \"$PWD\" -t \"$right\" -P -F '#{pane_id}'";
+  const sendKeysCommand = "tmux send-keys -t %7 -l -- 'your-command'; tmux send-keys -t %7 C-m";
+
   return [
-    "You are running inside a webmux-managed tmux window. You can inspect other panes without interrupting them:",
-    ...inspectablePanes.map(({ template, index }) =>
-      `- Pane ${index} (\`${template.id}\`, ${template.kind}): \`tmux capture-pane -t "${windowTarget}.${index}" -p -S -50\``
-    ),
+    "You are running inside a webmux-managed tmux window, in the pane the user is looking at.",
+    ...(inspectablePanes.length > 0
+      ? [
+          "",
+          "These sibling panes are labelled and can be inspected without interrupting them:",
+          ...inspectablePanes.map((template) =>
+            `- \`${template.id}\` (${template.kind}): \`${paneCaptureCommand(template.id)}\``
+          ),
+        ]
+      : []),
+    "",
+    "You can add panes to this window — useful for a long-lived process (dev server, log tail, watcher) that the user should be able to watch, instead of blocking a tool call or backgrounding it invisibly.",
+    "",
+    "New panes belong in the window's right-hand column, so your own pane is resized at most once no matter how many you add. Find the rightmost pane, then split accordingly:",
+    `- \`${rightmostLookup}\``,
+    `- If \`$right\` is your own pane there is no right-hand column yet, so start one: \`${splitNewColumn}\``,
+    `- Otherwise stack underneath the column that already exists: \`${splitBelowColumn}\``,
+    "- Never split your own pane vertically: you would give up half your height, and again on every later pane.",
+    "",
+    `Either split prints the new pane's id, e.g. \`%7\`. Type the command into that pane rather than launching it as the pane's own process: \`${sendKeysCommand}\``,
+    "- Never pass the command to `split-window` itself. It then becomes the pane's process, and tmux destroys the pane — along with everything it printed — the moment that process exits or is interrupted, so a crash takes its own stack trace with it. A pane left running its shell survives, and `tmux capture-pane -p -S -50 -t %7` still reads back the failure.",
+    "- `-d` leaves the focus where it is, so the user's cursor is not yanked into the new pane.",
+    "",
+    "Always address panes by pane id (`%7`) or by the label lookup shown above, never by pane index — indexes shift whenever a pane is added or removed.",
   ].join("\n");
 }
 
@@ -170,6 +202,16 @@ export function ensureSessionLayout(
       cwd: pane.cwd,
       command: plan.shellCommand,
     });
+  }
+
+  // Label every pane before anything can renumber it: indexes are only trustworthy here, while the
+  // layout is exactly as planned. From now on panes are addressed through this label.
+  for (const pane of plan.panes) {
+    tmux.setPaneOption(
+      `${plan.sessionName}:${plan.windowName}.${pane.index}`,
+      WM_PANE_ID_OPTION,
+      pane.id,
+    );
   }
 
   for (const pane of plan.panes) {

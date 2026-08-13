@@ -141,6 +141,8 @@ class FakeTmuxGateway implements TmuxGateway {
     if (option === WM_WINDOW_ROLE_OPTION) window.role = value === "parking" ? "parking" : "main";
   }
 
+  setPaneOption(): void {}
+
   runCommand(target: string, command: string): void {
     this.commands.push({ target, command });
   }
@@ -614,8 +616,9 @@ describe("LifecycleService", () => {
 
     expect(agentCommand).toContain("--append-system-prompt");
     expect(agentCommand).toContain("You are running inside a webmux-managed tmux window");
-    expect(agentCommand).toContain("Pane 1 (`shell`, shell)");
+    expect(agentCommand).toContain("`shell` (shell)");
     expect(agentCommand).toContain("tmux capture-pane");
+    expect(agentCommand).toContain("tmux split-window");
   });
 
   it("appends the oneshot system prompt to fresh launches when source is oneshot", async () => {

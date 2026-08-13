@@ -186,6 +186,10 @@ class FakeTmuxGateway implements TmuxGateway {
     this.calls.push(`splitWindow:${opts.target}:${opts.split}:${opts.sizePct ?? ""}:${opts.cwd}:${opts.command ?? ""}`);
   }
 
+  setPaneOption(target: string, option: string, value: string): void {
+    this.calls.push(`setPaneOption:${target}:${option}:${value}`);
+  }
+
   setWindowOption(sessionName: string, windowName: string, option: string, value: string): void {
     this.calls.push(`setWindowOption:${sessionName}:${windowName}:${option}:${value}`);
   }
