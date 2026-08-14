@@ -52,6 +52,9 @@ ENV NPM_CONFIG_PREFIX=/usr/local
 # ── Codex ─────────────────────────────────────────────────────────────────────
 RUN npm i -g @openai/codex
 
+# ── opencode ──────────────────────────────────────────────────────────────────
+RUN npm i -g opencode-ai
+
 # ── Mermaid CLI ───────────────────────────────────────────────────────────────
 # Skip puppeteer's own Chromium download; reuse Playwright's headless shell
 # (the full "chrome" binary crashes with a crashpad handler error in containers)

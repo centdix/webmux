@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { detectProjectName, run } from "../lib/shell";
 
-export type InitAuthoringChoice = "claude" | "codex" | "manual";
+export type InitAuthoringChoice = "claude" | "codex" | "opencode" | "manual";
 export type InitAgent = Exclude<InitAuthoringChoice, "manual">;
 export type InitPackageManager = "bun" | "npm" | "pnpm" | "yarn";
 
@@ -150,6 +150,22 @@ export function buildInitAgentCommand(
   prompt: InitPromptSpec,
   outputPrefix = "webmux-init",
 ): InitAgentCommandSpec {
+  if (agent === "opencode") {
+    return {
+      agent,
+      cmd: "opencode",
+      args: [
+        "run",
+        // opencode takes no system-prompt flag, so the instructions lead the message.
+        "--format",
+        "json",
+        // Editing .webmux.yaml needs approval unless permissions are auto-approved.
+        "--auto",
+        `${prompt.systemPrompt}\n\n${prompt.userPrompt}`,
+      ],
+    };
+  }
+
   if (agent === "claude") {
     return {
       agent,
@@ -410,6 +426,39 @@ function parseCodexStreamLine(
   return [];
 }
 
+/** `opencode run --format json` emits one JSON object per line: `text` parts carry the
+ *  assistant snapshot so far, `tool_use` parts carry the tool call and its state. */
+function parseOpencodeStreamLine(
+  raw: Record<string, unknown>,
+  state: InitAgentStreamState,
+): InitAgentStreamEvent[] {
+  const type = readString(raw.type) ?? "unknown";
+  const part = isRecord(raw.part) ? raw.part : null;
+
+  if (type === "text" && part && typeof part.text === "string") {
+    return streamSnapshot(state, part.text);
+  }
+
+  if (type === "tool_use" && part) {
+    const toolName = readString(part.tool);
+    const input = isRecord(part.state) ? part.state.input : null;
+    const command = isRecord(input) ? extractCommandText(input.command) : null;
+    if (command) return emitStatus(state, `Running ${truncateText(command)}`);
+    if (toolName) return emitStatus(state, `Using ${toolName}...`);
+  }
+
+  if (type === "step_finish") {
+    return closeAssistant(state);
+  }
+
+  if (type.includes("error")) {
+    const message = isRecord(raw.error) ? readString(raw.error.message) : readString(raw.message);
+    return emitWarning(state, message ?? "opencode returned an error.");
+  }
+
+  return [];
+}
+
 export function parseInitAgentStreamLine(
   agent: InitAgent,
   line: string,
@@ -426,7 +475,9 @@ export function parseInitAgentStreamLine(
   }
 
   if (!isRecord(parsed)) return [];
-  return agent === "claude" ? parseClaudeStreamLine(parsed, state) : parseCodexStreamLine(parsed, state);
+  if (agent === "claude") return parseClaudeStreamLine(parsed, state);
+  if (agent === "opencode") return parseOpencodeStreamLine(parsed, state);
+  return parseCodexStreamLine(parsed, state);
 }
 
 async function consumeStructuredStream(
@@ -556,6 +607,9 @@ export function buildStarterTemplate(input: {
   const defaultAgent = input.defaultAgent ?? "claude";
   const packageManager = input.packageManager ?? "npm";
   const devCommand = buildRunScriptCommand(packageManager, "dev");
+  // Branch auto-naming only runs on Claude or Codex, so the commented example keeps a
+  // supported provider even when worktrees default to another agent.
+  const autoNameProvider = defaultAgent === "codex" ? "codex" : "claude";
 
   return `# Starter config for webmux.
 # Keep the active keys below as a minimal working setup, then uncomment
@@ -727,9 +781,9 @@ startupEnvs:
 # auto_name lets webmux generate a branch name when one is not provided.
 # auto_name:
 #   # Provider used for automatic branch naming.
-#   provider: ${defaultAgent}
+#   provider: ${autoNameProvider}
 #   # Model used for automatic branch naming.
-#   model: ${defaultAgent === "codex" ? "gpt-5.1-codex" : "claude-3-5-haiku-latest"}
+#   model: ${autoNameProvider === "codex" ? "gpt-5.1-codex" : "claude-3-5-haiku-latest"}
 #   # Prompt that tells the model how to name branches.
 #   system_prompt: >
 #     Generate a short kebab-case git branch name.

@@ -1,5 +1,5 @@
 import * as p from "@clack/prompts";
-import { apiPaths, AgentsUiConversationEventSchema, createApi, parseLinearTarget, type AgentsUiConversationMessage, type AgentsUiConversationEvent, type AgentsUiWorktreeConversationResponse, type CreateWorktreeRequest, type PostWorktreeToLinearTarget, type ProjectWorktreeSnapshot } from "@webmux/api-contract";
+import { apiPaths, AgentsUiConversationEventSchema, createApi, parseLinearTarget, type AgentSummary, type AgentsUiConversationMessage, type AgentsUiConversationEvent, type AgentsUiWorktreeConversationResponse, type CreateWorktreeRequest, type PostWorktreeToLinearTarget, type ProjectWorktreeSnapshot } from "@webmux/api-contract";
 import { createLinearIssue, fetchTeamByKey, type LinearIssue } from "../../backend/src/services/linear-service";
 import { buildSeedFromLinear, defaultSeedFromLinearDeps } from "../../backend/src/services/conversation-export-service";
 import { findDuplicateLinearIssue, polishLinearIssueTitle } from "../../backend/src/services/linear-title-service";
@@ -669,6 +669,22 @@ async function ensureWorktreeReady(
   return { ready: false };
 }
 
+/** Whether this agent has a transcript the dashboard can stream. Unknown agents answer "no". */
+export function agentStreamsConversation(agents: AgentSummary[], agentName: string | null): boolean {
+  if (!agentName) return false;
+  return agents.some((agent) => agent.id === agentName && agent.capabilities.conversationHistory);
+}
+
+/** Lookup failures answer "no": printing no transcript beats failing an otherwise healthy run. */
+async function agentHasConversationHistory(agentName: string | null, port: number): Promise<boolean> {
+  if (!agentName) return false;
+  try {
+    return agentStreamsConversation((await oneshotApi(port).fetchConfig()).agents, agentName);
+  } catch {
+    return false;
+  }
+}
+
 function printConversationHistory(
   initial: AgentsUiWorktreeConversationResponse,
   state: ConversationPrintState,
@@ -962,12 +978,22 @@ export async function runOneshot(parsed: ParsedOneshotCommand, port: number): Pr
     lastStreamRevision: 0,
   };
 
+  // Agents without a readable transcript (opencode, custom agents) have no conversation to
+  // stream: the server rejects the socket, so opening it would retry itself into a failure.
+  // The run is still driven to completion by the project-state poller below.
+  const streamsConversation = await agentHasConversationHistory(ready.worktree.agentName, port);
+  if (!streamsConversation) {
+    stdout(`[${timestamp()}] [event] ${ready.worktree.agentLabel ?? "this agent"} has no readable transcript — reporting run events only`);
+  }
+
   // Print initial history once before opening the WS so the user sees their prompt right away.
-  try {
-    const initial = await api.fetchAgentsWorktreeConversationHistory({ params: { name: branch } });
-    printConversationHistory(initial, conversationState);
-  } catch {
-    // Conversation history may not yet be available for non-codex agents — fall through to streaming.
+  if (streamsConversation) {
+    try {
+      const initial = await api.fetchAgentsWorktreeConversationHistory({ params: { name: branch } });
+      printConversationHistory(initial, conversationState);
+    } catch {
+      // History may not exist yet on a fresh worktree — fall through to streaming.
+    }
   }
 
   let resolveExit!: (code: number) => void;
@@ -988,10 +1014,12 @@ export async function runOneshot(parsed: ParsedOneshotCommand, port: number): Pr
     resolveExit(code);
   };
 
-  stream = streamConversation(branch, port, conversationState, stderr, (reason) => {
-    stderr(`[${timestamp()}] [fatal] ${reason}`);
-    finalize(1);
-  });
+  if (streamsConversation) {
+    stream = streamConversation(branch, port, conversationState, stderr, (reason) => {
+      stderr(`[${timestamp()}] [fatal] ${reason}`);
+      finalize(1);
+    });
+  }
   // History polling is only needed for Claude — Codex publishes live deltas via WS,
   // so polling there just spams the server every 2s for no benefit. Claude also
   // streams over WS now, but polling remains a fallback for terminal-routed runs.

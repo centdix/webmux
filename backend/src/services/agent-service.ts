@@ -1,3 +1,4 @@
+import { opencodeInstructionsPath } from "../adapters/agent-runtime";
 import type { AgentDefinition } from "./agent-registry";
 
 export type AgentLaunchMode = "fresh" | "resume" | "fork";
@@ -25,18 +26,64 @@ function buildDockerRuntimeBootstrap(runtimeEnvPath: string): string {
   return `${buildRuntimeBootstrap(runtimeEnvPath)}; export PATH="$PATH:${DOCKER_PATH_FALLBACK}"`;
 }
 
-function buildBuiltInAgentInvocation(input: {
-  agent: "claude" | "codex";
+/** opencode has no `--append-system-prompt`: the only way to add instructions to a launch is
+ *  to point the resolved config at an extra instructions file, so the launch writes one.
+ *  `OPENCODE_CONFIG_CONTENT` is merged over the user's own opencode config. */
+function buildOpencodeInstructionsPrefix(systemPrompt: string, worktreePath: string): string {
+  const instructionsPath = opencodeInstructionsPath(worktreePath);
+  const inlineConfig = JSON.stringify({ instructions: [instructionsPath] });
+  return `printf '%s' ${quoteShell(systemPrompt)} > ${quoteShell(instructionsPath)}; `
+    + `OPENCODE_CONFIG_CONTENT=${quoteShell(inlineConfig)} `;
+}
+
+function buildOpencodeInvocation(input: {
   yolo?: boolean;
   systemPrompt?: string;
   prompt?: string;
+  worktreePath: string;
   launchMode?: AgentLaunchMode;
   resumeConversationId?: string;
-  /** Session to fork from (launchMode "fork"): claude `--fork-session`, codex `fork`. */
+  forkFromSessionId?: string;
+}): string {
+  const prefix = input.systemPrompt
+    ? buildOpencodeInstructionsPrefix(input.systemPrompt, input.worktreePath)
+    : "";
+  // `--auto` approves every permission that isn't explicitly denied by the user's config.
+  const autoFlag = input.yolo ? " --auto" : "";
+  // `--prompt` is submitted as the first turn while the TUI boots, so there is no
+  // paste/Enter race — the same reason claude and codex take the prompt on the CLI.
+  const promptFlag = input.prompt ? ` --prompt ${quoteShell(input.prompt)}` : "";
+
+  if (input.launchMode === "fork" && input.forkFromSessionId) {
+    // `--fork` copies the session's history into a brand new session.
+    return `${prefix}opencode${autoFlag} --session ${quoteShell(input.forkFromSessionId)} --fork${promptFlag}`;
+  }
+  if (input.launchMode === "resume") {
+    const resumeTarget = input.resumeConversationId
+      ? ` --session ${quoteShell(input.resumeConversationId)}`
+      : " --continue";
+    return `${prefix}opencode${autoFlag}${resumeTarget}${promptFlag}`;
+  }
+  return `${prefix}opencode${autoFlag}${promptFlag}`;
+}
+
+function buildBuiltInAgentInvocation(input: {
+  agent: "claude" | "codex" | "opencode";
+  yolo?: boolean;
+  systemPrompt?: string;
+  prompt?: string;
+  worktreePath: string;
+  launchMode?: AgentLaunchMode;
+  resumeConversationId?: string;
+  /** Session to fork from (launchMode "fork"): claude `--fork-session`, codex `fork`, opencode `--fork`. */
   forkFromSessionId?: string;
   /** Claude-only: pin the forked child to a session id we generated, so we know it without disk discovery. */
   pinSessionId?: string;
 }): string {
+  if (input.agent === "opencode") {
+    return buildOpencodeInvocation(input);
+  }
+
   const promptSuffix = input.prompt ? ` -- ${quoteShell(input.prompt)}` : "";
 
   if (input.agent === "codex") {
@@ -150,6 +197,7 @@ function buildAgentInvocation(input: {
       yolo: input.yolo,
       systemPrompt: input.systemPrompt,
       prompt: input.prompt,
+      worktreePath: input.worktreePath,
       launchMode: input.launchMode,
       resumeConversationId: input.resumeConversationId,
       forkFromSessionId: input.forkFromSessionId,

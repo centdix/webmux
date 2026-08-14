@@ -1,3 +1,4 @@
+import type { AgentKind } from "../domain/config";
 import type { AgentDefinition } from "./agent-registry";
 
 export interface AgentChatSupport {
@@ -6,6 +7,14 @@ export interface AgentChatSupport {
 }
 
 const CODEX_SUBMIT_DELAY_MS = 200;
+
+/** Conversation backend each built-in agent's dashboard chat runs on, or null when the agent
+ *  has no chat backend. Keyed by every AgentKind so a new built-in has to declare one. */
+const CHAT_PROVIDERS = {
+  claude: "claude",
+  codex: "codex",
+  opencode: null,
+} as const satisfies Record<AgentKind, AgentChatSupport["provider"] | null>;
 
 export function resolveAgentTerminalSubmitDelayMs(input: {
   agentId: string | null;
@@ -57,13 +66,16 @@ export function resolveAgentChatSupport(input: {
   }
 
   if (input.agent.kind === "builtin") {
-    return {
-      ok: true,
-      data: {
-        provider: input.agent.implementation.agent,
-        submitDelayMs: resolveAgentTerminalSubmitDelayMs(input),
-      },
-    };
+    const provider = CHAT_PROVIDERS[input.agent.implementation.agent];
+    if (provider !== null) {
+      return {
+        ok: true,
+        data: {
+          provider,
+          submitDelayMs: resolveAgentTerminalSubmitDelayMs(input),
+        },
+      };
+    }
   }
 
   return {

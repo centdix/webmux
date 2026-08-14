@@ -116,7 +116,9 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 function parseAgentKind(value: unknown): AgentKind {
-  return value === "codex" ? "codex" : "claude";
+  if (value === "codex") return "codex";
+  if (value === "opencode") return "opencode";
+  return "claude";
 }
 
 function parsePanes(raw: unknown): PaneTemplate[] {

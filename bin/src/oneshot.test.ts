@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { parseOneshotArgs } from "./oneshot";
+import type { AgentSummary } from "@webmux/api-contract";
+import { agentStreamsConversation, parseOneshotArgs } from "./oneshot";
 
 describe("parseOneshotArgs", () => {
   it("requires --prompt for new oneshots", () => {
@@ -102,5 +103,35 @@ describe("parseOneshotArgs", () => {
   it("rejects --branch with --resume with a precise message", () => {
     expect(() => parseOneshotArgs(["--resume", "feat/foo", "--branch", "feat/bar"]))
       .toThrow("Cannot use --branch with --resume");
+  });
+});
+
+describe("agentStreamsConversation", () => {
+  function agent(id: string, conversationHistory: boolean): AgentSummary {
+    return {
+      id,
+      label: id,
+      kind: "builtin",
+      capabilities: {
+        terminal: true,
+        inAppChat: conversationHistory,
+        conversationHistory,
+        interrupt: conversationHistory,
+        resume: true,
+      },
+    };
+  }
+
+  const agents = [agent("claude", true), agent("codex", true), agent("opencode", false)];
+
+  it("streams for agents with a readable transcript", () => {
+    expect(agentStreamsConversation(agents, "claude")).toBe(true);
+    expect(agentStreamsConversation(agents, "codex")).toBe(true);
+  });
+
+  it("skips streaming for agents without one, and for unknown or missing agents", () => {
+    expect(agentStreamsConversation(agents, "opencode")).toBe(false);
+    expect(agentStreamsConversation(agents, "gemini")).toBe(false);
+    expect(agentStreamsConversation(agents, null)).toBe(false);
   });
 });

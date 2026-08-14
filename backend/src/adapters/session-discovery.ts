@@ -1,14 +1,16 @@
 import { readdir, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { isRecord } from "../lib/type-guards";
+import { opencodeSessionsPath } from "./agent-runtime";
 import { encodeClaudeProjectDir } from "./claude-cli";
 
-/** Built-in agents whose on-disk session history we can discover. */
-export type DiscoverableAgentKind = "claude" | "codex";
+/** Built-in agents whose session history we can discover. */
+export type DiscoverableAgentKind = "claude" | "codex" | "opencode";
 
 export interface SessionDiscoveryGateway {
   /** Session ids for `cwd`, newest first. Claude reads `~/.claude/projects/<encoded>/`,
-   *  Codex scans `~/.codex/sessions/**` and matches `session_meta.cwd`. */
+   *  Codex scans `~/.codex/sessions/**` and matches `session_meta.cwd`, and opencode reads
+   *  the ids its generated webmux plugin recorded for that worktree. */
   listSessionIds(agent: DiscoverableAgentKind, cwd: string): Promise<string[]>;
 }
 
@@ -75,9 +77,32 @@ async function listCodexSessionIds(cwd: string): Promise<string[]> {
   return newestFirst(stamped.filter((entry): entry is StampedSession => entry !== null));
 }
 
+async function listOpencodeSessionIds(cwd: string): Promise<string[]> {
+  const file = Bun.file(opencodeSessionsPath(cwd));
+  const content = await file.text().catch((): string => "");
+  const stamped = content
+    .split("\n")
+    .filter((line) => line.trim().length > 0)
+    .map((line): StampedSession | null => {
+      try {
+        const parsed: unknown = JSON.parse(line);
+        if (!isRecord(parsed)) return null;
+        const { id, at } = parsed;
+        return typeof id === "string" && typeof at === "number" ? { sessionId: id, mtimeMs: at } : null;
+      } catch {
+        return null;
+      }
+    })
+    .filter((entry): entry is StampedSession => entry !== null);
+
+  return newestFirst(stamped);
+}
+
 export class FileSessionDiscovery implements SessionDiscoveryGateway {
   async listSessionIds(agent: DiscoverableAgentKind, cwd: string): Promise<string[]> {
-    return agent === "claude" ? await listClaudeSessionIds(cwd) : await listCodexSessionIds(cwd);
+    if (agent === "claude") return await listClaudeSessionIds(cwd);
+    if (agent === "opencode") return await listOpencodeSessionIds(cwd);
+    return await listCodexSessionIds(cwd);
   }
 }
 

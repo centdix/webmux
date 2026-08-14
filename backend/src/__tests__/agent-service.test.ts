@@ -7,16 +7,18 @@ import {
   buildManagedShellCommand,
 } from "../services/agent-service";
 
-function builtInAgent(id: "claude" | "codex"): AgentDefinition {
+const BUILT_IN_LABELS = { claude: "Claude", codex: "Codex", opencode: "opencode" } as const;
+
+function builtInAgent(id: "claude" | "codex" | "opencode"): AgentDefinition {
   return {
     id,
-    label: id === "claude" ? "Claude" : "Codex",
+    label: BUILT_IN_LABELS[id],
     kind: "builtin",
     capabilities: {
       terminal: true,
-      inAppChat: true,
-      conversationHistory: true,
-      interrupt: true,
+      inAppChat: id !== "opencode",
+      conversationHistory: id !== "opencode",
+      interrupt: id !== "opencode",
       resume: true,
     },
     implementation: {
@@ -181,6 +183,74 @@ describe("agent-service command builders", () => {
     });
 
     expect(command).toContain("codex --enable hooks resume 'thread-9'");
+  });
+
+  it("passes the initial prompt to opencode with --prompt so the TUI submits it", () => {
+    const command = buildAgentPaneCommand({
+      agent: builtInAgent("opencode"),
+      runtimeEnvPath: "/tmp/gitdir/webmux/runtime.env",
+      repoRoot: "/repo",
+      worktreePath: "/repo/__worktrees/feature",
+      branch: "feature",
+      profileName: "default",
+      yolo: true,
+      prompt: "fix the tests",
+    });
+
+    expect(command).toContain("opencode --auto --prompt 'fix the tests'");
+    expect(command).not.toContain(" -- ");
+    expect(command).not.toContain("OPENCODE_CONFIG_CONTENT");
+  });
+
+  it("hands opencode a system prompt through a generated instructions file", () => {
+    const command = buildAgentPaneCommand({
+      agent: builtInAgent("opencode"),
+      runtimeEnvPath: "/tmp/gitdir/webmux/runtime.env",
+      repoRoot: "/repo",
+      worktreePath: "/repo/__worktrees/feature",
+      branch: "feature",
+      profileName: "default",
+      systemPrompt: "stay focused",
+    });
+
+    expect(command).toContain(
+      "printf '%s' 'stay focused' > '/repo/__worktrees/feature/.opencode/webmux-instructions.md'",
+    );
+    expect(command).toContain(
+      'OPENCODE_CONFIG_CONTENT=\'{"instructions":["/repo/__worktrees/feature/.opencode/webmux-instructions.md"]}\' opencode',
+    );
+  });
+
+  it("resumes opencode by session id, and falls back to --continue without one", () => {
+    const base = {
+      agent: builtInAgent("opencode"),
+      runtimeEnvPath: "/tmp/gitdir/webmux/runtime.env",
+      repoRoot: "/repo",
+      worktreePath: "/repo/__worktrees/feature",
+      branch: "feature",
+      profileName: "default",
+      launchMode: "resume" as const,
+    };
+
+    expect(buildAgentPaneCommand({ ...base, resumeConversationId: "ses_123" }))
+      .toContain("opencode --session 'ses_123'");
+    expect(buildAgentPaneCommand(base)).toContain("opencode --continue");
+  });
+
+  it("forks an opencode session without pinning a child id", () => {
+    const command = buildAgentPaneCommand({
+      agent: builtInAgent("opencode"),
+      runtimeEnvPath: "/tmp/gitdir/webmux/runtime.env",
+      repoRoot: "/repo",
+      worktreePath: "/repo/__worktrees/feature",
+      branch: "feature",
+      profileName: "default",
+      launchMode: "fork",
+      forkFromSessionId: "ses_root",
+    });
+
+    expect(command).toContain("opencode --session 'ses_root' --fork");
+    expect(command).not.toContain("--session-id");
   });
 
   it("builds docker commands that exec inside the container", () => {

@@ -1,5 +1,13 @@
-import { describe, expect, it } from "bun:test";
-import { captureNewSessionId, type SessionDiscoveryGateway } from "../adapters/session-discovery";
+import { afterEach, describe, expect, it } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { opencodeSessionsPath } from "../adapters/agent-runtime";
+import {
+  captureNewSessionId,
+  FileSessionDiscovery,
+  type SessionDiscoveryGateway,
+} from "../adapters/session-discovery";
 
 /** Returns a fresh list of ids on each call, simulating a session file appearing late. */
 function scriptedDiscovery(sequence: string[][]): SessionDiscoveryGateway {
@@ -39,5 +47,45 @@ describe("captureNewSessionId", () => {
     const discovery = scriptedDiscovery([["old-1"]]);
     const id = await captureNewSessionId(discovery, "claude", "/cwd", ["old-1"], { sleep: noSleep, attempts: 3 });
     expect(id).toBeNull();
+  });
+});
+
+describe("FileSessionDiscovery opencode sessions", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  async function worktreeWithSessionLog(lines: string[]): Promise<string> {
+    const worktreePath = await mkdtemp(join(tmpdir(), "webmux-opencode-sessions-"));
+    tempDirs.push(worktreePath);
+    await Bun.write(opencodeSessionsPath(worktreePath), lines.join("\n"));
+    return worktreePath;
+  }
+
+  it("reads recorded opencode sessions newest first", async () => {
+    const worktreePath = await worktreeWithSessionLog([
+      JSON.stringify({ id: "ses_older", at: 1000 }),
+      JSON.stringify({ id: "ses_newest", at: 3000 }),
+      JSON.stringify({ id: "ses_middle", at: 2000 }),
+      "",
+    ]);
+
+    expect(await new FileSessionDiscovery().listSessionIds("opencode", worktreePath))
+      .toEqual(["ses_newest", "ses_middle", "ses_older"]);
+  });
+
+  it("skips malformed lines and reports nothing when no session was recorded", async () => {
+    const worktreePath = await worktreeWithSessionLog([
+      "not json",
+      JSON.stringify({ id: "ses_ok", at: 10 }),
+      JSON.stringify({ missing: "fields" }),
+    ]);
+    const emptyWorktree = await mkdtemp(join(tmpdir(), "webmux-opencode-empty-"));
+    tempDirs.push(emptyWorktree);
+
+    expect(await new FileSessionDiscovery().listSessionIds("opencode", worktreePath)).toEqual(["ses_ok"]);
+    expect(await new FileSessionDiscovery().listSessionIds("opencode", emptyWorktree)).toEqual([]);
   });
 });

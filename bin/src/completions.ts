@@ -126,7 +126,7 @@ _webmux() {
     'list:List worktrees and their status'
     'open:Open an existing worktree session'
     'close:Close a worktree session'
-    'refresh:Refresh a Codex agent terminal'
+    'refresh:Refresh an agent terminal from saved chat'
     'archive:Hide a worktree from the default list'
     'unarchive:Show an archived worktree again'
     'label:Set or clear a workspace label'
