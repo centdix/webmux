@@ -58,6 +58,20 @@ describe("buildInitAgentCommand", () => {
     expect(command.args).toContain("developer_instructions=system");
     expect(command.args.at(-1)).toBe("user");
   });
+
+  it("builds the opencode non-interactive command with the instructions in the message", () => {
+    expect(buildInitAgentCommand("opencode", prompt)).toEqual({
+      agent: "opencode",
+      cmd: "opencode",
+      args: [
+        "run",
+        "--format",
+        "json",
+        "--auto",
+        "system\n\nuser",
+      ],
+    });
+  });
 });
 
 describe("parseInitAgentStreamLine", () => {
@@ -111,6 +125,54 @@ describe("parseInitAgentStreamLine", () => {
         state,
       ),
     ).toEqual([{ kind: "status", text: "Running rg PORT" }]);
+  });
+
+  it("streams opencode text parts and bash command statuses", () => {
+    const state = { assistantSnapshot: "", lastStatus: null };
+
+    expect(
+      parseInitAgentStreamLine(
+        "opencode",
+        JSON.stringify({
+          type: "tool_use",
+          part: { type: "tool", tool: "bash", state: { status: "completed", input: { command: "rg PORT" } } },
+        }),
+        state,
+      ),
+    ).toEqual([{ kind: "status", text: "Running rg PORT" }]);
+
+    expect(
+      parseInitAgentStreamLine(
+        "opencode",
+        JSON.stringify({ type: "text", part: { type: "text", text: "Hello" } }),
+        state,
+      ),
+    ).toEqual([{ kind: "assistant_delta", text: "Hello" }]);
+
+    // Text parts carry the whole snapshot, so only the new suffix is streamed.
+    expect(
+      parseInitAgentStreamLine(
+        "opencode",
+        JSON.stringify({ type: "text", part: { type: "text", text: "Hello there" } }),
+        state,
+      ),
+    ).toEqual([{ kind: "assistant_delta", text: " there" }]);
+
+    expect(
+      parseInitAgentStreamLine("opencode", JSON.stringify({ type: "step_finish" }), state),
+    ).toEqual([{ kind: "assistant_done", text: "" }]);
+  });
+
+  it("reports opencode tool calls without a command by tool name", () => {
+    const state = { assistantSnapshot: "", lastStatus: null };
+
+    expect(
+      parseInitAgentStreamLine(
+        "opencode",
+        JSON.stringify({ type: "tool_use", part: { type: "tool", tool: "edit", state: { input: { filePath: "a" } } } }),
+        state,
+      ),
+    ).toEqual([{ kind: "status", text: "Using edit..." }]);
   });
 
   it("emits only the new suffix for snapshot-style assistant payloads", () => {
@@ -212,6 +274,26 @@ describe("buildStarterTemplate", () => {
     expect(template).toContain("defaultAgent: codex");
     expect(template).toContain("mainBranch: main");
     expect(template).toContain("#   command: PORT=$PORT bun run dev");
+  });
+
+  it("defaults worktrees to opencode while keeping a supported auto_name provider", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "webmux-starter-template-opencode-"));
+    tempDirs.push(dir);
+
+    const template = buildStarterTemplate({
+      projectName: "example",
+      mainBranch: "main",
+      defaultAgent: "opencode",
+      packageManager: "bun",
+    });
+
+    expect(template).toContain("defaultAgent: opencode");
+    // Branch auto-naming has no opencode backend, so the example must not suggest one.
+    expect(template).toContain("#   provider: claude");
+    expect(template).not.toContain("#   provider: opencode");
+
+    await Bun.write(join(dir, ".webmux.yaml"), template);
+    expect(loadConfig(dir, { resolvedRoot: true }).workspace.defaultAgent).toBe("opencode");
   });
 
   it("includes commented examples for the full config surface and still loads", async () => {

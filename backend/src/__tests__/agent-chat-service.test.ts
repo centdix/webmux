@@ -64,6 +64,26 @@ describe("resolveAgentChatSupport", () => {
     });
   });
 
+  it("rejects opencode, a built-in agent with no chat backend", () => {
+    expect(resolveAgentChatSupport({
+      agentId: "opencode",
+      agentLabel: "opencode",
+      agent: getAgentDefinition(TEST_CONFIG, "opencode"),
+      action: "chat",
+    })).toEqual({
+      ok: false,
+      error: "opencode does not support in-app chat",
+      status: 409,
+    });
+  });
+
+  it("sends opencode terminal prompts without a submit delay", () => {
+    expect(resolveAgentTerminalSubmitDelayMs({
+      agentId: "opencode",
+      agent: getAgentDefinition(TEST_CONFIG, "opencode"),
+    })).toBe(0);
+  });
+
   it("rejects terminal-only custom agents", () => {
     expect(resolveAgentChatSupport({
       agentId: "gemini",

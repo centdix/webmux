@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ensureAgentRuntimeArtifacts } from "../adapters/agent-runtime";
+import { ensureAgentRuntimeArtifacts, opencodeSessionsPath } from "../adapters/agent-runtime";
 import { ensureWorktreeStorageDirs } from "../adapters/fs";
 
 async function writeControlEnv(agentCtlPath: string, controlUrl: string): Promise<void> {
@@ -80,7 +80,83 @@ describe("ensureAgentRuntimeArtifacts", () => {
     expect(codexHooks.hooks?.PostToolUse?.[0]?.matcher).toBe("Bash");
     expect(codexHooks.hooks?.PostToolUse?.[0]?.hooks?.[0]?.command).toContain("codex-post-tool-use");
     expect(codexHooks.hooks?.PostToolUse?.[0]?.hooks?.[0]?.timeout).toBe(30);
-    expect(await Bun.file(join(gitDir, "info", "exclude")).text()).toContain(".codex/hooks.json");
+    const exclude = await Bun.file(join(gitDir, "info", "exclude")).text();
+    expect(exclude).toContain(".codex/hooks.json");
+    expect(exclude).toContain(".opencode/plugin/webmux.js");
+    expect(exclude).toContain(".opencode/webmux-instructions.md");
+    expect(exclude).toContain(".opencode/webmux-sessions.jsonl");
+  });
+
+  it("generates a loadable opencode plugin wired to agentctl and the session log", async () => {
+    const gitDir = await mkdtemp(join(tmpdir(), "webmux-agent-runtime-gitdir-"));
+    const worktreePath = await mkdtemp(join(tmpdir(), "webmux-agent-runtime-worktree-"));
+    tempDirs.push(gitDir, worktreePath);
+
+    await ensureWorktreeStorageDirs(gitDir);
+    const artifacts = await ensureAgentRuntimeArtifacts({ gitDir, worktreePath });
+
+    expect(artifacts.opencodePluginPath).toBe(join(worktreePath, ".opencode", "plugin", "webmux.js"));
+    const plugin = await Bun.file(artifacts.opencodePluginPath).text();
+    expect(plugin).toContain(artifacts.agentCtlPath);
+    expect(plugin).toContain(opencodeSessionsPath(worktreePath));
+    expect(plugin).toContain("session.idle");
+    expect(plugin).toContain("agent-stopped");
+    expect(plugin).toContain("opencode-post-tool-use");
+
+    // opencode imports the plugin file directly, so it has to be valid loadable ESM.
+    const loaded = await import(artifacts.opencodePluginPath) as { WebmuxBridge?: unknown };
+    expect(typeof loaded.WebmuxBridge).toBe("function");
+  });
+
+  it("detects PR creation from opencode's lowercase bash tool payloads", async () => {
+    const gitDir = await mkdtemp(join(tmpdir(), "webmux-agent-runtime-gitdir-"));
+    const worktreePath = await mkdtemp(join(tmpdir(), "webmux-agent-runtime-worktree-"));
+    tempDirs.push(gitDir, worktreePath);
+    let capturedPayload: unknown;
+
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        capturedPayload = await request.json();
+        return Response.json({ ok: true });
+      },
+    });
+
+    try {
+      await ensureWorktreeStorageDirs(gitDir);
+      const artifacts = await ensureAgentRuntimeArtifacts({ gitDir, worktreePath });
+      await writeControlEnv(artifacts.agentCtlPath, `http://127.0.0.1:${server.port}/runtime-events`);
+
+      const process = Bun.spawn([artifacts.agentCtlPath, "opencode-post-tool-use"], {
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      process.stdin.write(JSON.stringify({
+        tool_name: "bash",
+        tool_input: { command: "gh pr create --fill" },
+        tool_response: {
+          output: "Created pull request: https://github.com/windmill-labs/webmux/pull/321",
+        },
+      }));
+      process.stdin.end();
+
+      const [exitCode] = await Promise.all([
+        process.exited,
+        new Response(process.stdout).text(),
+        new Response(process.stderr).text(),
+      ]);
+
+      expect(exitCode).toBe(0);
+      expect(capturedPayload).toEqual({
+        type: "pr_opened",
+        worktreeId: "worktree-1",
+        branch: "feature/test",
+        url: "https://github.com/windmill-labs/webmux/pull/321",
+      });
+    } finally {
+      server.stop(true);
+    }
   });
 
   it("preserves non-webmux Codex hooks when refreshing generated hooks", async () => {

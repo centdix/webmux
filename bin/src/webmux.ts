@@ -25,7 +25,7 @@ Usage:
   webmux list         List worktrees and their status
   webmux open         Open an existing worktree session
   webmux close        Close a worktree session without removing it
-  webmux refresh      Refresh a Codex agent terminal from saved chat
+  webmux refresh      Refresh an agent terminal from saved chat
   webmux archive      Hide a worktree from the default list
   webmux unarchive    Show an archived worktree again
   webmux label        Set or clear a workspace label

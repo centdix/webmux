@@ -54,6 +54,7 @@
     filterWorktrees,
     matchesWorktreeSearch,
   } from "./lib/worktree-list";
+  import { supportsWorktreeChat, supportsWorktreeTabs } from "./lib/agent-capabilities";
   import { getTheme } from "./lib/themes";
   import type { ThemeKey } from "./lib/themes";
   import { setToastController } from "./lib/toast-context";
@@ -90,10 +91,12 @@
     };
   }
 
-  function supportsWorktreeChat(worktree: WorktreeInfo | undefined): boolean {
-    if (!worktree?.agentName) return false;
-    const agent = config.agents.find((candidate) => candidate.id === worktree.agentName);
-    return agent?.capabilities.inAppChat ?? (worktree.agentName === "codex" || worktree.agentName === "claude");
+  function worktreeSupportsChat(worktree: WorktreeInfo | undefined): boolean {
+    return supportsWorktreeChat(config.agents, worktree);
+  }
+
+  function worktreeSupportsTabs(worktree: WorktreeInfo | undefined): boolean {
+    return supportsWorktreeTabs(config.agents, worktree);
   }
 
   let config = $state<AppConfig>(createDefaultConfig());
@@ -440,13 +443,9 @@
     labelBranch ? worktrees.find((w) => w.branch === labelBranch) : undefined,
   );
   let canConnect = $derived(!!selectedBranch && selectedWorktree?.mux === "✓" && !selectedWorktree?.creating);
-  let showWebChat = $derived(useWebChatUi && canConnect && supportsWorktreeChat(selectedWorktree));
+  let showWebChat = $derived(useWebChatUi && canConnect && worktreeSupportsChat(selectedWorktree));
   // Tabs are only meaningful for the built-in terminal agents that have a forkable session.
-  let showTabBar = $derived(
-    canConnect
-    && !showWebChat
-    && (selectedWorktree?.agentName === "claude" || selectedWorktree?.agentName === "codex"),
-  );
+  let showTabBar = $derived(canConnect && !showWebChat && worktreeSupportsTabs(selectedWorktree));
   let isSelectedOpening = $derived(selectedBranch ? openingBranches.has(selectedBranch) : false);
   let isSelectedArchiving = $derived(selectedBranch ? archivingBranches.has(selectedBranch) : false);
   let isSelectedAgentTerminalRefreshing = $derived(
@@ -1380,7 +1379,7 @@
             {#if selectedWorktree.agentLabel ?? selectedWorktree.agentName}
               <span class="text-xs text-muted">Agent: {selectedWorktree.agentLabel ?? selectedWorktree.agentName}</span>
             {/if}
-            {#if selectedWorktree.agentName && !supportsWorktreeChat(selectedWorktree)}
+            {#if selectedWorktree.agentName && !worktreeSupportsChat(selectedWorktree)}
               <span class="text-xs text-muted">This agent runs in the terminal only.</span>
             {/if}
           </div>

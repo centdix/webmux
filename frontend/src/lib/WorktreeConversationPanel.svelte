@@ -55,9 +55,10 @@
     onAnswerQuestion,
   }: Props = $props();
 
-  const agentLabel = $derived(worktree.agentLabel ?? (worktree.agentName === "claude" ? "Claude" : "Codex"));
-  const supportsAgentChat = $derived(worktree.agentName === "codex" || worktree.agentName === "claude");
-  const chatAvailable = $derived(supportsAgentChat && worktree.mux === "✓");
+  const agentLabel = $derived(worktree.agentLabel ?? "The agent");
+  // The panel is only rendered for worktrees whose agent advertises in-app chat, so the
+  // remaining question is whether the tmux session backing it is up.
+  const chatAvailable = $derived(worktree.mux === "✓");
   const showInterrupt = $derived(chatAvailable && (conversation?.running ?? false));
   const showComposerInterrupt = $derived(showInterrupt && !conversationError);
   const showProcessingIndicator = $derived(isSending || showComposerInterrupt);
@@ -235,11 +236,7 @@
   </div>
 {/snippet}
 
-{#if !supportsAgentChat}
-  <div class="flex flex-1 items-center justify-center px-6 text-center text-sm text-muted">
-    Chat is not available for this worktree yet.
-  </div>
-{:else if !chatAvailable}
+{#if !chatAvailable}
   <div class="flex flex-1 items-center justify-center px-6 text-center text-sm text-muted">
     Open this worktree first to use chat.
   </div>

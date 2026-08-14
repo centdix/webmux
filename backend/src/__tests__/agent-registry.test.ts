@@ -44,7 +44,7 @@ const TEST_CONFIG: ProjectConfig = {
 
 describe("agent-registry", () => {
   it("lists built-in agents before local custom agents", () => {
-    expect(listAgentDefinitions(TEST_CONFIG).map((agent) => agent.id)).toEqual(["claude", "codex", "gemini"]);
+    expect(listAgentDefinitions(TEST_CONFIG).map((agent) => agent.id)).toEqual(["claude", "codex", "opencode", "gemini"]);
   });
 
   it("exposes custom agents as terminal-only summaries", () => {
@@ -70,6 +70,18 @@ describe("agent-registry", () => {
           inAppChat: true,
           conversationHistory: true,
           interrupt: true,
+          resume: true,
+        },
+      },
+      {
+        id: "opencode",
+        label: "opencode",
+        kind: "builtin",
+        capabilities: {
+          terminal: true,
+          inAppChat: false,
+          conversationHistory: false,
+          interrupt: false,
           resume: true,
         },
       },
@@ -100,7 +112,7 @@ describe("agent-registry", () => {
       },
     });
 
-    expect(definitions.map((agent) => agent.id)).toEqual(["claude", "codex", "gemini"]);
+    expect(definitions.map((agent) => agent.id)).toEqual(["claude", "codex", "opencode", "gemini"]);
     expect(definitions[0]?.label).toBe("Claude");
   });
 
@@ -140,6 +152,20 @@ describe("agent-registry", () => {
           inAppChat: true,
           conversationHistory: true,
           interrupt: true,
+          resume: true,
+        },
+        startCommand: null,
+        resumeCommand: null,
+      },
+      {
+        id: "opencode",
+        label: "opencode",
+        kind: "builtin",
+        capabilities: {
+          terminal: true,
+          inAppChat: false,
+          conversationHistory: false,
+          interrupt: false,
           resume: true,
         },
         startCommand: null,
