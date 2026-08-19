@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ThemeKey } from "./themes";
-  import { SSH_STORAGE_KEY, applyTheme, errorMessage } from "./utils";
+  import { SSH_STORAGE_KEY, applyTheme, errorMessage, ideLabel } from "./utils";
   import { THEMES } from "./themes";
   import BaseDialog from "./BaseDialog.svelte";
   import Btn from "./Btn.svelte";
@@ -8,7 +8,7 @@
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import AgentEditorDialog from "./AgentEditorDialog.svelte";
   import { api, createAgent, deleteAgent, fetchAgents, updateAgent, validateAgent } from "./api";
-  import type { AgentDetails, AgentSummary, UpsertCustomAgentRequest } from "./types";
+  import type { AgentDetails, AgentSummary, IdeKind, UpsertCustomAgentRequest } from "./types";
 
   interface AgentEditorState {
     mode: "create" | "edit";
@@ -24,6 +24,7 @@
   let {
     currentTheme,
     useWebChatUi,
+    ide,
     linearAutoCreate,
     autoRemoveOnMerge,
     onthemechange,
@@ -36,6 +37,7 @@
   }: {
     currentTheme: ThemeKey;
     useWebChatUi: boolean;
+    ide: IdeKind;
     linearAutoCreate: boolean;
     autoRemoveOnMerge: boolean;
     onthemechange: (key: ThemeKey) => void;
@@ -351,7 +353,7 @@
 
     <div class="mb-4">
       <label class="block text-xs text-muted mb-1.5" for="ssh-host">
-        SSH Host <span class="opacity-60">(for "Open in Cursor")</span>
+        SSH Host <span class="opacity-60">(for "Open in {ideLabel(ide)}")</span>
       </label>
       <input
         id="ssh-host"

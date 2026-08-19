@@ -446,6 +446,13 @@ export const configGroups: ConfigGroup[] = [
         description: "Default agent kind used when a worktree does not specify one explicitly.",
       },
       {
+        key: "workspace.ide",
+        type: "cursor | vscode",
+        required: "no",
+        defaultValue: "cursor",
+        description: "Editor linked by the \"Open in...\" button in the UI.",
+      },
+      {
         key: "workspace.autoPull.enabled",
         type: "boolean",
         required: "no",

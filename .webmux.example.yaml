@@ -15,6 +15,11 @@ workspace:
   # Allowed values: claude, codex
   defaultAgent: claude
 
+  # Editor used by the "Open in <IDE>" button in the UI.
+  # Allowed values: cursor, vscode
+  # Personal preference: override this in .webmux.local.yaml instead.
+  ide: cursor
+
 # Auto-generated service ports that are injected into pane processes,
 # lifecycle hooks, and runtime env files.
 services:

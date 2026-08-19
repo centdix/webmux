@@ -22,6 +22,7 @@ export const EnabledResponseSchema = z.object({
 export const BuiltInAgentIdSchema = z.enum(["claude", "codex", "opencode"]);
 export const AgentIdSchema = z.string().trim().min(1);
 export const AgentKindSchema = BuiltInAgentIdSchema;
+export const IdeKindSchema = z.enum(["cursor", "vscode"]);
 export const WorktreeCreateModeSchema = z.enum(["new", "existing"]);
 
 export const LinearIssueIdSchema = z.string().regex(/^[A-Z]+-\d+$/, "Expected Linear issue id (e.g. ENG-123)");
@@ -553,6 +554,7 @@ export const AppConfigSchema = z.object({
   autoRemoveOnMerge: z.boolean(),
   projectDir: z.string(),
   mainBranch: z.string(),
+  ide: IdeKindSchema.default("cursor"),
 });
 
 export const CiLogsResponseSchema = z.object({
@@ -679,6 +681,7 @@ export type MigrateProjectsResponse = z.infer<typeof MigrateProjectsResponseSche
 export type BuiltInAgentId = z.infer<typeof BuiltInAgentIdSchema>;
 export type AgentId = z.infer<typeof AgentIdSchema>;
 export type AgentKind = z.infer<typeof AgentKindSchema>;
+export type IdeKind = z.infer<typeof IdeKindSchema>;
 export type AgentCapabilities = z.infer<typeof AgentCapabilitiesSchema>;
 export type AgentSummary = z.infer<typeof AgentSummarySchema>;
 export type AgentDetails = z.infer<typeof AgentDetailsSchema>;

@@ -9,6 +9,7 @@ import type {
   AutoPullConfig,
   CustomAgentConfig,
   GitHubIntegrationConfig,
+  IdeKind,
   LifecycleHooksConfig,
   LinearIntegrationConfig,
   LinkedRepoConfig,
@@ -36,6 +37,7 @@ interface LocalProjectConfigOverlay {
   linear: Partial<LinearIntegrationConfig> | null;
   github: Partial<GitHubIntegrationConfig> | null;
   autoPull: Partial<AutoPullConfig> | null;
+  ide: IdeKind | null;
 }
 
 const DEFAULT_PANES: PaneTemplate[] = [
@@ -60,6 +62,7 @@ const DEFAULT_CONFIG: ProjectConfig = {
     worktreeRoot: "../worktrees",
     defaultAgent: "claude",
     autoPull: { enabled: false, intervalSeconds: 300 },
+    ide: "cursor",
   },
   profiles: {
     default: {
@@ -119,6 +122,11 @@ function parseAgentKind(value: unknown): AgentKind {
   if (value === "codex") return "codex";
   if (value === "opencode") return "opencode";
   return "claude";
+}
+
+function parseIdeKind(value: unknown): IdeKind {
+  if (value === "vscode") return "vscode";
+  return "cursor";
 }
 
 function parsePanes(raw: unknown): PaneTemplate[] {
@@ -380,6 +388,9 @@ function parseProjectConfig(parsed: Record<string, unknown>): ProjectConfig {
       autoPull: isRecord(parsed.workspace)
         ? parseAutoPull(parsed.workspace.autoPull)
         : DEFAULT_CONFIG.workspace.autoPull,
+      ide: isRecord(parsed.workspace)
+        ? parseIdeKind(parsed.workspace.ide)
+        : DEFAULT_CONFIG.workspace.ide,
     },
     profiles: parseProfiles(parsed.profiles, true),
     agents: {},
@@ -489,7 +500,7 @@ function loadLocalProjectConfigOverlay(root: string): LocalProjectConfigOverlay 
   try {
     const text = readLocalConfigFile(root).trim();
     if (!text) {
-      return { worktreeRoot: null, profiles: {}, agents: {}, lifecycleHooks: {}, linear: null, github: null, autoPull: null };
+      return { worktreeRoot: null, profiles: {}, agents: {}, lifecycleHooks: {}, linear: null, github: null, autoPull: null, ide: null };
     }
 
     const parsed = parseConfigDocument(text);
@@ -502,9 +513,10 @@ function loadLocalProjectConfigOverlay(root: string): LocalProjectConfigOverlay 
       linear: parseLocalLinearOverlay(parsed),
       github: parseLocalGitHubOverlay(parsed),
       autoPull: parseLocalAutoPullOverlay(parsed),
+      ide: ws && (ws.ide === "cursor" || ws.ide === "vscode") ? ws.ide : null,
     };
   } catch {
-    return { worktreeRoot: null, profiles: {}, agents: {}, lifecycleHooks: {}, linear: null, github: null, autoPull: null };
+    return { worktreeRoot: null, profiles: {}, agents: {}, lifecycleHooks: {}, linear: null, github: null, autoPull: null, ide: null };
   }
 }
 
@@ -560,11 +572,12 @@ export function loadConfig(dir: string, options: LoadConfigOptions = {}): Projec
 
   const localOverlay = loadLocalProjectConfigOverlay(root);
 
-  const workspace = localOverlay.worktreeRoot !== null || localOverlay.autoPull
+  const workspace = localOverlay.worktreeRoot !== null || localOverlay.autoPull || localOverlay.ide !== null
     ? {
         ...projectConfig.workspace,
         ...(localOverlay.worktreeRoot !== null ? { worktreeRoot: localOverlay.worktreeRoot } : {}),
         ...(localOverlay.autoPull ? { autoPull: { ...projectConfig.workspace.autoPull, ...localOverlay.autoPull } } : {}),
+        ...(localOverlay.ide !== null ? { ide: localOverlay.ide } : {}),
       }
     : projectConfig.workspace;
 

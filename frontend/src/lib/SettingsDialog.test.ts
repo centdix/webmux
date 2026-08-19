@@ -71,6 +71,7 @@ function createConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     autoRemoveOnMerge: false,
     projectDir: "/repo",
     mainBranch: "main",
+    ide: "cursor",
     ...overrides,
   };
 }
@@ -79,6 +80,7 @@ function renderDialog() {
   return render(SettingsDialog, {
     currentTheme: "github-dark",
     useWebChatUi: false,
+    ide: "cursor",
     linearAutoCreate: false,
     autoRemoveOnMerge: false,
     onthemechange: vi.fn(),
@@ -134,6 +136,7 @@ describe("SettingsDialog agent management", () => {
     render(SettingsDialog, {
       currentTheme: "github-dark",
       useWebChatUi: false,
+      ide: "cursor",
       linearAutoCreate: false,
       autoRemoveOnMerge: false,
       onthemechange: vi.fn(),
@@ -183,6 +186,7 @@ describe("SettingsDialog agent management", () => {
     render(SettingsDialog, {
       currentTheme: "github-dark",
       useWebChatUi: false,
+      ide: "cursor",
       linearAutoCreate: false,
       autoRemoveOnMerge: false,
       onthemechange: vi.fn(),

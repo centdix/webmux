@@ -16,6 +16,7 @@ const TEST_CONFIG: ProjectConfig = {
     worktreeRoot: "__worktrees",
     defaultAgent: "claude",
     autoPull: { enabled: false, intervalSeconds: 300 },
+    ide: "cursor",
   },
   profiles: {
     default: {

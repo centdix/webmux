@@ -1,4 +1,4 @@
-import type { PrEntry, ProjectInitPhase, WorktreeCreationPhase, WorktreeInfo } from "./types";
+import type { IdeKind, PrEntry, ProjectInitPhase, WorktreeCreationPhase, WorktreeInfo } from "./types";
 import { THEME_KEYS, getTheme } from "./themes";
 import type { ThemeKey } from "./themes";
 
@@ -51,10 +51,30 @@ export function prStatusShellClass(pr: Pick<PrEntry, "ciChecks" | "ciStatus" | "
   return "border-edge bg-surface";
 }
 
-export function makeCursorUrl(dir: string | null | undefined, sshHost: string | null): string | null {
+const IDES: Record<IdeKind, { scheme: string; label: string }> = {
+  cursor: { scheme: "cursor", label: "Cursor" },
+  vscode: { scheme: "vscode", label: "VS Code" },
+};
+
+export function ideLabel(ide: IdeKind): string {
+  return IDES[ide].label;
+}
+
+export function makeIdeUrl(
+  dir: string | null | undefined,
+  sshHost: string | null,
+  ide: IdeKind,
+): string | null {
   if (!dir) return null;
-  if (sshHost) return `cursor://vscode-remote/ssh-remote+${sshHost}${dir}`;
-  return `cursor://file${dir}`;
+  const scheme = IDES[ide].scheme;
+  if (sshHost) return `${scheme}://vscode-remote/ssh-remote+${sshHost}${dir}`;
+  return `${scheme}://file${dir}`;
+}
+
+export function ideLabelForUrl(url: string): string {
+  const scheme = url.split(":", 1)[0];
+  const entry = Object.values(IDES).find((ide) => ide.scheme === scheme);
+  return entry ? entry.label : IDES.cursor.label;
 }
 
 export function errorMessage(err: unknown): string {
