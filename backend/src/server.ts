@@ -387,6 +387,7 @@ function getFrontendConfig(): {
   autoRemoveOnMerge: boolean;
   projectDir: string;
   mainBranch: string;
+  ide: ProjectConfig["workspace"]["ide"];
 } {
   const defaultProfileName = getDefaultProfileName(config);
   const orderedProfileEntries = Object.entries(config.profiles).sort(([left], [right]) => {
@@ -416,6 +417,7 @@ function getFrontendConfig(): {
     autoRemoveOnMerge: autoRemoveOnMergeEnabled,
     projectDir: PROJECT_DIR,
     mainBranch: config.workspace.mainBranch,
+    ide: config.workspace.ide,
   };
 }
 

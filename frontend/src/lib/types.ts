@@ -49,6 +49,7 @@ export type {
   PostWorktreeToLinearResponse,
   PostWorktreeToLinearTarget,
   FromLinearInput,
+  IdeKind,
   InstanceSummary,
   PrComment,
   PrEntry,
@@ -99,7 +100,7 @@ export interface AskUserQuestionInput {
 
 export interface DiffDialogProps {
   branch: string;
-  cursorUrl?: string | null;
+  ideUrl?: string | null;
   onclose: () => void;
 }
 

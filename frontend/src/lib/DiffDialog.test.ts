@@ -41,7 +41,7 @@ describe("DiffDialog", () => {
     render(DiffDialog, {
       props: {
         branch: "feature/status",
-        cursorUrl: "cursor://file/tmp/feature/status",
+        ideUrl: "cursor://file/tmp/feature/status",
         onclose: vi.fn(),
       },
     });
@@ -56,6 +56,30 @@ describe("DiffDialog", () => {
     expect(screen.getByRole("link", { name: "Cursor" })).toHaveAttribute(
       "href",
       "cursor://file/tmp/feature/status",
+    );
+  });
+
+  it("shows a VS Code link when the ideUrl uses the vscode scheme", async () => {
+    vi.mocked(api.fetchWorktreeDiff).mockResolvedValue({
+      uncommitted: "",
+      uncommittedTruncated: false,
+      gitStatus: "A  src/new-file.ts",
+      unpushedCommits: [],
+    });
+
+    render(DiffDialog, {
+      props: {
+        branch: "feature/status",
+        ideUrl: "vscode://file/tmp/feature/status",
+        onclose: vi.fn(),
+      },
+    });
+
+    await screen.findByRole("button", { name: "Git status (1)" });
+
+    expect(screen.getByRole("link", { name: "VS Code" })).toHaveAttribute(
+      "href",
+      "vscode://file/tmp/feature/status",
     );
   });
 

@@ -1,6 +1,7 @@
 export type AgentKind = "claude" | "codex" | "opencode";
 export type AgentId = string;
 export type RuntimeKind = "host" | "docker";
+export type IdeKind = "cursor" | "vscode";
 
 export interface CustomAgentConfig {
   label: string;
@@ -20,6 +21,7 @@ export interface WorkspaceConfig {
   worktreeRoot: string;
   defaultAgent: AgentKind;
   autoPull: AutoPullConfig;
+  ide: IdeKind;
 }
 
 export interface PaneTemplate {

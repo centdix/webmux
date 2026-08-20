@@ -119,7 +119,7 @@ Projects added with `webmux project add` are remembered in `~/.webmux/projects.j
 webmux uses a project config file in the project root, plus an optional local overlay:
 
 - **`.webmux.yaml`** — Worktree root, pane layout, service ports, profiles, linked repos, and Docker sandbox settings.
-- **`.webmux.local.yaml`** — Optional local-only overlay for additional `profiles` and `lifecycleHooks`. Profiles are additive, conflicting profile names are replaced by the local definition, and local lifecycle hook commands run after the project-level command for the same hook.
+- **`.webmux.local.yaml`** — Optional local-only overlay for additional `profiles` and `lifecycleHooks`, and the recommended place to override per-developer settings like `workspace.ide`. Profiles are additive, conflicting profile names are replaced by the local definition, and local lifecycle hook commands run after the project-level command for the same hook.
 
 <details>
 <summary><strong>.webmux.yaml example</strong></summary>
@@ -214,6 +214,7 @@ For fresh agents using a host profile, webmux automatically includes capture com
 | `workspace.mainBranch` | string | no | Base branch used for new worktrees |
 | `workspace.worktreeRoot` | string | no | Relative or absolute directory for managed worktrees |
 | `workspace.defaultAgent` | string | no | Default agent for new worktrees: `claude`, `codex`, or `opencode` |
+| `workspace.ide` | string | no | Editor used by the "Open in..." button: `cursor` or `vscode` (default: `cursor`) |
 | `workspace.autoPull.enabled` | boolean | no | Periodically fetch and fast-forward merge the main branch (default: `false`) |
 | `workspace.autoPull.intervalSeconds` | number | no | Seconds between auto-pull attempts (default: `300`, minimum: `30`) |
 | `services[].name` | string | yes | Display name shown in the dashboard |

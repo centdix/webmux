@@ -227,6 +227,7 @@ function createConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     autoRemoveOnMerge: false,
     projectDir: "/repo",
     mainBranch: "main",
+    ide: "cursor",
     ...overrides,
   };
 }

@@ -4,17 +4,19 @@
     AppNotification,
     PrEntry,
     LinkedRepoInfo,
+    IdeKind,
   } from "./types";
   import LinearBadge from "./LinearBadge.svelte";
   import RepoGroup from "./RepoGroup.svelte";
   import Btn from "./Btn.svelte";
   import NotificationItem from "./NotificationItem.svelte";
-  import { makeCursorUrl } from "./utils";
+  import { makeIdeUrl } from "./utils";
 
   let {
     name,
     worktree,
     sshHost,
+    ide,
     linkedRepos = [],
     isMobile = false,
     notificationHistory = [],
@@ -36,6 +38,7 @@
     name: string | null;
     worktree: WorktreeInfo | undefined;
     sshHost: string;
+    ide: IdeKind;
     linkedRepos?: LinkedRepoInfo[];
     isMobile?: boolean;
     notificationHistory?: AppNotification[];
@@ -81,7 +84,7 @@
     return `${value.slice(0, maxLength - 3)}...`;
   }
 
-  let cursorUrl = $derived(makeCursorUrl(worktree?.dir, sshHost));
+  let ideUrl = $derived(makeIdeUrl(worktree?.dir, sshHost, ide));
   let headerName = $derived(worktree?.label ?? name);
   let displayName = $derived(truncateWorktreeName(headerName, 30));
   let displayBranch = $derived(worktree?.label ? truncateWorktreeName(name, 44) : null);
@@ -98,10 +101,10 @@
       .map((lr) => ({
         alias: lr.alias,
         dir: lr.dir,
-        cursorUrl: makeCursorUrl(lr.dir && name ? `${lr.dir}/${name}` : null, sshHost),
+        ideUrl: makeIdeUrl(lr.dir && name ? `${lr.dir}/${name}` : null, sshHost, ide),
         prs: (worktree?.prs ?? []).filter((pr) => pr.repo === lr.alias),
       }))
-      .filter((g) => g.prs.length > 0 || g.cursorUrl),
+      .filter((g) => g.prs.length > 0 || g.ideUrl),
   );
 
   let hasMoreContent = $derived(
@@ -193,7 +196,7 @@
           <RepoGroup
             prs={mainPrs}
             services={worktree?.services ?? []}
-            {cursorUrl}
+            {ideUrl}
             {onCiClick}
             {onReviewsClick}
           />
@@ -207,7 +210,7 @@
         <RepoGroup
           label={group.alias}
           prs={group.prs}
-          cursorUrl={group.cursorUrl}
+          ideUrl={group.ideUrl}
           {onCiClick}
           {onReviewsClick}
         />

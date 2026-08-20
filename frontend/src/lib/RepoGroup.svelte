@@ -1,20 +1,20 @@
 <script lang="ts">
   import type { PrEntry, ServiceStatus } from "./types";
-  import CursorButton from "./CursorButton.svelte";
+  import IdeButton from "./IdeButton.svelte";
   import PrStatusGroup from "./PrStatusGroup.svelte";
 
   let {
     label,
     prs,
     services = [],
-    cursorUrl = null,
+    ideUrl = null,
     onCiClick,
     onReviewsClick,
   }: {
     label?: string;
     prs: PrEntry[];
     services?: ServiceStatus[];
-    cursorUrl?: string | null;
+    ideUrl?: string | null;
     onCiClick: (pr: PrEntry) => void;
     onReviewsClick: (pr: PrEntry) => void;
   } = $props();
@@ -39,7 +39,7 @@
       >{svc.name} :{svc.port}</a>
     {/if}
   {/each}
-  {#if cursorUrl}
-    <CursorButton url={cursorUrl} />
+  {#if ideUrl}
+    <IdeButton url={ideUrl} />
   {/if}
 </div>

@@ -35,7 +35,7 @@
   } from "./lib/types";
   import {
     SSH_STORAGE_KEY,
-    makeCursorUrl,
+    makeIdeUrl,
     errorMessage,
     worktreeCreationPhaseLabel,
     loadSavedTheme,
@@ -88,6 +88,7 @@
       autoRemoveOnMerge: false,
       projectDir: "",
       mainBranch: "",
+      ide: "cursor",
     };
   }
 
@@ -1233,14 +1234,14 @@
       {#if config.projectDir}
         <SidebarRepoRow
           label={config.mainBranch ?? "main"}
-          cursorUrl={makeCursorUrl(config.projectDir, sshHost) ?? ""}
+          ideUrl={makeIdeUrl(config.projectDir, sshHost, config.ide) ?? ""}
           onpull={() => { pullMainConfirm = true; pullMainForce = false; pullMainError = ""; }}
         />
       {/if}
       {#each (config.linkedRepos ?? []).filter((lr) => lr.dir) as lr (lr.alias)}
         <SidebarRepoRow
           label={lr.alias}
-          cursorUrl={makeCursorUrl(lr.dir, sshHost) ?? ""}
+          ideUrl={makeIdeUrl(lr.dir, sshHost, config.ide) ?? ""}
           onpull={() => { pullLinkedRepoAlias = lr.alias; pullLinkedRepoForce = false; pullLinkedRepoError = ""; }}
         />
       {/each}
@@ -1295,6 +1296,7 @@
       name={selectedWorktree?.branch ?? null}
       worktree={selectedWorktree}
       {sshHost}
+      ide={config.ide}
       linkedRepos={config.linkedRepos ?? []}
       {isMobile}
       {notificationHistory}
@@ -1499,6 +1501,7 @@
   <SettingsDialog
     {currentTheme}
     {useWebChatUi}
+    ide={config.ide}
     linearAutoCreate={config.linearAutoCreateWorktrees ?? false}
     autoRemoveOnMerge={config.autoRemoveOnMerge ?? false}
     onthemechange={(key) => (currentTheme = key)}
@@ -1542,7 +1545,7 @@
 {#if showDiffDialog && selectedBranch && DiffDialogComponent}
   <DiffDialogComponent
     branch={selectedBranch}
-    cursorUrl={makeCursorUrl(selectedWorktree?.dir, sshHost)}
+    ideUrl={makeIdeUrl(selectedWorktree?.dir, sshHost, config.ide)}
     onclose={() => (showDiffDialog = false)}
   />
 {/if}

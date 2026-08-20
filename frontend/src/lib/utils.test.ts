@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   LAST_SELECTED_WORKTREE_STORAGE_KEY,
   WEB_CHAT_UI_STORAGE_KEY,
+  ideLabelForUrl,
   loadSavedSelectedWorktree,
   loadUseWebChatUi,
+  makeIdeUrl,
   resolveSelectedBranch,
   saveSelectedWorktree,
   saveUseWebChatUi,
@@ -67,5 +69,46 @@ describe("worktree selection persistence", () => {
 
     expect(loadUseWebChatUi()).toBe(false);
     expect(localStorage.getItem(WEB_CHAT_UI_STORAGE_KEY)).toBeNull();
+  });
+});
+
+describe("makeIdeUrl", () => {
+  it("returns null when dir is falsy", () => {
+    expect(makeIdeUrl(null, null, "cursor")).toBeNull();
+    expect(makeIdeUrl(undefined, null, "vscode")).toBeNull();
+  });
+
+  it("builds a local cursor:// URL", () => {
+    expect(makeIdeUrl("/tmp/repo", null, "cursor")).toBe("cursor://file/tmp/repo");
+  });
+
+  it("builds an ssh cursor:// URL", () => {
+    expect(makeIdeUrl("/tmp/repo", "devbox", "cursor")).toBe(
+      "cursor://vscode-remote/ssh-remote+devbox/tmp/repo",
+    );
+  });
+
+  it("builds a local vscode:// URL", () => {
+    expect(makeIdeUrl("/tmp/repo", null, "vscode")).toBe("vscode://file/tmp/repo");
+  });
+
+  it("builds an ssh vscode:// URL", () => {
+    expect(makeIdeUrl("/tmp/repo", "devbox", "vscode")).toBe(
+      "vscode://vscode-remote/ssh-remote+devbox/tmp/repo",
+    );
+  });
+});
+
+describe("ideLabelForUrl", () => {
+  it("labels a cursor:// URL as Cursor", () => {
+    expect(ideLabelForUrl("cursor://file/tmp/repo")).toBe("Cursor");
+  });
+
+  it("labels a vscode:// URL as VS Code", () => {
+    expect(ideLabelForUrl("vscode://file/tmp/repo")).toBe("VS Code");
+  });
+
+  it("falls back to Cursor for an unrecognized scheme", () => {
+    expect(ideLabelForUrl("foo://file/tmp/repo")).toBe("Cursor");
   });
 });
