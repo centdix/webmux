@@ -30,6 +30,7 @@
     onarchive,
     onmerge,
     onremove,
+    oneditprofile,
     oncreatesubworktree,
     onposttolinear,
   }: {
@@ -46,6 +47,7 @@
     onarchive: (branch: string) => void;
     onmerge: (branch: string) => void;
     onremove: (branch: string) => void;
+    oneditprofile: (branch: string) => void;
     oncreatesubworktree: (branch: string) => void;
     onposttolinear?: (branch: string) => void;
   } = $props();
@@ -359,6 +361,17 @@
               }}
             >
               {wt.archived ? "Restore" : "Archive"}
+            </button>
+            <button
+              type="button"
+              disabled={isCreating}
+              class="w-full px-2 py-1.5 rounded text-left text-xs text-primary hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed"
+              onclick={(event) => {
+                event.stopPropagation();
+                runMenuAction(wt.branch, oneditprofile);
+              }}
+            >
+              Change profile…
             </button>
             <button
               type="button"

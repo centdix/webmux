@@ -11,7 +11,7 @@ interface ListBranchesDeps {
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-const BRANCH_SUBCOMMANDS = new Set(["open", "close", "refresh", "archive", "unarchive", "label", "remove", "merge", "send"]);
+const BRANCH_SUBCOMMANDS = new Set(["open", "close", "refresh", "archive", "unarchive", "label", "profile", "remove", "merge", "send"]);
 
 // ── Pure logic ─────────────────────────────────────────────────────────────
 
@@ -130,6 +130,7 @@ _webmux() {
     'archive:Hide a worktree from the default list'
     'unarchive:Show an archived worktree again'
     'label:Set or clear a workspace label'
+    'profile:Switch a worktree to another profile'
     'remove:Remove a worktree'
     'merge:Merge a worktree into main'
     'send:Send a prompt to a running worktree agent'
@@ -146,7 +147,7 @@ _webmux() {
   fi
 
   case "\${words[2]}" in
-    open|close|refresh|archive|unarchive|label|remove|merge|send)
+    open|close|refresh|archive|unarchive|label|profile|remove|merge|send)
       if (( CURRENT == 3 )); then
         local -a branches
         branches=(\${(f)"$(webmux --completions "\${words[2]}" 2>/dev/null)"})
@@ -206,12 +207,12 @@ const BASH_SCRIPT = `_webmux() {
   prev="\${COMP_WORDS[COMP_CWORD-1]}"
 
   if [[ \${COMP_CWORD} -eq 1 ]]; then
-    COMPREPLY=($(compgen -W "serve init service update add oneshot list open close refresh archive unarchive label remove merge send prune restore linear project completion" -- "\${cur}"))
+    COMPREPLY=($(compgen -W "serve init service update add oneshot list open close refresh archive unarchive label profile remove merge send prune restore linear project completion" -- "\${cur}"))
     return
   fi
 
   case "\${COMP_WORDS[1]}" in
-    open|close|refresh|archive|unarchive|label|remove|merge|send)
+    open|close|refresh|archive|unarchive|label|profile|remove|merge|send)
       if [[ \${COMP_CWORD} -eq 2 ]]; then
         local branches
         branches=$(webmux --completions "\${COMP_WORDS[1]}" 2>/dev/null)

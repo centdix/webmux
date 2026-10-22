@@ -121,6 +121,17 @@ export async function setWorktreeLabel(branch: string, label: string | null): Pr
   return response.label;
 }
 
+export async function setWorktreeProfile(
+  branch: string,
+  profile: string,
+): Promise<{ profile: string; restarted: boolean }> {
+  const response = await api.setWorktreeProfile({
+    params: { name: branch },
+    body: { profile },
+  });
+  return { profile: response.profile, restarted: response.restarted };
+}
+
 export function attachWorktreeConversation(branch: string): Promise<AgentsUiWorktreeConversationResponse> {
   return api.attachAgentsWorktreeConversation({
     params: { name: branch },

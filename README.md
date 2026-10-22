@@ -10,7 +10,7 @@ A web dashboard for managing parallel AI coding agents. webmux owns git worktree
 
 ![create worktree](https://github.com/windmill-labs/webmux/raw/main/site/static/videos/create.gif)
 
-Spin up new worktrees with one click. Pick a profile, type a prompt, and webmux creates the worktree, starts the agent, and begins streaming output. Merge or remove worktrees when you're done.
+Spin up new worktrees with one click. Pick a profile, type a prompt, and webmux creates the worktree, starts the agent, and begins streaming output. Changed your mind about the profile? Switch it later from the worktree menu (or `webmux profile <branch> <profile>`) — the session restarts with the new pane layout and commands, resuming the agent conversation. Merge or remove worktrees when you're done.
 
 ### Embedded Terminals
 

@@ -65,6 +65,7 @@ describe("WorktreeList", () => {
         onmerge: vi.fn(),
         oncreatesubworktree: vi.fn(),
         onremove,
+        oneditprofile: vi.fn(),
       },
     });
 
@@ -91,6 +92,7 @@ describe("WorktreeList", () => {
         onmerge: vi.fn(),
         oncreatesubworktree: vi.fn(),
         onremove: vi.fn(),
+        oneditprofile: vi.fn(),
       },
     });
 
@@ -116,6 +118,7 @@ describe("WorktreeList", () => {
         onmerge: vi.fn(),
         oncreatesubworktree: vi.fn(),
         onremove: vi.fn(),
+        oneditprofile: vi.fn(),
       },
     });
 
@@ -148,6 +151,7 @@ describe("WorktreeList", () => {
         onmerge: vi.fn(),
         oncreatesubworktree,
         onremove: vi.fn(),
+        oneditprofile: vi.fn(),
       },
     });
 
@@ -173,6 +177,7 @@ describe("WorktreeList", () => {
         onmerge: vi.fn(),
         oncreatesubworktree: vi.fn(),
         onremove: vi.fn(),
+        oneditprofile: vi.fn(),
       },
     });
 
@@ -202,6 +207,7 @@ describe("WorktreeList", () => {
         onmerge: vi.fn(),
         oncreatesubworktree: vi.fn(),
         onremove: vi.fn(),
+        oneditprofile: vi.fn(),
       },
     });
 
@@ -236,6 +242,7 @@ describe("WorktreeList", () => {
         onmerge: vi.fn(),
         oncreatesubworktree: vi.fn(),
         onremove: vi.fn(),
+        oneditprofile: vi.fn(),
       },
     });
 

@@ -20,6 +20,7 @@ import {
   SendWorktreePromptRequestSchema,
   SetWorktreeArchivedRequestSchema,
   SetWorktreeLabelRequestSchema,
+  SetWorktreeProfileRequestSchema,
   ToggleEnabledRequestSchema,
   UpsertCustomAgentRequestSchema,
   WorktreeNameParamsSchema,
@@ -1470,6 +1471,18 @@ async function apiSetWorktreeLabel(name: string, req: Request): Promise<Response
   return jsonResponse({ ok: true, label: result.label });
 }
 
+async function apiSetWorktreeProfile(name: string, req: Request): Promise<Response> {
+  ensureBranchNotBusy(name);
+  const parsed = await parseJsonBody(req, SetWorktreeProfileRequestSchema);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.data;
+
+  log.info(`[worktree:profile] name=${name} profile=${body.profile}`);
+  const result = await lifecycleService.setWorktreeProfile(name, body.profile);
+  log.debug(`[worktree:profile] done name=${name} profile=${result.profile} restarted=${result.restarted}`);
+  return jsonResponse({ ok: true, profile: result.profile, restarted: result.restarted });
+}
+
 async function apiSendPrompt(name: string, req: Request): Promise<Response> {
   ensureBranchNotBusy(name);
   const parsed = await parseJsonBody(req, SendWorktreePromptRequestSchema);
@@ -2078,6 +2091,15 @@ function parseAgentIdParam(params: Record<string, string>):
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
         return catching(`PUT /api/worktrees/${name}/label`, () => apiSetWorktreeLabel(name, req));
+      },
+    },
+
+    [apiPaths.setWorktreeProfile]: {
+      PUT: (req) => {
+        const parsed = parseWorktreeNameParam(req.params);
+        if (!parsed.ok) return parsed.response;
+        const name = parsed.data;
+        return catching(`PUT /api/worktrees/${name}/profile`, () => apiSetWorktreeProfile(name, req));
       },
     },
 

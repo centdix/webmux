@@ -21,7 +21,7 @@ const PHASE_LABELS: Record<WorktreeCreationPhase, string> = {
   reconciling: "Reconciling",
 };
 
-export type WorktreeSubcommand = "add" | "list" | "open" | "close" | "refresh" | "remove" | "merge" | "send" | "prune" | "restore" | "archive" | "unarchive" | "label" | "tab";
+export type WorktreeSubcommand = "add" | "list" | "open" | "close" | "refresh" | "remove" | "merge" | "send" | "prune" | "restore" | "archive" | "unarchive" | "label" | "profile" | "tab";
 
 type WorktreeListMode = "active" | "all" | "archived";
 
@@ -33,6 +33,7 @@ interface LifecycleServiceLike {
   refreshAgentTerminal(branch: string): Promise<{ branch: string; worktreeId: string }>;
   setWorktreeArchived(branch: string, archived: boolean): Promise<void>;
   setWorktreeLabel(branch: string, label: string | null): Promise<{ label: string | null }>;
+  setWorktreeProfile(branch: string, profile: string): Promise<{ profile: string; restarted: boolean }>;
   removeWorktree(branch: string): Promise<void>;
   mergeWorktree(branch: string): Promise<void>;
   pruneWorktrees(): Promise<PruneWorktreesResult>;
@@ -140,6 +141,19 @@ export function getWorktreeCommandUsage(command: WorktreeSubcommand): string {
         "Options:",
         "  --clear                  Clear the workspace label",
         "  --label <text>           Label text",
+        "  --help                   Show this help message",
+      ].join("\n");
+    case "profile":
+      return [
+        "Usage:",
+        "  webmux profile <branch> <profile>",
+        "",
+        "Switches the worktree to another profile from .webmux.yaml. An open",
+        "worktree is restarted with the new pane layout and commands; a closed",
+        "one picks the new profile up on its next open.",
+        "",
+        "Options:",
+        "  --profile <name>         Profile name (alternative to positional arg)",
         "  --help                   Show this help message",
       ].join("\n");
     case "remove":
@@ -398,6 +412,11 @@ export interface ParsedLabelCommand {
   label: string | null;
 }
 
+export interface ParsedProfileCommand {
+  branch: string;
+  profile: string;
+}
+
 export interface ParsedListCommand {
   mode: WorktreeListMode;
   search: string;
@@ -471,6 +490,62 @@ export function parseLabelCommandArgs(args: string[]): ParsedLabelCommand | null
   return {
     branch,
     label: clear ? null : label,
+  };
+}
+
+export function parseProfileCommandArgs(args: string[]): ParsedProfileCommand | null {
+  let branch: string | null = null;
+  let profile: string | null = null;
+
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (!arg) continue;
+
+    if (arg === "--help" || arg === "-h") {
+      return null;
+    }
+
+    if (arg === "--profile" || arg.startsWith("--profile=")) {
+      if (profile !== null) {
+        throw new CommandUsageError("Cannot use --profile more than once");
+      }
+      const { value, nextIndex } = readOptionValue(args, index, "--profile");
+      profile = value;
+      index = nextIndex;
+      continue;
+    }
+
+    if (arg.startsWith("-")) {
+      throw new CommandUsageError(`Unknown option: ${arg}`);
+    }
+
+    if (!branch) {
+      branch = arg;
+      continue;
+    }
+
+    if (profile !== null) {
+      throw new CommandUsageError("Cannot use --profile with a positional profile");
+    }
+    profile = arg;
+  }
+
+  if (!branch) {
+    throw new CommandUsageError("Missing required argument: <branch>");
+  }
+
+  if (!isValidWorktreeName(branch)) {
+    throw new CommandUsageError("Invalid worktree name");
+  }
+
+  const trimmedProfile = profile?.trim() ?? "";
+  if (!trimmedProfile) {
+    throw new CommandUsageError("Missing required argument: <profile>");
+  }
+
+  return {
+    branch,
+    profile: trimmedProfile,
   };
 }
 
@@ -1106,7 +1181,28 @@ export async function runWorktreeCommand(
       return 0;
     }
 
-    const command: Exclude<WorktreeSubcommand, "add" | "list" | "send" | "prune" | "restore" | "label" | "tab"> = context.command;
+    if (context.command === "profile") {
+      const parsed = parseProfileCommandArgs(context.args);
+      if (!parsed) {
+        stdout(getWorktreeCommandUsage("profile"));
+        return 0;
+      }
+
+      // Switching profiles reopens the worktree, which rewrites control.env —
+      // so it needs the prefixed control URL, same as open/refresh.
+      const runtime = createRuntime({
+        projectDir: context.projectDir,
+        port: context.port,
+        prefix: await resolvePrefix(),
+      });
+      const result = await runtime.lifecycleService.setWorktreeProfile(parsed.branch, parsed.profile);
+      stdout(result.restarted
+        ? `Switched ${parsed.branch} to profile "${result.profile}" and restarted the session`
+        : `Switched ${parsed.branch} to profile "${result.profile}" — applies on next open`);
+      return 0;
+    }
+
+    const command: Exclude<WorktreeSubcommand, "add" | "list" | "send" | "prune" | "restore" | "label" | "profile" | "tab"> = context.command;
     const branch = parseBranchCommandArgs(context.args);
     if (!branch) {
       stdout(getWorktreeCommandUsage(command));

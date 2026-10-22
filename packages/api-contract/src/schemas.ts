@@ -192,6 +192,18 @@ export const SetWorktreeLabelResponseSchema = z.object({
   label: z.string().nullable(),
 });
 
+export const SetWorktreeProfileRequestSchema = z.object({
+  profile: z.string().trim().min(1),
+});
+
+export const SetWorktreeProfileResponseSchema = z.object({
+  ok: z.literal(true),
+  profile: z.string(),
+  /** True when the tmux session was rebuilt with the new profile's panes.
+   *  False when the worktree was closed — the new profile applies on next open. */
+  restarted: z.boolean(),
+});
+
 export const ToggleEnabledRequestSchema = z.object({
   enabled: z.boolean(),
 });
@@ -253,6 +265,7 @@ export const PrEntrySchema = z.object({
   repo: z.string(),
   number: z.number(),
   state: z.enum(["open", "closed", "merged"]),
+  isDraft: z.boolean(),
   url: z.string(),
   updatedAt: z.string(),
   ciStatus: z.enum(["none", "pending", "success", "failed"]),
@@ -710,6 +723,8 @@ export type SetWorktreeArchivedRequest = z.infer<typeof SetWorktreeArchivedReque
 export type SetWorktreeArchivedResponse = z.infer<typeof SetWorktreeArchivedResponseSchema>;
 export type SetWorktreeLabelRequest = z.infer<typeof SetWorktreeLabelRequestSchema>;
 export type SetWorktreeLabelResponse = z.infer<typeof SetWorktreeLabelResponseSchema>;
+export type SetWorktreeProfileRequest = z.infer<typeof SetWorktreeProfileRequestSchema>;
+export type SetWorktreeProfileResponse = z.infer<typeof SetWorktreeProfileResponseSchema>;
 export type ToggleEnabledRequest = z.infer<typeof ToggleEnabledRequestSchema>;
 export type SendWorktreePromptRequest = z.infer<typeof SendWorktreePromptRequestSchema>;
 export type AgentsSendMessageRequest = z.infer<typeof AgentsSendMessageRequestSchema>;

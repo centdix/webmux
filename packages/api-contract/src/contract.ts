@@ -32,6 +32,8 @@ import {
   ProjectWorktreeSnapshotSchema,
   SetWorktreeLabelRequestSchema,
   SetWorktreeLabelResponseSchema,
+  SetWorktreeProfileRequestSchema,
+  SetWorktreeProfileResponseSchema,
   ToggleEnabledRequestSchema,
   WorktreeDiffResponseSchema,
   WorktreeListResponseSchema,
@@ -77,6 +79,7 @@ export const apiPaths = {
   syncWorktreePrs: "/api/worktrees/:name/sync-prs",
   postWorktreeToLinear: "/api/worktrees/:name/linear/post",
   setWorktreeLabel: "/api/worktrees/:name/label",
+  setWorktreeProfile: "/api/worktrees/:name/profile",
   sendWorktreePrompt: "/api/worktrees/:name/send",
   createWorktreeTab: "/api/worktrees/:name/tabs",
   selectWorktreeTab: "/api/worktrees/:name/tabs/:tabId/select",
@@ -329,6 +332,16 @@ export const apiContract = c.router({
     body: SetWorktreeLabelRequestSchema,
     responses: {
       200: SetWorktreeLabelResponseSchema,
+      ...commonErrorResponses,
+    },
+  },
+  setWorktreeProfile: {
+    method: "PUT",
+    path: apiPaths.setWorktreeProfile,
+    pathParams: WorktreeNameParamsSchema,
+    body: SetWorktreeProfileRequestSchema,
+    responses: {
+      200: SetWorktreeProfileResponseSchema,
       ...commonErrorResponses,
     },
   },

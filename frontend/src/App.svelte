@@ -15,6 +15,7 @@
   import LinearPostDialog from "./lib/LinearPostDialog.svelte";
   import MobileChatSurface from "./lib/MobileChatSurface.svelte";
   import WorktreeLabelDialog from "./lib/WorktreeLabelDialog.svelte";
+  import WorktreeProfileDialog from "./lib/WorktreeProfileDialog.svelte";
   import SidebarRepoRow from "./lib/SidebarRepoRow.svelte";
   import ProjectSwitcher from "./lib/ProjectSwitcher.svelte";
   import MigrationBanner from "./lib/MigrationBanner.svelte";
@@ -68,6 +69,7 @@
     refreshWorktreeAgentTerminal,
     selectWorktreeTab,
     setWorktreeLabel,
+    setWorktreeProfile,
     subscribeNotifications,
   } from "./lib/api";
   import TabBar from "./lib/TabBar.svelte";
@@ -112,6 +114,9 @@
   let labelBranch = $state<string | null>(null);
   let labelLoading = $state(false);
   let labelError = $state("");
+  let profileBranch = $state<string | null>(null);
+  let profileLoading = $state(false);
+  let profileError = $state("");
   let removingBranches = $state<Set<string>>(new Set());
   let showCreateDialog = $state(false);
   let showSettingsDialog = $state(false);
@@ -442,6 +447,9 @@
   );
   let labelWorktree = $derived(
     labelBranch ? worktrees.find((w) => w.branch === labelBranch) : undefined,
+  );
+  let profileWorktree = $derived(
+    profileBranch ? worktrees.find((w) => w.branch === profileBranch) : undefined,
   );
   let canConnect = $derived(!!selectedBranch && selectedWorktree?.mux === "✓" && !selectedWorktree?.creating);
   let showWebChat = $derived(useWebChatUi && canConnect && worktreeSupportsChat(selectedWorktree));
@@ -780,6 +788,40 @@
       labelError = errorMessage(err);
     } finally {
       labelLoading = false;
+    }
+  }
+
+  function openProfileDialog(branch: string): void {
+    profileBranch = branch;
+    profileError = "";
+  }
+
+  async function handleProfileChange(profile: string): Promise<void> {
+    const branch = profileBranch;
+    if (!branch) return;
+
+    profileLoading = true;
+    profileError = "";
+    try {
+      const result = await setWorktreeProfile(branch, profile);
+      profileBranch = null;
+      await refresh();
+      if (result.restarted) {
+        terminalSessionRevisions = {
+          ...terminalSessionRevisions,
+          [branch]: (terminalSessionRevisions[branch] ?? 0) + 1,
+        };
+      }
+      showToast({
+        tone: "success",
+        message: result.restarted
+          ? `Switched ${branch} to the "${result.profile}" profile`
+          : `Switched ${branch} to the "${result.profile}" profile — applies on next open`,
+      });
+    } catch (err) {
+      profileError = errorMessage(err);
+    } finally {
+      profileLoading = false;
     }
   }
 
@@ -1228,6 +1270,7 @@
           mergeBranch = branch;
         }}
         onremove={(b) => (removeBranch = b)}
+        oneditprofile={openProfileDialog}
         oncreatesubworktree={openSubworktreeDialog}
         onposttolinear={handlePostToLinear}
       />
@@ -1447,6 +1490,22 @@
     oncancel={() => {
       labelBranch = null;
       labelError = "";
+    }}
+  />
+{/if}
+
+{#if profileBranch && profileWorktree}
+  <WorktreeProfileDialog
+    branch={profileWorktree.branch}
+    profiles={config.profiles}
+    currentProfile={profileWorktree.profile}
+    isOpen={profileWorktree.mux === "✓"}
+    loading={profileLoading}
+    error={profileError}
+    onconfirm={(profile) => { void handleProfileChange(profile); }}
+    oncancel={() => {
+      profileBranch = null;
+      profileError = "";
     }}
   />
 {/if}

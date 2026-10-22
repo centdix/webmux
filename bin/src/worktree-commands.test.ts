@@ -9,6 +9,7 @@ import {
   parseBranchCommandArgs,
   parseLabelCommandArgs,
   parseListCommandArgs,
+  parseProfileCommandArgs,
   parseSendCommandArgs,
   parseTabCommandArgs,
   runWorktreeCommand,
@@ -48,6 +49,10 @@ function stubLifecycleService(calls: Array<{ method: string; value: unknown }>) 
     async setWorktreeLabel(branch: string, label: string | null): Promise<{ label: string | null }> {
       calls.push({ method: "setWorktreeLabel", value: { branch, label } });
       return { label };
+    },
+    async setWorktreeProfile(branch: string, profile: string): Promise<{ profile: string; restarted: boolean }> {
+      calls.push({ method: "setWorktreeProfile", value: { branch, profile } });
+      return { profile, restarted: true };
     },
     async removeWorktree(branch: string): Promise<void> {
       calls.push({ method: "removeWorktree", value: branch });
@@ -339,6 +344,39 @@ describe("parseLabelCommandArgs", () => {
   });
 });
 
+describe("parseProfileCommandArgs", () => {
+  it("parses branch and profile name", () => {
+    expect(parseProfileCommandArgs(["feature/search", "full"])).toEqual({
+      branch: "feature/search",
+      profile: "full",
+    });
+  });
+
+  it("parses --profile", () => {
+    expect(parseProfileCommandArgs(["feature/search", "--profile=full"])).toEqual({
+      branch: "feature/search",
+      profile: "full",
+    });
+  });
+
+  it("returns null for help", () => {
+    expect(parseProfileCommandArgs(["--help"])).toBeNull();
+  });
+
+  it("requires a profile name", () => {
+    expect(() => parseProfileCommandArgs(["feature/search"])).toThrow("Missing required argument: <profile>");
+  });
+
+  it("rejects --profile with a positional profile", () => {
+    expect(() => parseProfileCommandArgs(["feature/search", "--profile", "full", "slim"]))
+      .toThrow("Cannot use --profile with a positional profile");
+  });
+
+  it("rejects invalid worktree names", () => {
+    expect(() => parseProfileCommandArgs(["feature..search", "full"])).toThrow("Invalid worktree name");
+  });
+});
+
 describe("runWorktreeCommand", () => {
   it("dispatches add through the lifecycle service and switches to tmux", async () => {
     const { runtime, calls } = makeRuntime();
@@ -608,6 +646,28 @@ describe("runWorktreeCommand", () => {
     expect(stdout).toEqual(["Cleared label for feature/search"]);
   });
 
+  it("dispatches profile switches through the lifecycle service", async () => {
+    const { runtime, calls } = makeRuntime();
+    const stdout: string[] = [];
+
+    const exitCode = await runWorktreeCommand(
+      {
+        command: "profile",
+        args: ["feature/search", "full"],
+        projectDir: "/repo",
+        port: 5111,
+      },
+      {
+        createRuntime: () => runtime,
+        stdout: (message) => stdout.push(message),
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(calls).toEqual([{ method: "setWorktreeProfile", value: { branch: "feature/search", profile: "full" } }]);
+    expect(stdout).toEqual(['Switched feature/search to profile "full" and restarted the session']);
+  });
+
   it("prints subcommand help without creating a runtime", async () => {
     let createRuntimeCalled = false;
     const stdout: string[] = [];
@@ -818,6 +878,9 @@ describe("runWorktreeCommand", () => {
               throw new Error("not used");
             },
             async setWorktreeLabel(): Promise<{ label: string | null }> {
+              throw new Error("not used");
+            },
+            async setWorktreeProfile(): Promise<{ profile: string; restarted: boolean }> {
               throw new Error("not used");
             },
             async removeWorktree(): Promise<void> {

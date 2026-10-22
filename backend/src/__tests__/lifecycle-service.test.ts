@@ -304,6 +304,21 @@ const NO_DEFAULT_PROFILE_CONFIG: ProjectConfig = {
   },
 };
 
+const SWITCHABLE_PROFILE_CONFIG: ProjectConfig = {
+  ...TEST_CONFIG,
+  profiles: {
+    ...TEST_CONFIG.profiles,
+    full: {
+      runtime: "host",
+      envPassthrough: [],
+      panes: [
+        { id: "agent", kind: "agent", focus: true },
+        { id: "backend", kind: "command", split: "right", command: "bun run dev" },
+      ],
+    },
+  },
+};
+
 function makeLifecycleService(
   repoRoot: string,
   tmux: FakeTmuxGateway,
@@ -1525,6 +1540,141 @@ describe("LifecycleService", () => {
     expect(await Bun.file(paths.metaPath).exists()).toBe(false);
     expect(await Bun.file(paths.runtimeEnvPath).exists()).toBe(false);
     expect(await Bun.file(paths.controlEnvPath).exists()).toBe(false);
+  });
+
+  it("rebuilds an open worktree session with the panes of the profile it switches to", async () => {
+    const repoRoot = await initRepo();
+    const runtime = new ProjectRuntime();
+    const tmux = new FakeTmuxGateway();
+    const lifecycle = makeLifecycleService(
+      repoRoot,
+      tmux,
+      runtime,
+      new FakeDockerGateway(),
+      new FakeHookRunner(),
+      SWITCHABLE_PROFILE_CONFIG,
+    );
+
+    await lifecycle.createWorktree({ branch: "feature-profile", profile: "default" });
+    tmux.commands.length = 0;
+
+    const result = await lifecycle.setWorktreeProfile("feature-profile", "full");
+
+    expect(result).toEqual({ profile: "full", restarted: true });
+
+    const worktreePath = join(repoRoot, "__worktrees", "feature-profile");
+    const gitDir = new BunGitGateway().resolveWorktreeGitDir(worktreePath);
+    const meta = await readWorktreeMeta(gitDir);
+    expect(meta?.profile).toBe("full");
+    expect(meta?.runtime).toBe("host");
+    expect(runtime.getWorktreeByBranch("feature-profile")?.profile).toBe("full");
+
+    expect(tmux.listWindows()).toEqual([
+      {
+        sessionName: buildProjectSessionName(repoRoot),
+        windowName: buildWorktreeWindowName("feature-profile"),
+        paneCount: 2,
+      },
+    ]);
+    expect(tmux.commands.map((entry) => entry.command)).toContainEqual("bun run dev");
+    expect(tmux.commands[0]?.command).toContain("claude");
+  });
+
+  it("keeps a closed worktree closed and applies the new profile on the next open", async () => {
+    const repoRoot = await initRepo();
+    const runtime = new ProjectRuntime();
+    const tmux = new FakeTmuxGateway();
+    const lifecycle = makeLifecycleService(
+      repoRoot,
+      tmux,
+      runtime,
+      new FakeDockerGateway(),
+      new FakeHookRunner(),
+      SWITCHABLE_PROFILE_CONFIG,
+    );
+
+    await lifecycle.createWorktree({ branch: "feature-profile-closed", profile: "default" });
+    await lifecycle.closeWorktree("feature-profile-closed");
+
+    const result = await lifecycle.setWorktreeProfile("feature-profile-closed", "full");
+
+    expect(result).toEqual({ profile: "full", restarted: false });
+    expect(tmux.listWindows()).toEqual([]);
+
+    tmux.commands.length = 0;
+    await lifecycle.openWorktree("feature-profile-closed");
+
+    expect(tmux.listWindows()[0]?.paneCount).toBe(2);
+    expect(tmux.commands.map((entry) => entry.command)).toContainEqual("bun run dev");
+  });
+
+  it("tears down the container when a worktree leaves its docker profile", async () => {
+    const repoRoot = await initRepo();
+    const runtime = new ProjectRuntime();
+    const tmux = new FakeTmuxGateway();
+    const docker = new FakeDockerGateway();
+    const lifecycle = makeLifecycleService(
+      repoRoot,
+      tmux,
+      runtime,
+      docker,
+      new FakeHookRunner(),
+      SWITCHABLE_PROFILE_CONFIG,
+    );
+
+    await lifecycle.createWorktree({ branch: "feature-profile-docker", profile: "sandbox" });
+
+    const result = await lifecycle.setWorktreeProfile("feature-profile-docker", "full");
+
+    expect(result).toEqual({ profile: "full", restarted: true });
+    expect(docker.removed).toEqual(["feature-profile-docker"]);
+    expect(docker.launched).toHaveLength(1);
+
+    const worktreePath = join(repoRoot, "__worktrees", "feature-profile-docker");
+    const gitDir = new BunGitGateway().resolveWorktreeGitDir(worktreePath);
+    expect((await readWorktreeMeta(gitDir))?.runtime).toBe("host");
+    const controlEnvText = await Bun.file(getWorktreeStoragePaths(gitDir).controlEnvPath).text();
+    expect(controlEnvText).toContain("WEBMUX_CONTROL_URL=http://127.0.0.1:5111/api/runtime/events");
+  });
+
+  it("leaves the session untouched when the profile is unchanged", async () => {
+    const repoRoot = await initRepo();
+    const runtime = new ProjectRuntime();
+    const tmux = new FakeTmuxGateway();
+    const lifecycle = makeLifecycleService(
+      repoRoot,
+      tmux,
+      runtime,
+      new FakeDockerGateway(),
+      new FakeHookRunner(),
+      SWITCHABLE_PROFILE_CONFIG,
+    );
+
+    await lifecycle.createWorktree({ branch: "feature-profile-same", profile: "default" });
+    tmux.commands.length = 0;
+    tmux.createdWindows.length = 0;
+
+    const result = await lifecycle.setWorktreeProfile("feature-profile-same", "default");
+
+    expect(result).toEqual({ profile: "default", restarted: false });
+    expect(tmux.createdWindows).toEqual([]);
+    expect(tmux.commands).toEqual([]);
+  });
+
+  it("rejects switching to an unknown profile", async () => {
+    const repoRoot = await initRepo();
+    const runtime = new ProjectRuntime();
+    const tmux = new FakeTmuxGateway();
+    const lifecycle = makeLifecycleService(repoRoot, tmux, runtime);
+
+    await lifecycle.createWorktree({ branch: "feature-profile-unknown" });
+
+    await expect(lifecycle.setWorktreeProfile("feature-profile-unknown", "nope"))
+      .rejects.toMatchObject({ status: 400, message: "Unknown profile: nope" });
+
+    const worktreePath = join(repoRoot, "__worktrees", "feature-profile-unknown");
+    const gitDir = new BunGitGateway().resolveWorktreeGitDir(worktreePath);
+    expect((await readWorktreeMeta(gitDir))?.profile).toBe("default");
   });
 
   it("creates a managed docker worktree through the container runtime path", async () => {

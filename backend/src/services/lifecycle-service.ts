@@ -44,7 +44,7 @@ import {
 } from "./agent-service";
 import { getAgentDefinition, type AgentDefinition } from "./agent-registry";
 import type { ReconciliationService } from "./reconciliation-service";
-import { buildTmuxPaneSystemPrompt, ensureSessionLayout, planSessionLayout } from "./session-service";
+import { buildTmuxPaneSystemPrompt, ensureSessionLayout, isWorktreeOpen, planSessionLayout } from "./session-service";
 import { ArchiveStateService } from "./archive-state-service";
 import {
   createManagedWorktree,
@@ -765,6 +765,48 @@ export class LifecycleService {
       await writeWorktreeMeta(resolved.gitDir, nextMeta);
       await this.deps.reconciliation.reconcile(this.deps.projectRoot, { force: true });
       return { label: normalizedLabel };
+    } catch (error) {
+      throw this.wrapOperationError(error);
+    }
+  }
+
+  /** Switch a worktree to another profile. When the worktree is open its tmux
+   *  window is rebuilt from the new profile's pane templates (resuming the agent
+   *  conversation); when it is closed the new profile applies on the next open. */
+  async setWorktreeProfile(branch: string, profileName: string): Promise<{
+    profile: string;
+    restarted: boolean;
+  }> {
+    try {
+      const resolved = await this.resolveExistingWorktree(branch);
+      if (!resolved.meta) {
+        throw new LifecycleError(`Worktree ${branch} has no managed metadata to reprofile`, 409);
+      }
+      const { profileName: nextProfileName, profile } = this.resolveProfile(profileName);
+      const wasOpen = isWorktreeOpen(this.deps.tmux, this.deps.projectRoot, branch);
+      if (resolved.meta.profile === nextProfileName) {
+        return { profile: nextProfileName, restarted: false };
+      }
+
+      // Containers are keyed by branch and reused on launch, so a worktree leaving
+      // its docker profile — for host or for another image — needs a teardown first.
+      if (resolved.meta.runtime === "docker") {
+        await this.deps.docker.removeContainer(branch);
+      }
+
+      await writeWorktreeMeta(resolved.gitDir, {
+        ...resolved.meta,
+        profile: nextProfileName,
+        runtime: profile.runtime,
+      });
+
+      if (wasOpen) {
+        await this.openWorktree(branch);
+      } else {
+        await this.deps.reconciliation.reconcile(this.deps.projectRoot, { force: true });
+      }
+
+      return { profile: nextProfileName, restarted: wasOpen };
     } catch (error) {
       throw this.wrapOperationError(error);
     }

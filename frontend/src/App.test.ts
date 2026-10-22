@@ -124,6 +124,7 @@ vi.mock("./lib/api", () => ({
   refreshWorktreeAgentTerminal: vi.fn(),
   sendWorktreeConversationMessage: vi.fn(),
   setWorktreeLabel: vi.fn(),
+  setWorktreeProfile: vi.fn(),
   postWorktreeToLinear: vi.fn(),
   subscribeNotifications: vi.fn(),
   uploadFiles: vi.fn(),
@@ -144,6 +145,7 @@ import {
   postWorktreeToLinear,
   refreshWorktreeAgentTerminal,
   setWorktreeLabel,
+  setWorktreeProfile,
   subscribeNotifications,
 } from "./lib/api";
 import { WEB_CHAT_UI_STORAGE_KEY } from "./lib/utils";
@@ -453,6 +455,7 @@ describe("App create selection", () => {
     vi.mocked(connectWorktreeConversationStream).mockReturnValue(() => {});
     vi.mocked(refreshWorktreeAgentTerminal).mockResolvedValue(undefined);
     vi.mocked(setWorktreeLabel).mockResolvedValue(null);
+    vi.mocked(setWorktreeProfile).mockResolvedValue({ profile: "full", restarted: true });
     vi.mocked(postWorktreeToLinear).mockResolvedValue({
       ok: true,
       issueId: "ENG-42",
@@ -763,6 +766,28 @@ describe("App create selection", () => {
       expect(setWorktreeLabel).toHaveBeenCalledWith("feature/active", "Search ranking");
     });
     expect(screen.getAllByText("Search ranking").length).toBeGreaterThan(0);
+  });
+
+  it("switches a worktree to another profile from the sidebar row menu", async () => {
+    vi.mocked(api.fetchConfig).mockResolvedValue(createConfig({
+      profiles: [{ name: "slim" }, { name: "full" }],
+      defaultProfileName: "slim",
+    }));
+    vi.mocked(fetchWorktrees).mockResolvedValue([
+      createWorktree("feature/active", { profile: "slim", mux: "✓" }),
+    ]);
+
+    render(App);
+
+    await screen.findByTitle("feature/active");
+    await fireEvent.click(screen.getByRole("button", { name: /actions for feature\/active/i }));
+    await fireEvent.click(screen.getByRole("button", { name: "Change profile…" }));
+    await fireEvent.click(screen.getByRole("radio", { name: "full" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Switch" }));
+
+    await waitFor(() => {
+      expect(setWorktreeProfile).toHaveBeenCalledWith("feature/active", "full");
+    });
   });
 
   it("shows a setup message in the Linear panel when LINEAR_API_KEY is missing", async () => {
