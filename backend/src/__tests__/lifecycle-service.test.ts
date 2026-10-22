@@ -1573,6 +1573,8 @@ describe("LifecycleService", () => {
       {
         sessionName: buildProjectSessionName(repoRoot),
         windowName: buildWorktreeWindowName("feature-profile"),
+        worktreeId: expect.any(String),
+        role: "main",
         paneCount: 2,
       },
     ]);
