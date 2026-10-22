@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { Subprocess } from "bun";
 import pkg from "../../package.json";
 import { webmuxConfigEnvPath } from "../../backend/src/adapters/webmux-paths";
+import { applyEnvText } from "./env-file";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -187,27 +188,14 @@ function isWorktreeCommand(command: RootCommand): command is "add" | "list" | "o
 
 // ── Load env files from CWD (.env.local overrides .env) ─────────────────────
 
-/** Load a `.env` file from CWD into `process.env`, returning the keys it added.
- *  Those keys are the launch project's env: webmux tracks them so it can keep
- *  them out of the tmux server's *global* environment (see WEBMUX_PROJECT_ENV_KEYS),
- *  where they would otherwise leak into every project's sessions and panes. */
+/** Load a `.env` file into `process.env`, returning every key it defines (see
+ *  applyEnvText). Those keys are the launch project's env: webmux tracks them so
+ *  it can keep them out of the tmux server's *global* environment (see
+ *  WEBMUX_PROJECT_ENV_KEYS), where they would otherwise leak into every
+ *  project's sessions and panes. */
 async function loadEnvFile(path: string): Promise<string[]> {
   if (!existsSync(path)) return [];
-  const added: string[] = [];
-  const lines = (await Bun.file(path).text()).split("\n");
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const eq = trimmed.indexOf("=");
-    if (eq === -1) continue;
-    const key = trimmed.slice(0, eq).trim();
-    const val = trimmed.slice(eq + 1).trim().replace(/^["']|["']$/g, "");
-    if (!(key in process.env)) {
-      process.env[key] = val;
-      added.push(key);
-    }
-  }
-  return added;
+  return applyEnvText(await Bun.file(path).text(), process.env);
 }
 
 // ── Browser app mode ─────────────────────────────────────────────────────────
