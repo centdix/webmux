@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ensureAgentRuntimeArtifacts, opencodeSessionsPath } from "../adapters/agent-runtime";
+import { opencodeSessionsPath } from "../agents/opencode";
+import { ensureAgentRuntimeArtifacts } from "../adapters/agent-runtime";
 import { ensureWorktreeStorageDirs } from "../adapters/fs";
 
 async function writeControlEnv(agentCtlPath: string, controlUrl: string): Promise<void> {

@@ -1,5 +1,6 @@
 import { chmod, mkdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { opencodeSessionsPath } from "../agents/opencode";
 import { piExtensionPath } from "../agents/pi";
 import { getWorktreeStoragePaths } from "./fs";
 
@@ -325,13 +326,6 @@ export default function (pi) {
   })
 }
 `;
-}
-
-/** Session ids the generated opencode plugin records, newest last. opencode keeps its
- *  transcripts in a database rather than per-session files, so this is what session
- *  discovery reads instead of scanning a well-known agent directory. */
-export function opencodeSessionsPath(worktreePath: string): string {
-  return join(worktreePath, ".opencode", "webmux-sessions.jsonl");
 }
 
 /** opencode has no shell-hook config: lifecycle reporting goes through a generated plugin

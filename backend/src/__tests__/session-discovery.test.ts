@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtemp, rm, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { opencodeSessionsPath } from "../adapters/agent-runtime";
+import { opencodeSessionsPath } from "../agents/opencode";
 import {
   captureNewSessionId,
   FileSessionDiscovery,

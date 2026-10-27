@@ -1,4 +1,7 @@
-import { quoteShell } from "./shared";
+import { readdir, stat } from "node:fs/promises";
+import { basename, join } from "node:path";
+import { encodeClaudeProjectDir } from "../adapters/claude-cli";
+import { home, newestFirst, quoteShell, type StampedSession } from "./shared";
 import type { AgentAdapter, BuiltInLaunchInput } from "./types";
 
 function buildClaudeInvocation(input: BuiltInLaunchInput): string {
@@ -25,6 +28,20 @@ function buildClaudeInvocation(input: BuiltInLaunchInput): string {
   return `claude${yoloFlag}${promptSuffix}`;
 }
 
+async function listClaudeSessionIds(cwd: string): Promise<string[]> {
+  const dir = join(home(), ".claude", "projects", encodeClaudeProjectDir(cwd));
+  const names = await readdir(dir).catch((): string[] => []);
+  const stamped = await Promise.all(
+    names
+      .filter((name) => name.endsWith(".jsonl"))
+      .map(async (name): Promise<StampedSession | null> => {
+        const info = await stat(join(dir, name)).catch(() => null);
+        return info ? { sessionId: basename(name, ".jsonl"), mtimeMs: info.mtimeMs } : null;
+      }),
+  );
+  return newestFirst(stamped.filter((entry): entry is StampedSession => entry !== null));
+}
+
 export const claudeAdapter: AgentAdapter = {
   id: "claude",
   label: "Claude",
@@ -38,4 +55,5 @@ export const claudeAdapter: AgentAdapter = {
   chatProvider: "claude",
   supportsPinnedSessionId: true,
   buildCommand: buildClaudeInvocation,
+  listSessionIds: listClaudeSessionIds,
 };

@@ -36,4 +36,6 @@ export interface AgentAdapter {
   supportsPinnedSessionId: boolean;
   /** Shell command that launches the agent (without the runtime bootstrap). */
   buildCommand(input: BuiltInLaunchInput): string;
+  /** Session ids for `cwd`, newest first. */
+  listSessionIds(cwd: string): Promise<string[]>;
 }

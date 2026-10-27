@@ -1,11 +1,19 @@
 import { join } from "node:path";
-import { quoteShell } from "./shared";
+import { isRecord } from "../lib/type-guards";
+import { newestFirst, quoteShell, type StampedSession } from "./shared";
 import type { AgentAdapter, BuiltInLaunchInput } from "./types";
 
 /** File the opencode launch command writes the profile system prompt to, referenced from
  *  `OPENCODE_CONFIG_CONTENT.instructions` because opencode has no `--append-system-prompt`. */
 export function opencodeInstructionsPath(worktreePath: string): string {
   return join(worktreePath, ".opencode", "webmux-instructions.md");
+}
+
+/** Session ids the generated opencode plugin records, newest last. opencode keeps its
+ *  transcripts in a database rather than per-session files, so this is what session
+ *  discovery reads instead of scanning a well-known agent directory. */
+export function opencodeSessionsPath(worktreePath: string): string {
+  return join(worktreePath, ".opencode", "webmux-sessions.jsonl");
 }
 
 /** opencode has no `--append-system-prompt`: the only way to add instructions to a launch is
@@ -41,6 +49,27 @@ function buildOpencodeInvocation(input: BuiltInLaunchInput): string {
   return `${prefix}opencode${autoFlag}${promptFlag}`;
 }
 
+async function listOpencodeSessionIds(cwd: string): Promise<string[]> {
+  const file = Bun.file(opencodeSessionsPath(cwd));
+  const content = await file.text().catch((): string => "");
+  const stamped = content
+    .split("\n")
+    .filter((line) => line.trim().length > 0)
+    .map((line): StampedSession | null => {
+      try {
+        const parsed: unknown = JSON.parse(line);
+        if (!isRecord(parsed)) return null;
+        const { id, at } = parsed;
+        return typeof id === "string" && typeof at === "number" ? { sessionId: id, mtimeMs: at } : null;
+      } catch {
+        return null;
+      }
+    })
+    .filter((entry): entry is StampedSession => entry !== null);
+
+  return newestFirst(stamped);
+}
+
 export const opencodeAdapter: AgentAdapter = {
   id: "opencode",
   label: "opencode",
@@ -56,4 +85,5 @@ export const opencodeAdapter: AgentAdapter = {
   chatProvider: null,
   supportsPinnedSessionId: false,
   buildCommand: buildOpencodeInvocation,
+  listSessionIds: listOpencodeSessionIds,
 };
