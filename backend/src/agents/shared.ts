@@ -1,3 +1,19 @@
+export interface CommandHookConfig {
+  type: "command";
+  command: string;
+  async?: boolean;
+  timeout?: number;
+}
+
+export interface HookMatcherConfig {
+  matcher?: string;
+  hooks: CommandHookConfig[];
+}
+
+export interface HookConfigFile {
+  hooks: Record<string, HookMatcherConfig[]>;
+}
+
 export interface StampedSession {
   sessionId: string;
   mtimeMs: number;

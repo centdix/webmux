@@ -1,8 +1,9 @@
-import { readdir, stat } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { mkdir, readdir, stat } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { encodeClaudeProjectDir } from "../adapters/claude-cli";
-import { home, newestFirst, quoteShell, type StampedSession } from "./shared";
-import type { AgentAdapter, BuiltInLaunchInput } from "./types";
+import { isRecord } from "../lib/type-guards";
+import { home, newestFirst, quoteShell, type HookConfigFile, type StampedSession } from "./shared";
+import type { AgentAdapter, BuiltInLaunchInput, RuntimeArtifactsContext } from "./types";
 
 function buildClaudeInvocation(input: BuiltInLaunchInput): string {
   const promptSuffix = input.prompt ? ` -- ${quoteShell(input.prompt)}` : "";
@@ -42,6 +43,108 @@ async function listClaudeSessionIds(cwd: string): Promise<string[]> {
   return newestFirst(stamped.filter((entry): entry is StampedSession => entry !== null));
 }
 
+export function claudeSettingsPath(worktreePath: string): string {
+  return join(worktreePath, ".claude", "settings.local.json");
+}
+
+function buildClaudeHookSettings(input: { agentCtlPath: string }): HookConfigFile {
+  return {
+    hooks: {
+      UserPromptSubmit: [
+        {
+          hooks: [
+            {
+              type: "command",
+              command: `${quoteShell(input.agentCtlPath)} claude-user-prompt-submit`,
+              async: true,
+            },
+          ],
+        },
+      ],
+      Notification: [
+        {
+          matcher: "permission_prompt|elicitation_dialog",
+          hooks: [
+            {
+              type: "command",
+              command: `${quoteShell(input.agentCtlPath)} status-changed --lifecycle idle`,
+              async: true,
+            },
+          ],
+        },
+      ],
+      Stop: [
+        {
+          hooks: [
+            {
+              type: "command",
+              command: `${quoteShell(input.agentCtlPath)} agent-stopped`,
+              async: true,
+            },
+          ],
+        },
+      ],
+      PostToolUse: [
+        {
+          hooks: [
+            {
+              type: "command",
+              command: `${quoteShell(input.agentCtlPath)} status-changed --lifecycle running`,
+              async: true,
+            },
+          ],
+        },
+        {
+          matcher: "Bash",
+          hooks: [
+            {
+              type: "command",
+              command: `${quoteShell(input.agentCtlPath)} claude-post-tool-use`,
+              async: true,
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+async function mergeClaudeSettings(
+  settingsPath: string,
+  hookSettings: HookConfigFile["hooks"],
+): Promise<void> {
+  let existing: Record<string, unknown> = {};
+
+  try {
+    const file = Bun.file(settingsPath);
+    if (await file.exists()) {
+      const parsed = await file.json();
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        existing = parsed as Record<string, unknown>;
+      }
+    }
+  } catch {
+    existing = {};
+  }
+
+  const existingHooks = existing.hooks;
+  const mergedHooks = existingHooks && typeof existingHooks === "object" && !Array.isArray(existingHooks)
+    ? { ...existingHooks, ...hookSettings }
+    : hookSettings;
+  const merged = { ...existing, hooks: mergedHooks };
+  await Bun.write(settingsPath, JSON.stringify(merged, null, 2) + "\n");
+}
+
+async function writeClaudeRuntimeArtifacts(ctx: RuntimeArtifactsContext): Promise<void> {
+  const settingsPath = claudeSettingsPath(ctx.worktreePath);
+  await mkdir(dirname(settingsPath), { recursive: true });
+  const hooks = buildClaudeHookSettings(ctx).hooks;
+  if (!isRecord(hooks)) {
+    throw new Error("Invalid Claude hook settings");
+  }
+  await mergeClaudeSettings(settingsPath, hooks);
+}
+
 export const claudeAdapter: AgentAdapter = {
   id: "claude",
   label: "Claude",
@@ -54,6 +157,8 @@ export const claudeAdapter: AgentAdapter = {
   },
   chatProvider: "claude",
   supportsPinnedSessionId: true,
+  generatedArtifactExcludes: [],
+  writeRuntimeArtifacts: writeClaudeRuntimeArtifacts,
   buildCommand: buildClaudeInvocation,
   listSessionIds: listClaudeSessionIds,
 };

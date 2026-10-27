@@ -1,8 +1,8 @@
-import { readdir, stat } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { mkdir, readdir, stat } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { isRecord } from "../lib/type-guards";
-import { home, newestFirst, quoteShell, type StampedSession } from "./shared";
-import type { AgentAdapter, BuiltInLaunchInput } from "./types";
+import { home, newestFirst, quoteShell, type HookConfigFile, type StampedSession } from "./shared";
+import type { AgentAdapter, BuiltInLaunchInput, RuntimeArtifactsContext } from "./types";
 
 function buildCodexInvocation(input: BuiltInLaunchInput): string {
   const promptSuffix = input.prompt ? ` -- ${quoteShell(input.prompt)}` : "";
@@ -58,6 +58,142 @@ async function listCodexSessionIds(cwd: string): Promise<string[]> {
   return newestFirst(stamped.filter((entry): entry is StampedSession => entry !== null));
 }
 
+export function codexHooksPath(worktreePath: string): string {
+  return join(worktreePath, ".codex", "hooks.json");
+}
+
+function buildCodexHookSettings(input: { agentCtlPath: string }): HookConfigFile {
+  const statusCommand = `${quoteShell(input.agentCtlPath)} status-changed --lifecycle running --best-effort`;
+  return {
+    hooks: {
+      SessionStart: [
+        {
+          matcher: "startup|resume|clear",
+          hooks: [
+            {
+              type: "command",
+              command: `${quoteShell(input.agentCtlPath)} codex-session-start`,
+              timeout: 30,
+            },
+          ],
+        },
+      ],
+      UserPromptSubmit: [
+        {
+          hooks: [
+            {
+              type: "command",
+              command: `${quoteShell(input.agentCtlPath)} codex-user-prompt-submit`,
+              timeout: 30,
+            },
+          ],
+        },
+      ],
+      PermissionRequest: [
+        {
+          hooks: [
+            {
+              type: "command",
+              command: `${quoteShell(input.agentCtlPath)} codex-permission-request`,
+              timeout: 30,
+            },
+          ],
+        },
+      ],
+      PreToolUse: [
+        {
+          hooks: [
+            {
+              type: "command",
+              command: statusCommand,
+              timeout: 30,
+            },
+          ],
+        },
+      ],
+      PostToolUse: [
+        {
+          matcher: "Bash",
+          hooks: [
+            {
+              type: "command",
+              command: `${quoteShell(input.agentCtlPath)} codex-post-tool-use`,
+              timeout: 30,
+            },
+          ],
+        },
+      ],
+      Stop: [
+        {
+          hooks: [
+            {
+              type: "command",
+              command: `${quoteShell(input.agentCtlPath)} codex-stop`,
+              timeout: 30,
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+function commandStartsWithAgentCtl(command: string, agentCtlPath: string): boolean {
+  const trimmedCommand = command.trimStart();
+  const quotedAgentCtlPath = quoteShell(agentCtlPath);
+  return trimmedCommand === agentCtlPath
+    || trimmedCommand.startsWith(`${agentCtlPath} `)
+    || trimmedCommand === quotedAgentCtlPath
+    || trimmedCommand.startsWith(`${quotedAgentCtlPath} `);
+}
+
+function isWebmuxHookGroup(group: unknown, agentCtlPath: string): boolean {
+  if (!isRecord(group) || !Array.isArray(group.hooks)) return false;
+  return group.hooks.some((hook) =>
+    isRecord(hook)
+    && typeof hook.command === "string"
+    && commandStartsWithAgentCtl(hook.command, agentCtlPath)
+  );
+}
+
+async function mergeCodexHooksFile(
+  hooksPath: string,
+  hookSettings: HookConfigFile["hooks"],
+  agentCtlPath: string,
+): Promise<void> {
+  let existing: Record<string, unknown> = {};
+
+  try {
+    const file = Bun.file(hooksPath);
+    if (await file.exists()) {
+      const parsed = await file.json();
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        existing = parsed as Record<string, unknown>;
+      }
+    }
+  } catch {
+    existing = {};
+  }
+
+  const existingHooks = isRecord(existing.hooks) ? existing.hooks : {};
+  const mergedHooks: Record<string, unknown> = { ...existingHooks };
+  for (const [eventName, groups] of Object.entries(hookSettings)) {
+    const eventGroups = existingHooks[eventName];
+    const preservedGroups = Array.isArray(eventGroups)
+      ? eventGroups.filter((group) => !isWebmuxHookGroup(group, agentCtlPath))
+      : [];
+    mergedHooks[eventName] = [...preservedGroups, ...groups];
+  }
+
+  await Bun.write(hooksPath, JSON.stringify({ ...existing, hooks: mergedHooks }, null, 2) + "\n");
+}
+
+async function writeCodexRuntimeArtifacts(ctx: RuntimeArtifactsContext): Promise<void> {
+  const hooksPath = codexHooksPath(ctx.worktreePath);
+  await mkdir(dirname(hooksPath), { recursive: true });
+  await mergeCodexHooksFile(hooksPath, buildCodexHookSettings(ctx).hooks, ctx.agentCtlPath);
+}
+
 export const codexAdapter: AgentAdapter = {
   id: "codex",
   label: "Codex",
@@ -70,6 +206,8 @@ export const codexAdapter: AgentAdapter = {
   },
   chatProvider: "codex",
   supportsPinnedSessionId: false,
+  generatedArtifactExcludes: [".codex/hooks.json"],
+  writeRuntimeArtifacts: writeCodexRuntimeArtifacts,
   buildCommand: buildCodexInvocation,
   listSessionIds: listCodexSessionIds,
 };
