@@ -1,5 +1,6 @@
 import { chmod, mkdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { piExtensionPath } from "../agents/pi";
 import { getWorktreeStoragePaths } from "./fs";
 
 /** Agent-runtime files webmux generates inside the worktree. They are excluded locally so
@@ -270,14 +271,6 @@ export interface AgentRuntimeArtifacts {
   piExtensionPath: string;
 }
 
-const PI_EXTENSION_FILENAME = "webmux-pi-extension.js";
-
-/** The pi extension lives in the webmux storage dir next to `webmux-agentctl`, and is loaded
- *  with `pi -e`, so nothing is written into the worktree. */
-export function piExtensionPath(webmuxDir: string): string {
-  return join(webmuxDir, PI_EXTENSION_FILENAME);
-}
-
 /** Lifecycle reporting for pi goes through an extension that shells out to the same
  *  `webmux-agentctl` the other agents' hooks use. */
 function buildPiExtension(input: { agentCtlPath: string }): string {
@@ -332,12 +325,6 @@ export default function (pi) {
   })
 }
 `;
-}
-
-/** File the opencode launch command writes the profile system prompt to, referenced from
- *  `OPENCODE_CONFIG_CONTENT.instructions` because opencode has no `--append-system-prompt`. */
-export function opencodeInstructionsPath(worktreePath: string): string {
-  return join(worktreePath, ".opencode", "webmux-instructions.md");
 }
 
 /** Session ids the generated opencode plugin records, newest last. opencode keeps its

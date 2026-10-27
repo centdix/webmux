@@ -1,8 +1,9 @@
-import { dirname } from "node:path";
-import { opencodeInstructionsPath, piExtensionPath } from "../adapters/agent-runtime";
+import { getAgentAdapter } from "../agents";
+import { quoteShell } from "../agents/shared";
+import type { AgentLaunchMode } from "../agents/types";
 import type { AgentDefinition } from "./agent-registry";
 
-export type AgentLaunchMode = "fresh" | "resume" | "fork";
+export type { AgentLaunchMode };
 
 const DOCKER_PATH_FALLBACK = "/root/.local/bin:/usr/local/bin:/root/.bun/bin:/root/.cargo/bin";
 
@@ -15,147 +16,12 @@ const CUSTOM_AGENT_TEMPLATE_VARS = {
   PROFILE: "WEBMUX_AGENT_PROFILE",
 } as const;
 
-function quoteShell(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
 function buildRuntimeBootstrap(runtimeEnvPath: string): string {
   return `set -a; . ${quoteShell(runtimeEnvPath)}; set +a`;
 }
 
 function buildDockerRuntimeBootstrap(runtimeEnvPath: string): string {
   return `${buildRuntimeBootstrap(runtimeEnvPath)}; export PATH="$PATH:${DOCKER_PATH_FALLBACK}"`;
-}
-
-/** opencode has no `--append-system-prompt`: the only way to add instructions to a launch is
- *  to point the resolved config at an extra instructions file, so the launch writes one.
- *  `OPENCODE_CONFIG_CONTENT` is merged over the user's own opencode config. */
-function buildOpencodeInstructionsPrefix(systemPrompt: string, worktreePath: string): string {
-  const instructionsPath = opencodeInstructionsPath(worktreePath);
-  const inlineConfig = JSON.stringify({ instructions: [instructionsPath] });
-  return `printf '%s' ${quoteShell(systemPrompt)} > ${quoteShell(instructionsPath)}; `
-    + `OPENCODE_CONFIG_CONTENT=${quoteShell(inlineConfig)} `;
-}
-
-function buildOpencodeInvocation(input: {
-  yolo?: boolean;
-  systemPrompt?: string;
-  prompt?: string;
-  worktreePath: string;
-  launchMode?: AgentLaunchMode;
-  resumeConversationId?: string;
-  forkFromSessionId?: string;
-}): string {
-  const prefix = input.systemPrompt
-    ? buildOpencodeInstructionsPrefix(input.systemPrompt, input.worktreePath)
-    : "";
-  // `--auto` approves every permission that isn't explicitly denied by the user's config.
-  const autoFlag = input.yolo ? " --auto" : "";
-  // `--prompt` is submitted as the first turn while the TUI boots, so there is no
-  // paste/Enter race — the same reason claude and codex take the prompt on the CLI.
-  const promptFlag = input.prompt ? ` --prompt ${quoteShell(input.prompt)}` : "";
-
-  if (input.launchMode === "fork" && input.forkFromSessionId) {
-    // `--fork` copies the session's history into a brand new session.
-    return `${prefix}opencode${autoFlag} --session ${quoteShell(input.forkFromSessionId)} --fork${promptFlag}`;
-  }
-  if (input.launchMode === "resume") {
-    const resumeTarget = input.resumeConversationId
-      ? ` --session ${quoteShell(input.resumeConversationId)}`
-      : " --continue";
-    return `${prefix}opencode${autoFlag}${resumeTarget}${promptFlag}`;
-  }
-  return `${prefix}opencode${autoFlag}${promptFlag}`;
-}
-
-/** pi has no permission prompts, so `yolo` needs no flag. The webmux extension is loaded
- *  with `-e` from the storage dir that holds `runtimeEnvPath` (reachable in containers too). */
-function buildPiInvocation(input: {
-  systemPrompt?: string;
-  prompt?: string;
-  runtimeEnvPath: string;
-  launchMode?: AgentLaunchMode;
-  resumeConversationId?: string;
-  forkFromSessionId?: string;
-  pinSessionId?: string;
-}): string {
-  const extension = ` -e ${quoteShell(piExtensionPath(dirname(input.runtimeEnvPath)))}`;
-  const systemPrompt = input.systemPrompt ? ` --append-system-prompt ${quoteShell(input.systemPrompt)}` : "";
-  const promptArg = input.prompt ? ` ${quoteShell(input.prompt)}` : "";
-  const pin = input.pinSessionId ? ` --session-id ${quoteShell(input.pinSessionId)}` : "";
-
-  let session = pin;
-  if (input.launchMode === "fork" && input.forkFromSessionId) {
-    // `--fork` copies the session into a new one; `--session-id` names that new session.
-    session = ` --fork ${quoteShell(input.forkFromSessionId)}${pin}`;
-  } else if (input.launchMode === "resume") {
-    session = input.resumeConversationId ? ` --session ${quoteShell(input.resumeConversationId)}` : " --continue";
-  }
-  return `pi${extension}${systemPrompt}${session}${promptArg}`;
-}
-
-function buildBuiltInAgentInvocation(input: {
-  agent: "claude" | "codex" | "opencode" | "pi";
-  yolo?: boolean;
-  systemPrompt?: string;
-  prompt?: string;
-  worktreePath: string;
-  runtimeEnvPath: string;
-  launchMode?: AgentLaunchMode;
-  resumeConversationId?: string;
-  /** Session to fork from (launchMode "fork"): claude `--fork-session`, codex `fork`, opencode `--fork`, pi `--fork`. */
-  forkFromSessionId?: string;
-  /** Claude/pi: pin the forked child to a session id we generated, so we know it without disk discovery. */
-  pinSessionId?: string;
-}): string {
-  if (input.agent === "opencode") {
-    return buildOpencodeInvocation(input);
-  }
-  if (input.agent === "pi") {
-    return buildPiInvocation(input);
-  }
-
-  const promptSuffix = input.prompt ? ` -- ${quoteShell(input.prompt)}` : "";
-
-  if (input.agent === "codex") {
-    const hooksFlag = " --enable hooks";
-    const yoloFlag = input.yolo ? " --yolo" : "";
-    if (input.launchMode === "fork" && input.forkFromSessionId) {
-      // `codex fork <id>` branches the session into a fresh one with inherited history.
-      return `codex${hooksFlag}${yoloFlag} fork ${quoteShell(input.forkFromSessionId)}${promptSuffix}`;
-    }
-    if (input.launchMode === "resume") {
-      // `codex resume --last` takes the prompt after `--`, so a follow-up is
-      // processed before the TUI starts — no paste/Enter race.
-      const resumeTarget = input.resumeConversationId ? ` ${quoteShell(input.resumeConversationId)}` : " --last";
-      return `codex${hooksFlag}${yoloFlag} resume${resumeTarget}${promptSuffix}`;
-    }
-    if (input.systemPrompt) {
-      return `codex${hooksFlag}${yoloFlag} -c ${quoteShell(`developer_instructions=${input.systemPrompt}`)}${promptSuffix}`;
-    }
-    return `codex${hooksFlag}${yoloFlag}${promptSuffix}`;
-  }
-
-  const yoloFlag = input.yolo ? " --dangerously-skip-permissions" : "";
-  if (input.launchMode === "fork" && input.forkFromSessionId) {
-    // Fork the parent into a NEW session, pinning the child id when provided so
-    // the tab service can track it deterministically.
-    const pin = input.pinSessionId ? ` --session-id ${quoteShell(input.pinSessionId)}` : "";
-    return `claude${yoloFlag} --resume ${quoteShell(input.forkFromSessionId)} --fork-session${pin}${promptSuffix}`;
-  }
-  if (input.launchMode === "resume") {
-    // `--resume <id>` restores a specific session (e.g. a fork on reopen); `--continue`
-    // resumes the most recent. Either way the prompt is submitted as the first new turn,
-    // avoiding the tmux paste/Enter race that hits Claude's TUI before its input loop is ready.
-    const resumeTarget = input.resumeConversationId
-      ? ` --resume ${quoteShell(input.resumeConversationId)}`
-      : " --continue";
-    return `claude${yoloFlag}${resumeTarget}${promptSuffix}`;
-  }
-  if (input.systemPrompt) {
-    return `claude${yoloFlag} --append-system-prompt ${quoteShell(input.systemPrompt)}${promptSuffix}`;
-  }
-  return `claude${yoloFlag}${promptSuffix}`;
 }
 
 function renderCustomCommandTemplate(template: string): string {
@@ -224,8 +90,7 @@ function buildAgentInvocation(input: {
   pinSessionId?: string;
 }): string {
   if (input.agent.kind === "builtin") {
-    return buildBuiltInAgentInvocation({
-      agent: input.agent.implementation.agent,
+    return getAgentAdapter(input.agent.implementation.agent).buildCommand({
       yolo: input.yolo,
       systemPrompt: input.systemPrompt,
       prompt: input.prompt,
