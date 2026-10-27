@@ -316,6 +316,7 @@ function parseCodexStreamLine(
 export const codexAdapter: AgentAdapter = {
   id: "codex",
   label: "Codex",
+  binary: "codex",
   capabilities: {
     terminal: true,
     inAppChat: true,

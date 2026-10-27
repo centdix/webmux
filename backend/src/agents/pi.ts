@@ -184,6 +184,7 @@ function parsePiStreamLine(
 export const piAdapter: AgentAdapter = {
   id: "pi",
   label: "pi",
+  binary: "pi",
   capabilities: {
     terminal: true,
     // pi's session files aren't parsed into dashboard conversations yet — the terminal is the surface.

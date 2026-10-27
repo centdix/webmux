@@ -59,6 +59,8 @@ export interface InitAgentStreamState {
 export interface AgentAdapter {
   id: AgentKind;
   label: string;
+  /** Executable name, used to detect whether the agent is installed. */
+  binary: string;
   capabilities: AgentCapabilities;
   /** Conversation backend the dashboard chat runs on, or null when the agent has none. */
   chatProvider: "claude" | "codex" | null;

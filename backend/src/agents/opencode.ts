@@ -238,6 +238,7 @@ function parseOpencodeStreamLine(
 export const opencodeAdapter: AgentAdapter = {
   id: "opencode",
   label: "opencode",
+  binary: "opencode",
   capabilities: {
     terminal: true,
     // opencode keeps its transcripts in its own database rather than on-disk session
