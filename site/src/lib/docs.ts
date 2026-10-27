@@ -220,7 +220,7 @@ export const worktreeCommands: DocCommand[] = [
   {
     title: "add",
     usage:
-      "webmux add [branch] [--base <branch>] [--profile <name>] [--agent <claude|codex|opencode>] [--prompt <text>] [--env KEY=VALUE] [--detach]",
+      "webmux add [branch] [--base <branch>] [--profile <name>] [--agent <claude|codex|opencode|pi>] [--prompt <text>] [--env KEY=VALUE] [--detach]",
     description: "Create a managed worktree through the same lifecycle the dashboard uses.",
     details: [
       "Branch is optional. When omitted, webmux uses auto_name if configured, otherwise it generates a change-<id> branch name.",
@@ -378,6 +378,9 @@ profiles:
       - hostPath: ~/.local/share/opencode
         guestPath: /root/.local/share/opencode
         writable: true
+      - hostPath: ~/.pi
+        guestPath: /root/.pi
+        writable: true
     panes:
       - id: agent
         kind: agent
@@ -440,7 +443,7 @@ export const configGroups: ConfigGroup[] = [
       },
       {
         key: "workspace.defaultAgent",
-        type: "claude | codex | opencode",
+        type: "claude | codex | opencode | pi",
         required: "no",
         defaultValue: "claude",
         description: "Default agent kind used when a worktree does not specify one explicitly.",
@@ -771,7 +774,7 @@ export const runtimeEnvGroups: ConfigGroup[] = [
         key: "WEBMUX_AGENT",
         type: "string",
         required: "set by webmux",
-        description: "Resolved agent kind, such as claude, codex, or opencode.",
+        description: "Resolved agent kind, such as claude, codex, opencode, or pi.",
       },
       {
         key: "WEBMUX_RUNTIME",

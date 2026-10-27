@@ -1,4 +1,5 @@
-import { opencodeInstructionsPath } from "../adapters/agent-runtime";
+import { dirname } from "node:path";
+import { opencodeInstructionsPath, piExtensionPath } from "../adapters/agent-runtime";
 import type { AgentDefinition } from "./agent-registry";
 
 export type AgentLaunchMode = "fresh" | "resume" | "fork";
@@ -67,21 +68,51 @@ function buildOpencodeInvocation(input: {
   return `${prefix}opencode${autoFlag}${promptFlag}`;
 }
 
+/** pi has no permission prompts, so `yolo` needs no flag. The webmux extension is loaded
+ *  with `-e` from the storage dir that holds `runtimeEnvPath` (reachable in containers too). */
+function buildPiInvocation(input: {
+  systemPrompt?: string;
+  prompt?: string;
+  runtimeEnvPath: string;
+  launchMode?: AgentLaunchMode;
+  resumeConversationId?: string;
+  forkFromSessionId?: string;
+  pinSessionId?: string;
+}): string {
+  const extension = ` -e ${quoteShell(piExtensionPath(dirname(input.runtimeEnvPath)))}`;
+  const systemPrompt = input.systemPrompt ? ` --append-system-prompt ${quoteShell(input.systemPrompt)}` : "";
+  const promptArg = input.prompt ? ` ${quoteShell(input.prompt)}` : "";
+  const pin = input.pinSessionId ? ` --session-id ${quoteShell(input.pinSessionId)}` : "";
+
+  let session = pin;
+  if (input.launchMode === "fork" && input.forkFromSessionId) {
+    // `--fork` copies the session into a new one; `--session-id` names that new session.
+    session = ` --fork ${quoteShell(input.forkFromSessionId)}${pin}`;
+  } else if (input.launchMode === "resume") {
+    session = input.resumeConversationId ? ` --session ${quoteShell(input.resumeConversationId)}` : " --continue";
+  }
+  return `pi${extension}${systemPrompt}${session}${promptArg}`;
+}
+
 function buildBuiltInAgentInvocation(input: {
-  agent: "claude" | "codex" | "opencode";
+  agent: "claude" | "codex" | "opencode" | "pi";
   yolo?: boolean;
   systemPrompt?: string;
   prompt?: string;
   worktreePath: string;
+  runtimeEnvPath: string;
   launchMode?: AgentLaunchMode;
   resumeConversationId?: string;
-  /** Session to fork from (launchMode "fork"): claude `--fork-session`, codex `fork`, opencode `--fork`. */
+  /** Session to fork from (launchMode "fork"): claude `--fork-session`, codex `fork`, opencode `--fork`, pi `--fork`. */
   forkFromSessionId?: string;
-  /** Claude-only: pin the forked child to a session id we generated, so we know it without disk discovery. */
+  /** Claude/pi: pin the forked child to a session id we generated, so we know it without disk discovery. */
   pinSessionId?: string;
 }): string {
   if (input.agent === "opencode") {
     return buildOpencodeInvocation(input);
+  }
+  if (input.agent === "pi") {
+    return buildPiInvocation(input);
   }
 
   const promptSuffix = input.prompt ? ` -- ${quoteShell(input.prompt)}` : "";
@@ -179,6 +210,7 @@ function buildCustomAgentInvocation(input: {
 
 function buildAgentInvocation(input: {
   agent: AgentDefinition;
+  runtimeEnvPath: string;
   yolo?: boolean;
   systemPrompt?: string;
   prompt?: string;
@@ -198,6 +230,7 @@ function buildAgentInvocation(input: {
       systemPrompt: input.systemPrompt,
       prompt: input.prompt,
       worktreePath: input.worktreePath,
+      runtimeEnvPath: input.runtimeEnvPath,
       launchMode: input.launchMode,
       resumeConversationId: input.resumeConversationId,
       forkFromSessionId: input.forkFromSessionId,

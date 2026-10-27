@@ -55,6 +55,9 @@ RUN npm i -g @openai/codex
 # ── opencode ──────────────────────────────────────────────────────────────────
 RUN npm i -g opencode-ai
 
+# ── pi ────────────────────────────────────────────────────────────────────────
+RUN npm i -g @earendil-works/pi-coding-agent
+
 # ── Mermaid CLI ───────────────────────────────────────────────────────────────
 # Skip puppeteer's own Chromium download; reuse Playwright's headless shell
 # (the full "chrome" binary crashes with a crashpad handler error in containers)

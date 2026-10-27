@@ -19,7 +19,7 @@ export const EnabledResponseSchema = z.object({
   enabled: z.boolean(),
 });
 
-export const BuiltInAgentIdSchema = z.enum(["claude", "codex", "opencode"]);
+export const BuiltInAgentIdSchema = z.enum(["claude", "codex", "opencode", "pi"]);
 export const AgentIdSchema = z.string().trim().min(1);
 export const AgentKindSchema = BuiltInAgentIdSchema;
 export const IdeKindSchema = z.enum(["cursor", "vscode"]);

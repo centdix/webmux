@@ -25,6 +25,7 @@ const AGENTS: AgentSummary[] = [
   agent({ id: "claude", kind: "builtin", inAppChat: true }),
   agent({ id: "codex", kind: "builtin", inAppChat: true }),
   agent({ id: "opencode", kind: "builtin", inAppChat: false }),
+  agent({ id: "pi", kind: "builtin", inAppChat: false }),
   agent({ id: "gemini", kind: "custom", inAppChat: false }),
 ];
 
@@ -63,6 +64,7 @@ describe("supportsWorktreeChat", () => {
     expect(supportsWorktreeChat(AGENTS, worktree("claude"))).toBe(true);
     expect(supportsWorktreeChat(AGENTS, worktree("codex"))).toBe(true);
     expect(supportsWorktreeChat(AGENTS, worktree("opencode"))).toBe(false);
+    expect(supportsWorktreeChat(AGENTS, worktree("pi"))).toBe(false);
     expect(supportsWorktreeChat(AGENTS, worktree("gemini"))).toBe(false);
   });
 
@@ -81,6 +83,7 @@ describe("supportsWorktreeTabs", () => {
   it("offers tabs for every built-in agent, including chat-less ones", () => {
     expect(supportsWorktreeTabs(AGENTS, worktree("claude"))).toBe(true);
     expect(supportsWorktreeTabs(AGENTS, worktree("opencode"))).toBe(true);
+    expect(supportsWorktreeTabs(AGENTS, worktree("pi"))).toBe(true);
   });
 
   it("withholds tabs from custom agents and unknown or missing agents", () => {

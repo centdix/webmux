@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { opencodeSessionsPath } from "../adapters/agent-runtime";
@@ -87,5 +87,39 @@ describe("FileSessionDiscovery opencode sessions", () => {
 
     expect(await new FileSessionDiscovery().listSessionIds("opencode", worktreePath)).toEqual(["ses_ok"]);
     expect(await new FileSessionDiscovery().listSessionIds("opencode", emptyWorktree)).toEqual([]);
+  });
+});
+
+describe("FileSessionDiscovery pi sessions", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  it("reads session ids from pi session headers newest first", async () => {
+    const agentDir = await mkdtemp(join(tmpdir(), "webmux-pi-agent-dir-"));
+    tempDirs.push(agentDir);
+    const previous = Bun.env.PI_CODING_AGENT_DIR;
+    Bun.env.PI_CODING_AGENT_DIR = agentDir;
+
+    try {
+      const dir = join(agentDir, "sessions", "--home-x-repo--");
+      const header = (id: string): string => JSON.stringify({ type: "session", version: 3, id, cwd: "/home/x/repo" });
+      await Bun.write(join(dir, "2026-01-01T00-00-00-000Z_old-id.jsonl"), `${header("old-id")}\n`);
+      await Bun.write(join(dir, "2026-01-02T00-00-00-000Z_new-id.jsonl"), `${header("new-id")}\n`);
+      // Unreadable header: the id comes from the file name.
+      await Bun.write(join(dir, "2026-01-03T00-00-00-000Z_named-id.jsonl"), "not json\n");
+      await utimes(join(dir, "2026-01-01T00-00-00-000Z_old-id.jsonl"), 1, 1);
+      await utimes(join(dir, "2026-01-02T00-00-00-000Z_new-id.jsonl"), 3, 3);
+      await utimes(join(dir, "2026-01-03T00-00-00-000Z_named-id.jsonl"), 2, 2);
+
+      const discovery = new FileSessionDiscovery();
+      expect(await discovery.listSessionIds("pi", "/home/x/repo")).toEqual(["new-id", "named-id", "old-id"]);
+      expect(await discovery.listSessionIds("pi", "/home/x/other")).toEqual([]);
+    } finally {
+      if (previous === undefined) delete Bun.env.PI_CODING_AGENT_DIR;
+      else Bun.env.PI_CODING_AGENT_DIR = previous;
+    }
   });
 });

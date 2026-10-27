@@ -7,18 +7,18 @@ import {
   buildManagedShellCommand,
 } from "../services/agent-service";
 
-const BUILT_IN_LABELS = { claude: "Claude", codex: "Codex", opencode: "opencode" } as const;
+const BUILT_IN_LABELS = { claude: "Claude", codex: "Codex", opencode: "opencode", pi: "pi" } as const;
 
-function builtInAgent(id: "claude" | "codex" | "opencode"): AgentDefinition {
+function builtInAgent(id: "claude" | "codex" | "opencode" | "pi"): AgentDefinition {
   return {
     id,
     label: BUILT_IN_LABELS[id],
     kind: "builtin",
     capabilities: {
       terminal: true,
-      inAppChat: id !== "opencode",
-      conversationHistory: id !== "opencode",
-      interrupt: id !== "opencode",
+      inAppChat: id !== "opencode" && id !== "pi",
+      conversationHistory: id !== "opencode" && id !== "pi",
+      interrupt: id !== "opencode" && id !== "pi",
       resume: true,
     },
     implementation: {
@@ -251,6 +251,60 @@ describe("agent-service command builders", () => {
 
     expect(command).toContain("opencode --session 'ses_root' --fork");
     expect(command).not.toContain("--session-id");
+  });
+
+  it("starts pi with the webmux extension, a native system prompt and a trailing prompt", () => {
+    const command = buildAgentPaneCommand({
+      agent: builtInAgent("pi"),
+      runtimeEnvPath: "/tmp/gitdir/webmux/runtime.env",
+      repoRoot: "/repo",
+      worktreePath: "/repo/__worktrees/feature",
+      branch: "feature",
+      profileName: "default",
+      yolo: true,
+      systemPrompt: "stay focused",
+      prompt: "fix the tests",
+    });
+
+    expect(command).toContain(
+      "pi -e '/tmp/gitdir/webmux/webmux-pi-extension.js' --append-system-prompt 'stay focused' 'fix the tests'",
+    );
+    expect(command).not.toContain("yolo");
+  });
+
+  it("resumes pi by session id, and falls back to --continue without one", () => {
+    const base = {
+      agent: builtInAgent("pi"),
+      runtimeEnvPath: "/tmp/gitdir/webmux/runtime.env",
+      repoRoot: "/repo",
+      worktreePath: "/repo/__worktrees/feature",
+      branch: "feature",
+      profileName: "default",
+      launchMode: "resume" as const,
+    };
+
+    expect(buildAgentPaneCommand({ ...base, resumeConversationId: "abc-123" }))
+      .toContain("pi -e '/tmp/gitdir/webmux/webmux-pi-extension.js' --session 'abc-123'");
+    expect(buildAgentPaneCommand(base))
+      .toContain("pi -e '/tmp/gitdir/webmux/webmux-pi-extension.js' --continue");
+  });
+
+  it("forks a pi session into a pinned child id", () => {
+    const command = buildAgentPaneCommand({
+      agent: builtInAgent("pi"),
+      runtimeEnvPath: "/tmp/gitdir/webmux/runtime.env",
+      repoRoot: "/repo",
+      worktreePath: "/repo/__worktrees/feature",
+      branch: "feature",
+      profileName: "default",
+      launchMode: "fork",
+      forkFromSessionId: "root-id",
+      pinSessionId: "child-id",
+    });
+
+    expect(command).toContain(
+      "pi -e '/tmp/gitdir/webmux/webmux-pi-extension.js' --fork 'root-id' --session-id 'child-id'",
+    );
   });
 
   it("builds docker commands that exec inside the container", () => {

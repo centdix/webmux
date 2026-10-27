@@ -978,7 +978,7 @@ export async function runOneshot(parsed: ParsedOneshotCommand, port: number): Pr
     lastStreamRevision: 0,
   };
 
-  // Agents without a readable transcript (opencode, custom agents) have no conversation to
+  // Agents without a readable transcript (opencode, pi, custom agents) have no conversation to
   // stream: the server rejects the socket, so opening it would retry itself into a failure.
   // The run is still driven to completion by the project-state poller below.
   const streamsConversation = await agentHasConversationHistory(ready.worktree.agentName, port);
