@@ -1,11 +1,8 @@
-import { readdir, stat } from "node:fs/promises";
-import { basename, join } from "node:path";
-import { isRecord } from "../lib/type-guards";
-import { opencodeSessionsPath } from "./agent-runtime";
-import { encodeClaudeProjectDir } from "./claude-cli";
+import { getAgentAdapter } from "../agents";
+import type { AgentKind } from "../domain/config";
 
 /** Built-in agents whose session history we can discover. */
-export type DiscoverableAgentKind = "claude" | "codex" | "opencode" | "pi";
+export type DiscoverableAgentKind = AgentKind;
 
 export interface SessionDiscoveryGateway {
   /** Session ids for `cwd`, newest first. Claude reads `~/.claude/projects/<encoded>/`,
@@ -15,128 +12,9 @@ export interface SessionDiscoveryGateway {
   listSessionIds(agent: DiscoverableAgentKind, cwd: string): Promise<string[]>;
 }
 
-interface StampedSession {
-  sessionId: string;
-  mtimeMs: number;
-}
-
-function home(): string {
-  const value = Bun.env.HOME;
-  if (!value) throw new Error("HOME is required to resolve agent sessions");
-  return value;
-}
-
-function newestFirst(sessions: StampedSession[]): string[] {
-  return sessions.sort((left, right) => right.mtimeMs - left.mtimeMs).map((entry) => entry.sessionId);
-}
-
-async function listClaudeSessionIds(cwd: string): Promise<string[]> {
-  const dir = join(home(), ".claude", "projects", encodeClaudeProjectDir(cwd));
-  const names = await readdir(dir).catch((): string[] => []);
-  const stamped = await Promise.all(
-    names
-      .filter((name) => name.endsWith(".jsonl"))
-      .map(async (name): Promise<StampedSession | null> => {
-        const info = await stat(join(dir, name)).catch(() => null);
-        return info ? { sessionId: basename(name, ".jsonl"), mtimeMs: info.mtimeMs } : null;
-      }),
-  );
-  return newestFirst(stamped.filter((entry): entry is StampedSession => entry !== null));
-}
-
-async function readCodexSessionCwdId(path: string): Promise<{ id: string; cwd: string } | null> {
-  try {
-    // The `session_meta` record carrying cwd + id is the first line; 16KB covers it.
-    const head = await Bun.file(path).slice(0, 16384).text();
-    const firstLine = head.split("\n", 1)[0];
-    if (!firstLine) return null;
-    const parsed: unknown = JSON.parse(firstLine);
-    if (!isRecord(parsed) || parsed.type !== "session_meta" || !isRecord(parsed.payload)) return null;
-    const { id, cwd } = parsed.payload;
-    return typeof id === "string" && typeof cwd === "string" ? { id, cwd } : null;
-  } catch {
-    return null;
-  }
-}
-
-async function listCodexSessionIds(cwd: string): Promise<string[]> {
-  const root = join(home(), ".codex", "sessions");
-  const relPaths = await readdir(root, { recursive: true }).catch((): string[] => []);
-  const rollouts = relPaths.filter((rel) => {
-    const name = basename(rel);
-    return name.startsWith("rollout-") && name.endsWith(".jsonl");
-  });
-  const stamped = await Promise.all(
-    rollouts.map(async (rel): Promise<StampedSession | null> => {
-      const path = join(root, rel);
-      const meta = await readCodexSessionCwdId(path);
-      if (!meta || meta.cwd !== cwd) return null;
-      const info = await stat(path).catch(() => null);
-      return info ? { sessionId: meta.id, mtimeMs: info.mtimeMs } : null;
-    }),
-  );
-  return newestFirst(stamped.filter((entry): entry is StampedSession => entry !== null));
-}
-
-async function listOpencodeSessionIds(cwd: string): Promise<string[]> {
-  const file = Bun.file(opencodeSessionsPath(cwd));
-  const content = await file.text().catch((): string => "");
-  const stamped = content
-    .split("\n")
-    .filter((line) => line.trim().length > 0)
-    .map((line): StampedSession | null => {
-      try {
-        const parsed: unknown = JSON.parse(line);
-        if (!isRecord(parsed)) return null;
-        const { id, at } = parsed;
-        return typeof id === "string" && typeof at === "number" ? { sessionId: id, mtimeMs: at } : null;
-      } catch {
-        return null;
-      }
-    })
-    .filter((entry): entry is StampedSession => entry !== null);
-
-  return newestFirst(stamped);
-}
-
-/** pi stores sessions under `<agent dir>/sessions/--<cwd with separators as dashes>--/`. */
-function encodePiSessionDir(cwd: string): string {
-  return `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
-}
-
-async function readPiSessionId(path: string): Promise<string | null> {
-  try {
-    const head = await Bun.file(path).slice(0, 4096).text();
-    const parsed: unknown = JSON.parse(head.split("\n", 1)[0] ?? "");
-    if (isRecord(parsed) && parsed.type === "session" && typeof parsed.id === "string") return parsed.id;
-  } catch {
-    // Fall back to the `<timestamp>_<id>.jsonl` file name.
-  }
-  return basename(path, ".jsonl").split("_").slice(1).join("_") || null;
-}
-
-async function listPiSessionIds(cwd: string): Promise<string[]> {
-  const agentDir = Bun.env.PI_CODING_AGENT_DIR ?? join(home(), ".pi", "agent");
-  const dir = join(agentDir, "sessions", encodePiSessionDir(cwd));
-  const names = await readdir(dir).catch((): string[] => []);
-  const stamped = await Promise.all(
-    names
-      .filter((name) => name.endsWith(".jsonl"))
-      .map(async (name): Promise<StampedSession | null> => {
-        const path = join(dir, name);
-        const [info, sessionId] = await Promise.all([stat(path).catch(() => null), readPiSessionId(path)]);
-        return info && sessionId ? { sessionId, mtimeMs: info.mtimeMs } : null;
-      }),
-  );
-  return newestFirst(stamped.filter((entry): entry is StampedSession => entry !== null));
-}
-
 export class FileSessionDiscovery implements SessionDiscoveryGateway {
   async listSessionIds(agent: DiscoverableAgentKind, cwd: string): Promise<string[]> {
-    if (agent === "claude") return await listClaudeSessionIds(cwd);
-    if (agent === "opencode") return await listOpencodeSessionIds(cwd);
-    if (agent === "pi") return await listPiSessionIds(cwd);
-    return await listCodexSessionIds(cwd);
+    return await getAgentAdapter(agent).listSessionIds(cwd);
   }
 }
 

@@ -1,10 +1,21 @@
 import { existsSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { getAgentAdapter } from "../agents";
+import { closeAssistant } from "../agents/shared";
+import type {
+  InitAgentCommandSpec,
+  InitAgentStreamEvent,
+  InitAgentStreamState,
+  InitPromptSpec,
+} from "../agents/types";
+import type { AgentKind } from "../domain/config";
 import { detectProjectName, run } from "../lib/shell";
+import { isRecord } from "../lib/type-guards";
 
-export type InitAuthoringChoice = "claude" | "codex" | "opencode" | "pi" | "manual";
-export type InitAgent = Exclude<InitAuthoringChoice, "manual">;
+export type { InitAgentCommandSpec, InitAgentStreamEvent, InitPromptSpec };
+
+export type InitAgent = AgentKind;
+export type InitAuthoringChoice = InitAgent | "manual";
 export type InitPackageManager = "bun" | "npm" | "pnpm" | "yarn";
 
 export interface InitProjectContext {
@@ -13,23 +24,6 @@ export interface InitProjectContext {
   mainBranch: string;
   defaultAgent: InitAgent;
   packageManager: InitPackageManager;
-}
-
-export interface InitPromptSpec {
-  systemPrompt: string;
-  userPrompt: string;
-}
-
-export interface InitAgentCommandSpec {
-  agent: InitAgent;
-  cmd: string;
-  args: string[];
-  summaryPath?: string;
-}
-
-export interface InitAgentStreamEvent {
-  kind: "assistant_delta" | "assistant_done" | "status" | "warning";
-  text: string;
 }
 
 export interface InitAgentRunResult {
@@ -44,24 +38,6 @@ export interface InitAgentRunHandlers {
   /** Kill the agent if it runs longer than this (ms). Used server-side so a
    *  hung analysis can't stall project setup forever. */
   timeoutMs?: number;
-}
-
-interface InitAgentStreamState {
-  assistantSnapshot: string;
-  lastStatus: string | null;
-}
-
-const FAST_CLAUDE_MODEL = "haiku";
-const FAST_CLAUDE_EFFORT = "low";
-const FAST_CODEX_MODEL = "gpt-5.1-codex";
-const FAST_CODEX_REASONING = "low";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
 function detectPackageManager(gitRoot: string): InitPackageManager {
@@ -150,353 +126,7 @@ export function buildInitAgentCommand(
   prompt: InitPromptSpec,
   outputPrefix = "webmux-init",
 ): InitAgentCommandSpec {
-  if (agent === "pi") {
-    return {
-      agent,
-      cmd: "pi",
-      // pi has no permission prompts, so editing .webmux.yaml needs no approval flag.
-      args: ["--mode", "json", "--append-system-prompt", prompt.systemPrompt, prompt.userPrompt],
-    };
-  }
-
-  if (agent === "opencode") {
-    return {
-      agent,
-      cmd: "opencode",
-      args: [
-        "run",
-        // opencode takes no system-prompt flag, so the instructions lead the message.
-        "--format",
-        "json",
-        // Editing .webmux.yaml needs approval unless permissions are auto-approved.
-        "--auto",
-        `${prompt.systemPrompt}\n\n${prompt.userPrompt}`,
-      ],
-    };
-  }
-
-  if (agent === "claude") {
-    return {
-      agent,
-      cmd: "claude",
-      args: [
-        "-p",
-        "--verbose",
-        "--permission-mode",
-        "bypassPermissions",
-        "--model",
-        FAST_CLAUDE_MODEL,
-        "--effort",
-        FAST_CLAUDE_EFFORT,
-        "--output-format",
-        "stream-json",
-        "--include-partial-messages",
-        "--append-system-prompt",
-        prompt.systemPrompt,
-        prompt.userPrompt,
-      ],
-    };
-  }
-
-  const summaryPath = join(tmpdir(), `${outputPrefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
-  return {
-    agent,
-    cmd: "codex",
-    args: [
-      "exec",
-      "--sandbox",
-      "workspace-write",
-      "--color",
-      "never",
-      "--json",
-      "-m",
-      FAST_CODEX_MODEL,
-      "-o",
-      summaryPath,
-      "-c",
-      `model_reasoning_effort="${FAST_CODEX_REASONING}"`,
-      "-c",
-      `developer_instructions=${prompt.systemPrompt}`,
-      prompt.userPrompt,
-    ],
-    summaryPath,
-  };
-}
-
-function closeAssistant(state: InitAgentStreamState): InitAgentStreamEvent[] {
-  if (!state.assistantSnapshot) return [];
-  state.assistantSnapshot = "";
-  return [{ kind: "assistant_done", text: "" }];
-}
-
-function streamSnapshot(
-  state: InitAgentStreamState,
-  snapshot: string,
-): InitAgentStreamEvent[] {
-  if (!snapshot) return [];
-
-  if (!state.assistantSnapshot) {
-    state.assistantSnapshot = snapshot;
-    return [{ kind: "assistant_delta", text: snapshot }];
-  }
-
-  if (snapshot === state.assistantSnapshot) return [];
-
-  if (snapshot.startsWith(state.assistantSnapshot)) {
-    const delta = snapshot.slice(state.assistantSnapshot.length);
-    state.assistantSnapshot = snapshot;
-    return delta ? [{ kind: "assistant_delta", text: delta }] : [];
-  }
-
-  state.assistantSnapshot = snapshot;
-  return [
-    { kind: "assistant_done", text: "" },
-    { kind: "assistant_delta", text: snapshot },
-  ];
-}
-
-function emitStatus(state: InitAgentStreamState, text: string | null): InitAgentStreamEvent[] {
-  const status = text?.trim();
-  if (!status || status === state.lastStatus) return [];
-  state.lastStatus = status;
-  return [...closeAssistant(state), { kind: "status", text: status }];
-}
-
-function emitWarning(state: InitAgentStreamState, text: string | null): InitAgentStreamEvent[] {
-  const warning = text?.trim();
-  if (!warning) return [];
-  return [...closeAssistant(state), { kind: "warning", text: warning }];
-}
-
-function extractTextBlocks(value: unknown): string {
-  if (typeof value === "string") return value;
-
-  if (Array.isArray(value)) {
-    return value.map((entry) => extractTextBlocks(entry)).filter((entry) => entry.length > 0).join("");
-  }
-
-  if (!isRecord(value)) return "";
-
-  if (value.type === "text" && typeof value.text === "string") {
-    return value.text;
-  }
-
-  if (typeof value.output_text === "string") return value.output_text;
-  if (typeof value.text === "string") return value.text;
-  if (typeof value.delta === "string") return value.delta;
-  if (Array.isArray(value.content)) return extractTextBlocks(value.content);
-  if (Array.isArray(value.contents)) return extractTextBlocks(value.contents);
-  if (Array.isArray(value.parts)) return extractTextBlocks(value.parts);
-  if (Array.isArray(value.output)) return extractTextBlocks(value.output);
-
-  return "";
-}
-
-function extractCommandText(value: unknown): string | null {
-  if (typeof value === "string" && value.trim().length > 0) return value.trim();
-  if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
-    return value.join(" ").trim() || null;
-  }
-  return null;
-}
-
-function truncateText(text: string, limit = 120): string {
-  return text.length > limit ? `${text.slice(0, limit - 3)}...` : text;
-}
-
-function extractStructuredMessage(raw: Record<string, unknown>): string | null {
-  const candidates: unknown[] = [
-    raw.message,
-    raw.result,
-    raw.item,
-    raw.output,
-    raw.content,
-    raw.text,
-    raw.response,
-  ];
-
-  for (const candidate of candidates) {
-    const text = extractTextBlocks(candidate).trim();
-    if (text) return text;
-  }
-
-  return null;
-}
-
-function parseClaudeStreamLine(
-  raw: Record<string, unknown>,
-  state: InitAgentStreamState,
-): InitAgentStreamEvent[] {
-  const type = readString(raw.type) ?? "unknown";
-
-  if (type === "content_block_delta" && isRecord(raw.delta)) {
-    if (raw.delta.type === "text_delta" && typeof raw.delta.text === "string") {
-      return [{ kind: "assistant_delta", text: raw.delta.text }];
-    }
-    if (typeof raw.delta.text === "string") {
-      return [{ kind: "assistant_delta", text: raw.delta.text }];
-    }
-  }
-
-  if (type === "content_block_start" && isRecord(raw.content_block)) {
-    if (raw.content_block.type === "tool_use") {
-      return emitStatus(state, `Using ${readString(raw.content_block.name) ?? "tool"}...`);
-    }
-
-    const snapshot = extractTextBlocks(raw.content_block).trim();
-    return streamSnapshot(state, snapshot);
-  }
-
-  if (type === "message_stop" || type === "result_stop" || type === "content_block_stop") {
-    return closeAssistant(state);
-  }
-
-  if (type === "error") {
-    const message = isRecord(raw.error) ? readString(raw.error.message) : readString(raw.message);
-    return emitWarning(state, message ?? "Claude returned an error.");
-  }
-
-  if (type.includes("tool")) {
-    const toolName = readString(raw.tool_name)
-      ?? (isRecord(raw.tool) ? readString(raw.tool.name) : null)
-      ?? readString(raw.name);
-    if (toolName) return emitStatus(state, `Using ${toolName}...`);
-  }
-
-  const snapshot = extractStructuredMessage(raw);
-  if (snapshot) return streamSnapshot(state, snapshot);
-
-  return [];
-}
-
-function parseCodexStatus(raw: Record<string, unknown>, type: string): string | null {
-  const command = extractCommandText(raw.command)
-    ?? (isRecord(raw.item) ? extractCommandText(raw.item.command) : null);
-  if (command && (type.includes("command") || type.includes("exec") || type.includes("shell"))) {
-    return `Running ${truncateText(command)}`;
-  }
-
-  const toolName = readString(raw.tool_name)
-    ?? readString(raw.name)
-    ?? (isRecord(raw.item) ? readString(raw.item.name) : null);
-  if (toolName && (type.includes("tool") || type.includes("function"))) {
-    return `Using ${toolName}...`;
-  }
-
-  const status = readString(raw.status);
-  if (status && !["completed", "done", "finished"].includes(status)) {
-    return truncateText(status);
-  }
-
-  if (type.includes("turn")) return "Thinking...";
-  return null;
-}
-
-function parseCodexStreamLine(
-  raw: Record<string, unknown>,
-  state: InitAgentStreamState,
-): InitAgentStreamEvent[] {
-  const type = readString(raw.type) ?? readString(raw.event) ?? "unknown";
-
-  if (type === "response.output_text.delta" && typeof raw.delta === "string") {
-    return [{ kind: "assistant_delta", text: raw.delta }];
-  }
-
-  if (type === "response.output_text.done") {
-    const text = readString(raw.text) ?? extractTextBlocks(raw.item).trim();
-    return [...(text ? streamSnapshot(state, text) : []), ...closeAssistant(state)];
-  }
-
-  if (type.includes("error")) {
-    const message = isRecord(raw.error) ? readString(raw.error.message) : readString(raw.message);
-    return emitWarning(state, message ?? "Codex returned an error.");
-  }
-
-  const status = parseCodexStatus(raw, type);
-  if (status) return emitStatus(state, status);
-
-  if (type.includes("delta") && typeof raw.delta === "string") {
-    return [{ kind: "assistant_delta", text: raw.delta }];
-  }
-
-  const snapshot = extractStructuredMessage(raw);
-  if (snapshot && (type.includes("assistant") || type.includes("message") || type.includes("output") || type.includes("response"))) {
-    const events = streamSnapshot(state, snapshot);
-    if (type.includes("done") || type.includes("completed") || type.includes("finished")) {
-      events.push(...closeAssistant(state));
-    }
-    return events;
-  }
-
-  if (type.includes("done") || type.includes("completed") || type.includes("finished")) {
-    return closeAssistant(state);
-  }
-
-  return [];
-}
-
-/** `opencode run --format json` emits one JSON object per line: `text` parts carry the
- *  assistant snapshot so far, `tool_use` parts carry the tool call and its state. */
-function parseOpencodeStreamLine(
-  raw: Record<string, unknown>,
-  state: InitAgentStreamState,
-): InitAgentStreamEvent[] {
-  const type = readString(raw.type) ?? "unknown";
-  const part = isRecord(raw.part) ? raw.part : null;
-
-  if (type === "text" && part && typeof part.text === "string") {
-    return streamSnapshot(state, part.text);
-  }
-
-  if (type === "tool_use" && part) {
-    const toolName = readString(part.tool);
-    const input = isRecord(part.state) ? part.state.input : null;
-    const command = isRecord(input) ? extractCommandText(input.command) : null;
-    if (command) return emitStatus(state, `Running ${truncateText(command)}`);
-    if (toolName) return emitStatus(state, `Using ${toolName}...`);
-  }
-
-  if (type === "step_finish") {
-    return closeAssistant(state);
-  }
-
-  if (type.includes("error")) {
-    const message = isRecord(raw.error) ? readString(raw.error.message) : readString(raw.message);
-    return emitWarning(state, message ?? "opencode returned an error.");
-  }
-
-  return [];
-}
-
-/** `pi --mode json` emits session events: `message_update` carries text deltas and
- *  `tool_execution_start` carries the tool call. */
-function parsePiStreamLine(
-  raw: Record<string, unknown>,
-  state: InitAgentStreamState,
-): InitAgentStreamEvent[] {
-  const type = readString(raw.type) ?? "unknown";
-
-  if (type === "message_update" && isRecord(raw.assistantMessageEvent)) {
-    const event = raw.assistantMessageEvent;
-    if (event.type === "text_delta" && typeof event.delta === "string") {
-      return streamSnapshot(state, state.assistantSnapshot + event.delta);
-    }
-    return [];
-  }
-
-  if (type === "tool_execution_start") {
-    const args = isRecord(raw.args) ? raw.args : null;
-    const command = args ? extractCommandText(args.command) : null;
-    const toolName = readString(raw.toolName);
-    if (command) return emitStatus(state, `Running ${truncateText(command)}`);
-    if (toolName) return emitStatus(state, `Using ${toolName}...`);
-  }
-
-  if (type === "message_end" || type === "turn_end") {
-    return closeAssistant(state);
-  }
-
-  return [];
+  return getAgentAdapter(agent).buildInitCommand(prompt, outputPrefix);
 }
 
 export function parseInitAgentStreamLine(
@@ -515,10 +145,7 @@ export function parseInitAgentStreamLine(
   }
 
   if (!isRecord(parsed)) return [];
-  if (agent === "claude") return parseClaudeStreamLine(parsed, state);
-  if (agent === "opencode") return parseOpencodeStreamLine(parsed, state);
-  if (agent === "pi") return parsePiStreamLine(parsed, state);
-  return parseCodexStreamLine(parsed, state);
+  return getAgentAdapter(agent).parseInitStreamLine(parsed, state);
 }
 
 async function consumeStructuredStream(

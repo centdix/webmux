@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { getAgentAdapter } from "../agents";
 import { ensureAgentRuntimeArtifacts } from "../adapters/agent-runtime";
 import type { CreateWorktreeMode, GitGateway, GitWorktreeEntry } from "../adapters/git";
 import type { LifecycleHookRunner, RunLifecycleHookInput } from "../adapters/hooks";
@@ -434,7 +435,7 @@ export class LifecycleService {
       const meta = await this.readMetaOrThrow(ctx.resolved.gitDir);
       const seq = nextForkSeq(meta);
       // Claude and pi can pin the forked child id (deterministic); Codex self-assigns, so we capture it.
-      const pinSessionId = ctx.agentKind === "claude" || ctx.agentKind === "pi" ? randomUUID() : undefined;
+      const pinSessionId = getAgentAdapter(ctx.agentKind).supportsPinnedSessionId ? randomUUID() : undefined;
       const agentCommand = buildAgentPaneCommand({
         agent: ctx.agent,
         runtimeEnvPath: ctx.initialized.paths.runtimeEnvPath,

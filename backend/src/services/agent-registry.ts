@@ -1,13 +1,7 @@
 import type { AgentDetails, AgentSummary } from "@webmux/api-contract";
+import { AGENT_ADAPTERS } from "../agents";
+import type { AgentCapabilities } from "../agents/types";
 import type { AgentId, AgentKind, CustomAgentConfig, ProjectConfig } from "../domain/config";
-
-export interface AgentCapabilities {
-  terminal: true;
-  inAppChat: boolean;
-  conversationHistory: boolean;
-  interrupt: boolean;
-  resume: boolean;
-}
 
 interface BuiltInAgentDefinition {
   id: AgentKind;
@@ -33,75 +27,16 @@ interface CustomAgentDefinition {
 
 export type AgentDefinition = BuiltInAgentDefinition | CustomAgentDefinition;
 
-const BUILTIN_AGENT_DEFINITIONS: AgentDefinition[] = [
-  {
-    id: "claude",
-    label: "Claude",
-    kind: "builtin",
-    capabilities: {
-      terminal: true,
-      inAppChat: true,
-      conversationHistory: true,
-      interrupt: true,
-      resume: true,
-    },
-    implementation: {
-      type: "builtin",
-      agent: "claude",
-    },
+const BUILTIN_AGENT_DEFINITIONS: AgentDefinition[] = Object.values(AGENT_ADAPTERS).map((adapter) => ({
+  id: adapter.id,
+  label: adapter.label,
+  kind: "builtin",
+  capabilities: adapter.capabilities,
+  implementation: {
+    type: "builtin",
+    agent: adapter.id,
   },
-  {
-    id: "codex",
-    label: "Codex",
-    kind: "builtin",
-    capabilities: {
-      terminal: true,
-      inAppChat: true,
-      conversationHistory: true,
-      interrupt: true,
-      resume: true,
-    },
-    implementation: {
-      type: "builtin",
-      agent: "codex",
-    },
-  },
-  {
-    id: "opencode",
-    label: "opencode",
-    kind: "builtin",
-    capabilities: {
-      terminal: true,
-      // opencode keeps its transcripts in its own database rather than on-disk session
-      // files, so dashboard chat has no history to read yet — the terminal is the surface.
-      inAppChat: false,
-      conversationHistory: false,
-      interrupt: false,
-      resume: true,
-    },
-    implementation: {
-      type: "builtin",
-      agent: "opencode",
-    },
-  },
-  {
-    id: "pi",
-    label: "pi",
-    kind: "builtin",
-    capabilities: {
-      terminal: true,
-      // pi's session files aren't parsed into dashboard conversations yet — the terminal is the surface.
-      inAppChat: false,
-      conversationHistory: false,
-      interrupt: false,
-      resume: true,
-    },
-    implementation: {
-      type: "builtin",
-      agent: "pi",
-    },
-  },
-];
+}));
 
 function cloneCapabilities(capabilities: AgentCapabilities): AgentCapabilities {
   return { ...capabilities };

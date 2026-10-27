@@ -4,6 +4,7 @@ import * as p from "@clack/prompts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { run, which, getGitRoot } from "./shared.ts";
+import { AGENT_ADAPTERS, AGENT_KINDS } from "../../backend/src/agents/index.ts";
 import {
   buildInitAgentCommand,
   buildInitPromptSpec,
@@ -52,24 +53,17 @@ function checkDeps(): Dep[] {
   return missing;
 }
 
-const AGENT_LABELS: Record<InitAgent, string> = {
-  claude: "Claude",
-  codex: "Codex",
-  opencode: "opencode",
-  pi: "pi",
-};
-
 function agentLabel(agent: InitAgent): string {
-  return AGENT_LABELS[agent];
+  return AGENT_ADAPTERS[agent].label;
 }
 
-/** Agent the generated config should default to: the installed one, preferring Claude. */
+function isAgentInstalled(agent: InitAgent): boolean {
+  return Boolean(which(AGENT_ADAPTERS[agent].binary));
+}
+
+/** Agent the generated config should default to: the first installed one, in registry order. */
 function defaultTemplateAgent(): InitAgent {
-  if (which("claude")) return "claude";
-  if (which("codex")) return "codex";
-  if (which("opencode")) return "opencode";
-  if (which("pi")) return "pi";
-  return "claude";
+  return AGENT_KINDS.find(isAgentInstalled) ?? "claude";
 }
 
 function createAgentStreamPrinter(label: string): {
@@ -194,47 +188,22 @@ const webmuxYaml = join(gitRoot, ".webmux.yaml");
 if (existsSync(webmuxYaml)) {
   p.log.info(".webmux.yaml already exists, skipping");
 } else {
-  const claudeAvailable = which("claude");
-  const codexAvailable = which("codex");
-  const opencodeAvailable = which("opencode");
-  const piAvailable = which("pi");
+  const installedAgents = AGENT_KINDS.filter(isAgentInstalled);
 
   const choice = await p.select<InitAuthoringChoice>({
     message: "No .webmux.yaml found. How should webmux create it?",
-    initialValue: claudeAvailable
-      ? "claude"
-      : codexAvailable
-        ? "codex"
-        : opencodeAvailable
-          ? "opencode"
-          : piAvailable ? "pi" : "manual",
+    initialValue: installedAgents[0] ?? "manual",
     options: [
-      {
-        value: "claude",
-        label: "Claude",
-        hint: claudeAvailable ? "Claude inspects the repo and adapts the starter .webmux.yaml" : "Claude CLI not found",
-        disabled: !claudeAvailable,
-      },
-      {
-        value: "codex",
-        label: "Codex",
-        hint: codexAvailable ? "Codex inspects the repo and adapts the starter .webmux.yaml" : "Codex CLI not found",
-        disabled: !codexAvailable,
-      },
-      {
-        value: "opencode",
-        label: "opencode",
-        hint: opencodeAvailable
-          ? "opencode inspects the repo and adapts the starter .webmux.yaml"
-          : "opencode CLI not found",
-        disabled: !opencodeAvailable,
-      },
-      {
-        value: "pi",
-        label: "pi",
-        hint: piAvailable ? "pi inspects the repo and adapts the starter .webmux.yaml" : "pi CLI not found",
-        disabled: !piAvailable,
-      },
+      ...AGENT_KINDS.map((agent) => {
+        const label = agentLabel(agent);
+        const installed = installedAgents.includes(agent);
+        return {
+          value: agent,
+          label,
+          hint: installed ? `${label} inspects the repo and adapts the starter .webmux.yaml` : `${label} CLI not found`,
+          disabled: !installed,
+        };
+      }),
       {
         value: "manual",
         label: "I'll do it myself",
