@@ -174,11 +174,14 @@ profiles:
       - hostPath: ~/.local/share/opencode
         guestPath: /root/.local/share/opencode
         writable: true
+      - hostPath: ~/.pi
+        guestPath: /root/.pi
+        writable: true
     systemPrompt: >
       You are running inside a sandboxed container.
       Backend port: ${PORT}. Frontend port: ${FRONTEND_PORT}.
 
-Custom sandbox images should make `claude`, `codex`, or `opencode` available on the container's normal `PATH` (for example with `ENV PATH=/your/tool/bin:$PATH`). webmux does not rely on login-shell dotfiles like `.bashrc` to discover agent binaries inside the container.
+Custom sandbox images should make `claude`, `codex`, `opencode`, or `pi` available on the container's normal `PATH` (for example with `ENV PATH=/your/tool/bin:$PATH`). webmux does not rely on login-shell dotfiles like `.bashrc` to discover agent binaries inside the container.
 
 integrations:
   github:
@@ -213,7 +216,7 @@ For fresh agents using a host profile, webmux automatically includes capture com
 | `name` | string | no | Project name shown in sidebar and browser tab |
 | `workspace.mainBranch` | string | no | Base branch used for new worktrees |
 | `workspace.worktreeRoot` | string | no | Relative or absolute directory for managed worktrees |
-| `workspace.defaultAgent` | string | no | Default agent for new worktrees: `claude`, `codex`, or `opencode` |
+| `workspace.defaultAgent` | string | no | Default agent for new worktrees: `claude`, `codex`, `opencode`, or `pi` |
 | `workspace.ide` | string | no | Editor used by the "Open in..." button: `cursor` or `vscode` (default: `cursor`) |
 | `workspace.autoPull.enabled` | boolean | no | Periodically fetch and fast-forward merge the main branch (default: `false`) |
 | `workspace.autoPull.intervalSeconds` | number | no | Seconds between auto-pull attempts (default: `300`, minimum: `30`) |
@@ -222,7 +225,7 @@ For fresh agents using a host profile, webmux automatically includes capture com
 | `services[].portStart` | number | no | Base port for auto-allocation |
 | `services[].portStep` | number | no | Port increment per worktree slot (default: `1`) |
 | `profiles.<name>.runtime` | string | yes | `host` or `docker` |
-| `profiles.<name>.yolo` | boolean | no | Enables `--dangerously-skip-permissions` for Claude, `--yolo` for Codex, or `--auto` for opencode |
+| `profiles.<name>.yolo` | boolean | no | Enables `--dangerously-skip-permissions` for Claude, `--yolo` for Codex, `--auto` for opencode (pi has no permission prompts, so it ignores it) |
 | `profiles.<name>.panes[]` | array | yes | Pane layout for that profile |
 | `profiles.<name>.panes[].kind` | string | yes | `agent`, `shell`, or `command` |
 | `profiles.<name>.panes[].command` | string | yes (for `command`) | Startup command run inside the pane |

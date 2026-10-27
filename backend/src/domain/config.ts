@@ -1,4 +1,4 @@
-export type AgentKind = "claude" | "codex" | "opencode";
+export type AgentKind = "claude" | "codex" | "opencode" | "pi";
 export type AgentId = string;
 export type RuntimeKind = "host" | "docker";
 export type IdeKind = "cursor" | "vscode";

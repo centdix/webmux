@@ -72,6 +72,14 @@ describe("buildInitAgentCommand", () => {
       ],
     });
   });
+
+  it("builds the pi JSON-mode command with a native system prompt", () => {
+    expect(buildInitAgentCommand("pi", prompt)).toEqual({
+      agent: "pi",
+      cmd: "pi",
+      args: ["--mode", "json", "--append-system-prompt", "system", "user"],
+    });
+  });
 });
 
 describe("parseInitAgentStreamLine", () => {
@@ -161,6 +169,29 @@ describe("parseInitAgentStreamLine", () => {
     expect(
       parseInitAgentStreamLine("opencode", JSON.stringify({ type: "step_finish" }), state),
     ).toEqual([{ kind: "assistant_done", text: "" }]);
+  });
+
+  it("streams pi text deltas and bash command statuses", () => {
+    const state = { assistantSnapshot: "", lastStatus: null };
+
+    expect(
+      parseInitAgentStreamLine(
+        "pi",
+        JSON.stringify({ type: "tool_execution_start", toolName: "bash", args: { command: "rg PORT" } }),
+        state,
+      ),
+    ).toEqual([{ kind: "status", text: "Running rg PORT" }]);
+
+    const delta = (text: string): string => JSON.stringify({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: text },
+    });
+    expect(parseInitAgentStreamLine("pi", delta("Hello"), state))
+      .toEqual([{ kind: "assistant_delta", text: "Hello" }]);
+    expect(parseInitAgentStreamLine("pi", delta(" there"), state))
+      .toEqual([{ kind: "assistant_delta", text: " there" }]);
+    expect(parseInitAgentStreamLine("pi", JSON.stringify({ type: "message_end" }), state))
+      .toEqual([{ kind: "assistant_done", text: "" }]);
   });
 
   it("reports opencode tool calls without a command by tool name", () => {

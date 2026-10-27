@@ -433,8 +433,8 @@ export class LifecycleService {
       // ensureRootSessionId may have persisted root.sessionId; re-read for a fresh base.
       const meta = await this.readMetaOrThrow(ctx.resolved.gitDir);
       const seq = nextForkSeq(meta);
-      // Claude can pin the forked child id (deterministic); Codex self-assigns, so we capture it.
-      const pinSessionId = ctx.agentKind === "claude" ? randomUUID() : undefined;
+      // Claude and pi can pin the forked child id (deterministic); Codex self-assigns, so we capture it.
+      const pinSessionId = ctx.agentKind === "claude" || ctx.agentKind === "pi" ? randomUUID() : undefined;
       const agentCommand = buildAgentPaneCommand({
         agent: ctx.agent,
         runtimeEnvPath: ctx.initialized.paths.runtimeEnvPath,

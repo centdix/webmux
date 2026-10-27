@@ -32,6 +32,7 @@ const deps: Dep[] = [
   { tool: "claude", required: false, hint: "Install the Claude Code CLI to let Claude scaffold .webmux.yaml" },
   { tool: "codex", required: false, hint: "Install the Codex CLI to let Codex scaffold .webmux.yaml" },
   { tool: "opencode", required: false, hint: "Install the opencode CLI to let opencode scaffold .webmux.yaml" },
+  { tool: "pi", required: false, hint: "Install the pi CLI to let pi scaffold .webmux.yaml" },
   { tool: "docker", required: false, hint: "https://docs.docker.com/get-started/get-docker/" },
 ];
 
@@ -55,6 +56,7 @@ const AGENT_LABELS: Record<InitAgent, string> = {
   claude: "Claude",
   codex: "Codex",
   opencode: "opencode",
+  pi: "pi",
 };
 
 function agentLabel(agent: InitAgent): string {
@@ -66,6 +68,7 @@ function defaultTemplateAgent(): InitAgent {
   if (which("claude")) return "claude";
   if (which("codex")) return "codex";
   if (which("opencode")) return "opencode";
+  if (which("pi")) return "pi";
   return "claude";
 }
 
@@ -194,6 +197,7 @@ if (existsSync(webmuxYaml)) {
   const claudeAvailable = which("claude");
   const codexAvailable = which("codex");
   const opencodeAvailable = which("opencode");
+  const piAvailable = which("pi");
 
   const choice = await p.select<InitAuthoringChoice>({
     message: "No .webmux.yaml found. How should webmux create it?",
@@ -201,7 +205,9 @@ if (existsSync(webmuxYaml)) {
       ? "claude"
       : codexAvailable
         ? "codex"
-        : opencodeAvailable ? "opencode" : "manual",
+        : opencodeAvailable
+          ? "opencode"
+          : piAvailable ? "pi" : "manual",
     options: [
       {
         value: "claude",
@@ -222,6 +228,12 @@ if (existsSync(webmuxYaml)) {
           ? "opencode inspects the repo and adapts the starter .webmux.yaml"
           : "opencode CLI not found",
         disabled: !opencodeAvailable,
+      },
+      {
+        value: "pi",
+        label: "pi",
+        hint: piAvailable ? "pi inspects the repo and adapts the starter .webmux.yaml" : "pi CLI not found",
+        disabled: !piAvailable,
       },
       {
         value: "manual",

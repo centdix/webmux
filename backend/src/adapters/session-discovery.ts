@@ -5,12 +5,13 @@ import { opencodeSessionsPath } from "./agent-runtime";
 import { encodeClaudeProjectDir } from "./claude-cli";
 
 /** Built-in agents whose session history we can discover. */
-export type DiscoverableAgentKind = "claude" | "codex" | "opencode";
+export type DiscoverableAgentKind = "claude" | "codex" | "opencode" | "pi";
 
 export interface SessionDiscoveryGateway {
   /** Session ids for `cwd`, newest first. Claude reads `~/.claude/projects/<encoded>/`,
-   *  Codex scans `~/.codex/sessions/**` and matches `session_meta.cwd`, and opencode reads
-   *  the ids its generated webmux plugin recorded for that worktree. */
+   *  Codex scans `~/.codex/sessions/**` and matches `session_meta.cwd`, opencode reads
+   *  the ids its generated webmux plugin recorded for that worktree, and pi reads the headers
+   *  of `~/.pi/agent/sessions/<encoded>/*.jsonl`. */
   listSessionIds(agent: DiscoverableAgentKind, cwd: string): Promise<string[]>;
 }
 
@@ -98,10 +99,43 @@ async function listOpencodeSessionIds(cwd: string): Promise<string[]> {
   return newestFirst(stamped);
 }
 
+/** pi stores sessions under `<agent dir>/sessions/--<cwd with separators as dashes>--/`. */
+function encodePiSessionDir(cwd: string): string {
+  return `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+}
+
+async function readPiSessionId(path: string): Promise<string | null> {
+  try {
+    const head = await Bun.file(path).slice(0, 4096).text();
+    const parsed: unknown = JSON.parse(head.split("\n", 1)[0] ?? "");
+    if (isRecord(parsed) && parsed.type === "session" && typeof parsed.id === "string") return parsed.id;
+  } catch {
+    // Fall back to the `<timestamp>_<id>.jsonl` file name.
+  }
+  return basename(path, ".jsonl").split("_").slice(1).join("_") || null;
+}
+
+async function listPiSessionIds(cwd: string): Promise<string[]> {
+  const agentDir = Bun.env.PI_CODING_AGENT_DIR ?? join(home(), ".pi", "agent");
+  const dir = join(agentDir, "sessions", encodePiSessionDir(cwd));
+  const names = await readdir(dir).catch((): string[] => []);
+  const stamped = await Promise.all(
+    names
+      .filter((name) => name.endsWith(".jsonl"))
+      .map(async (name): Promise<StampedSession | null> => {
+        const path = join(dir, name);
+        const [info, sessionId] = await Promise.all([stat(path).catch(() => null), readPiSessionId(path)]);
+        return info && sessionId ? { sessionId, mtimeMs: info.mtimeMs } : null;
+      }),
+  );
+  return newestFirst(stamped.filter((entry): entry is StampedSession => entry !== null));
+}
+
 export class FileSessionDiscovery implements SessionDiscoveryGateway {
   async listSessionIds(agent: DiscoverableAgentKind, cwd: string): Promise<string[]> {
     if (agent === "claude") return await listClaudeSessionIds(cwd);
     if (agent === "opencode") return await listOpencodeSessionIds(cwd);
+    if (agent === "pi") return await listPiSessionIds(cwd);
     return await listCodexSessionIds(cwd);
   }
 }

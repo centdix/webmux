@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { detectProjectName, run } from "../lib/shell";
 
-export type InitAuthoringChoice = "claude" | "codex" | "opencode" | "manual";
+export type InitAuthoringChoice = "claude" | "codex" | "opencode" | "pi" | "manual";
 export type InitAgent = Exclude<InitAuthoringChoice, "manual">;
 export type InitPackageManager = "bun" | "npm" | "pnpm" | "yarn";
 
@@ -150,6 +150,15 @@ export function buildInitAgentCommand(
   prompt: InitPromptSpec,
   outputPrefix = "webmux-init",
 ): InitAgentCommandSpec {
+  if (agent === "pi") {
+    return {
+      agent,
+      cmd: "pi",
+      // pi has no permission prompts, so editing .webmux.yaml needs no approval flag.
+      args: ["--mode", "json", "--append-system-prompt", prompt.systemPrompt, prompt.userPrompt],
+    };
+  }
+
   if (agent === "opencode") {
     return {
       agent,
@@ -459,6 +468,37 @@ function parseOpencodeStreamLine(
   return [];
 }
 
+/** `pi --mode json` emits session events: `message_update` carries text deltas and
+ *  `tool_execution_start` carries the tool call. */
+function parsePiStreamLine(
+  raw: Record<string, unknown>,
+  state: InitAgentStreamState,
+): InitAgentStreamEvent[] {
+  const type = readString(raw.type) ?? "unknown";
+
+  if (type === "message_update" && isRecord(raw.assistantMessageEvent)) {
+    const event = raw.assistantMessageEvent;
+    if (event.type === "text_delta" && typeof event.delta === "string") {
+      return streamSnapshot(state, state.assistantSnapshot + event.delta);
+    }
+    return [];
+  }
+
+  if (type === "tool_execution_start") {
+    const args = isRecord(raw.args) ? raw.args : null;
+    const command = args ? extractCommandText(args.command) : null;
+    const toolName = readString(raw.toolName);
+    if (command) return emitStatus(state, `Running ${truncateText(command)}`);
+    if (toolName) return emitStatus(state, `Using ${toolName}...`);
+  }
+
+  if (type === "message_end" || type === "turn_end") {
+    return closeAssistant(state);
+  }
+
+  return [];
+}
+
 export function parseInitAgentStreamLine(
   agent: InitAgent,
   line: string,
@@ -477,6 +517,7 @@ export function parseInitAgentStreamLine(
   if (!isRecord(parsed)) return [];
   if (agent === "claude") return parseClaudeStreamLine(parsed, state);
   if (agent === "opencode") return parseOpencodeStreamLine(parsed, state);
+  if (agent === "pi") return parsePiStreamLine(parsed, state);
   return parseCodexStreamLine(parsed, state);
 }
 

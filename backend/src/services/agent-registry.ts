@@ -84,6 +84,23 @@ const BUILTIN_AGENT_DEFINITIONS: AgentDefinition[] = [
       agent: "opencode",
     },
   },
+  {
+    id: "pi",
+    label: "pi",
+    kind: "builtin",
+    capabilities: {
+      terminal: true,
+      // pi's session files aren't parsed into dashboard conversations yet — the terminal is the surface.
+      inAppChat: false,
+      conversationHistory: false,
+      interrupt: false,
+      resume: true,
+    },
+    implementation: {
+      type: "builtin",
+      agent: "pi",
+    },
+  },
 ];
 
 function cloneCapabilities(capabilities: AgentCapabilities): AgentCapabilities {

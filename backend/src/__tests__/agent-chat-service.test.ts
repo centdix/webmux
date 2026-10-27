@@ -78,6 +78,19 @@ describe("resolveAgentChatSupport", () => {
     });
   });
 
+  it("rejects pi, a built-in agent with no chat backend", () => {
+    expect(resolveAgentChatSupport({
+      agentId: "pi",
+      agentLabel: "pi",
+      agent: getAgentDefinition(TEST_CONFIG, "pi"),
+      action: "chat",
+    })).toEqual({
+      ok: false,
+      error: "pi does not support in-app chat",
+      status: 409,
+    });
+  });
+
   it("sends opencode terminal prompts without a submit delay", () => {
     expect(resolveAgentTerminalSubmitDelayMs({
       agentId: "opencode",

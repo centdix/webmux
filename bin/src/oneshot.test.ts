@@ -122,7 +122,7 @@ describe("agentStreamsConversation", () => {
     };
   }
 
-  const agents = [agent("claude", true), agent("codex", true), agent("opencode", false)];
+  const agents = [agent("claude", true), agent("codex", true), agent("opencode", false), agent("pi", false)];
 
   it("streams for agents with a readable transcript", () => {
     expect(agentStreamsConversation(agents, "claude")).toBe(true);
@@ -131,6 +131,7 @@ describe("agentStreamsConversation", () => {
 
   it("skips streaming for agents without one, and for unknown or missing agents", () => {
     expect(agentStreamsConversation(agents, "opencode")).toBe(false);
+    expect(agentStreamsConversation(agents, "pi")).toBe(false);
     expect(agentStreamsConversation(agents, "gemini")).toBe(false);
     expect(agentStreamsConversation(agents, null)).toBe(false);
   });

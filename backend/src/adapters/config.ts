@@ -121,6 +121,7 @@ function isStringArray(value: unknown): value is string[] {
 function parseAgentKind(value: unknown): AgentKind {
   if (value === "codex") return "codex";
   if (value === "opencode") return "opencode";
+  if (value === "pi") return "pi";
   return "claude";
 }
 

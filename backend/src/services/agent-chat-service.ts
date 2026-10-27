@@ -14,6 +14,7 @@ const CHAT_PROVIDERS = {
   claude: "claude",
   codex: "codex",
   opencode: null,
+  pi: null,
 } as const satisfies Record<AgentKind, AgentChatSupport["provider"] | null>;
 
 export function resolveAgentTerminalSubmitDelayMs(input: {

@@ -108,6 +108,70 @@ describe("ensureAgentRuntimeArtifacts", () => {
     expect(typeof loaded.WebmuxBridge).toBe("function");
   });
 
+  it("writes a loadable pi extension into the webmux storage dir", async () => {
+    const gitDir = await mkdtemp(join(tmpdir(), "webmux-agent-runtime-gitdir-"));
+    const worktreePath = await mkdtemp(join(tmpdir(), "webmux-agent-runtime-worktree-"));
+    tempDirs.push(gitDir, worktreePath);
+
+    await ensureWorktreeStorageDirs(gitDir);
+    const artifacts = await ensureAgentRuntimeArtifacts({ gitDir, worktreePath });
+
+    expect(artifacts.piExtensionPath).toBe(join(gitDir, "webmux", "webmux-pi-extension.js"));
+    const extension = await Bun.file(artifacts.piExtensionPath).text();
+    expect(extension).toContain(artifacts.agentCtlPath);
+    expect(extension).toContain("agent_settled");
+    expect(extension).toContain("agent-stopped");
+    expect(extension).toContain("pi-post-tool-use");
+
+    const loaded = await import(artifacts.piExtensionPath) as { default?: unknown };
+    expect(typeof loaded.default).toBe("function");
+  });
+
+  it("detects PR creation from pi's pi-post-tool-use payloads", async () => {
+    const gitDir = await mkdtemp(join(tmpdir(), "webmux-agent-runtime-gitdir-"));
+    const worktreePath = await mkdtemp(join(tmpdir(), "webmux-agent-runtime-worktree-"));
+    tempDirs.push(gitDir, worktreePath);
+    let capturedPayload: unknown;
+
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        capturedPayload = await request.json();
+        return Response.json({ ok: true });
+      },
+    });
+
+    try {
+      await ensureWorktreeStorageDirs(gitDir);
+      const artifacts = await ensureAgentRuntimeArtifacts({ gitDir, worktreePath });
+      await writeControlEnv(artifacts.agentCtlPath, `http://127.0.0.1:${server.port}/runtime-events`);
+
+      const process = Bun.spawn([artifacts.agentCtlPath, "pi-post-tool-use"], {
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      process.stdin.write(JSON.stringify({
+        tool_name: "bash",
+        tool_input: { command: "gh pr create --fill" },
+        tool_response: {
+          content: [{ type: "text", text: "https://github.com/windmill-labs/webmux/pull/322" }],
+        },
+      }));
+      process.stdin.end();
+
+      expect(await process.exited).toBe(0);
+      expect(capturedPayload).toEqual({
+        type: "pr_opened",
+        worktreeId: "worktree-1",
+        branch: "feature/test",
+        url: "https://github.com/windmill-labs/webmux/pull/322",
+      });
+    } finally {
+      server.stop(true);
+    }
+  });
+
   it("detects PR creation from opencode's lowercase bash tool payloads", async () => {
     const gitDir = await mkdtemp(join(tmpdir(), "webmux-agent-runtime-gitdir-"));
     const worktreePath = await mkdtemp(join(tmpdir(), "webmux-agent-runtime-worktree-"));
