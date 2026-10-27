@@ -1,8 +1,27 @@
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { isRecord } from "../lib/type-guards";
-import { newestFirst, quoteShell, type StampedSession } from "./shared";
-import type { AgentAdapter, BuiltInLaunchInput, RuntimeArtifactsContext } from "./types";
+import {
+  closeAssistant,
+  emitStatus,
+  emitWarning,
+  extractCommandText,
+  newestFirst,
+  quoteShell,
+  readString,
+  type StampedSession,
+  streamSnapshot,
+  truncateText,
+} from "./shared";
+import type {
+  AgentAdapter,
+  BuiltInLaunchInput,
+  InitAgentCommandSpec,
+  InitAgentStreamEvent,
+  InitAgentStreamState,
+  InitPromptSpec,
+  RuntimeArtifactsContext,
+} from "./types";
 
 /** File the opencode launch command writes the profile system prompt to, referenced from
  *  `OPENCODE_CONFIG_CONTENT.instructions` because opencode has no `--append-system-prompt`. */
@@ -167,6 +186,55 @@ async function writeOpencodeRuntimeArtifacts(ctx: RuntimeArtifactsContext): Prom
   );
 }
 
+function buildOpencodeInitCommand(prompt: InitPromptSpec): InitAgentCommandSpec {
+  return {
+    agent: "opencode",
+    cmd: "opencode",
+    args: [
+      "run",
+      // opencode takes no system-prompt flag, so the instructions lead the message.
+      "--format",
+      "json",
+      // Editing .webmux.yaml needs approval unless permissions are auto-approved.
+      "--auto",
+      `${prompt.systemPrompt}\n\n${prompt.userPrompt}`,
+    ],
+  };
+}
+
+/** `opencode run --format json` emits one JSON object per line: `text` parts carry the
+ *  assistant snapshot so far, `tool_use` parts carry the tool call and its state. */
+function parseOpencodeStreamLine(
+  raw: Record<string, unknown>,
+  state: InitAgentStreamState,
+): InitAgentStreamEvent[] {
+  const type = readString(raw.type) ?? "unknown";
+  const part = isRecord(raw.part) ? raw.part : null;
+
+  if (type === "text" && part && typeof part.text === "string") {
+    return streamSnapshot(state, part.text);
+  }
+
+  if (type === "tool_use" && part) {
+    const toolName = readString(part.tool);
+    const input = isRecord(part.state) ? part.state.input : null;
+    const command = isRecord(input) ? extractCommandText(input.command) : null;
+    if (command) return emitStatus(state, `Running ${truncateText(command)}`);
+    if (toolName) return emitStatus(state, `Using ${toolName}...`);
+  }
+
+  if (type === "step_finish") {
+    return closeAssistant(state);
+  }
+
+  if (type.includes("error")) {
+    const message = isRecord(raw.error) ? readString(raw.error.message) : readString(raw.message);
+    return emitWarning(state, message ?? "opencode returned an error.");
+  }
+
+  return [];
+}
+
 export const opencodeAdapter: AgentAdapter = {
   id: "opencode",
   label: "opencode",
@@ -181,12 +249,14 @@ export const opencodeAdapter: AgentAdapter = {
   },
   chatProvider: null,
   supportsPinnedSessionId: false,
+  buildCommand: buildOpencodeInvocation,
   generatedArtifactExcludes: [
     ".opencode/plugin/webmux.js",
     ".opencode/webmux-instructions.md",
     ".opencode/webmux-sessions.jsonl",
   ],
   writeRuntimeArtifacts: writeOpencodeRuntimeArtifacts,
-  buildCommand: buildOpencodeInvocation,
   listSessionIds: listOpencodeSessionIds,
+  buildInitCommand: buildOpencodeInitCommand,
+  parseInitStreamLine: parseOpencodeStreamLine,
 };

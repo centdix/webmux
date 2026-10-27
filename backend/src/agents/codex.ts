@@ -1,8 +1,32 @@
+import { tmpdir } from "node:os";
 import { mkdir, readdir, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { isRecord } from "../lib/type-guards";
-import { home, newestFirst, quoteShell, type HookConfigFile, type StampedSession } from "./shared";
-import type { AgentAdapter, BuiltInLaunchInput, RuntimeArtifactsContext } from "./types";
+import {
+  closeAssistant,
+  emitStatus,
+  emitWarning,
+  extractCommandText,
+  extractStructuredMessage,
+  extractTextBlocks,
+  home,
+  type HookConfigFile,
+  newestFirst,
+  quoteShell,
+  readString,
+  type StampedSession,
+  streamSnapshot,
+  truncateText,
+} from "./shared";
+import type {
+  AgentAdapter,
+  BuiltInLaunchInput,
+  InitAgentCommandSpec,
+  InitAgentStreamEvent,
+  InitAgentStreamState,
+  InitPromptSpec,
+  RuntimeArtifactsContext,
+} from "./types";
 
 function buildCodexInvocation(input: BuiltInLaunchInput): string {
   const promptSuffix = input.prompt ? ` -- ${quoteShell(input.prompt)}` : "";
@@ -194,6 +218,101 @@ async function writeCodexRuntimeArtifacts(ctx: RuntimeArtifactsContext): Promise
   await mergeCodexHooksFile(hooksPath, buildCodexHookSettings(ctx).hooks, ctx.agentCtlPath);
 }
 
+const FAST_CODEX_MODEL = "gpt-5.1-codex";
+const FAST_CODEX_REASONING = "low";
+
+function buildCodexInitCommand(prompt: InitPromptSpec, outputPrefix: string): InitAgentCommandSpec {
+  const summaryPath = join(tmpdir(), `${outputPrefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
+  return {
+    agent: "codex",
+    cmd: "codex",
+    args: [
+      "exec",
+      "--sandbox",
+      "workspace-write",
+      "--color",
+      "never",
+      "--json",
+      "-m",
+      FAST_CODEX_MODEL,
+      "-o",
+      summaryPath,
+      "-c",
+      `model_reasoning_effort="${FAST_CODEX_REASONING}"`,
+      "-c",
+      `developer_instructions=${prompt.systemPrompt}`,
+      prompt.userPrompt,
+    ],
+    summaryPath,
+  };
+}
+
+function parseCodexStatus(raw: Record<string, unknown>, type: string): string | null {
+  const command = extractCommandText(raw.command)
+    ?? (isRecord(raw.item) ? extractCommandText(raw.item.command) : null);
+  if (command && (type.includes("command") || type.includes("exec") || type.includes("shell"))) {
+    return `Running ${truncateText(command)}`;
+  }
+
+  const toolName = readString(raw.tool_name)
+    ?? readString(raw.name)
+    ?? (isRecord(raw.item) ? readString(raw.item.name) : null);
+  if (toolName && (type.includes("tool") || type.includes("function"))) {
+    return `Using ${toolName}...`;
+  }
+
+  const status = readString(raw.status);
+  if (status && !["completed", "done", "finished"].includes(status)) {
+    return truncateText(status);
+  }
+
+  if (type.includes("turn")) return "Thinking...";
+  return null;
+}
+
+function parseCodexStreamLine(
+  raw: Record<string, unknown>,
+  state: InitAgentStreamState,
+): InitAgentStreamEvent[] {
+  const type = readString(raw.type) ?? readString(raw.event) ?? "unknown";
+
+  if (type === "response.output_text.delta" && typeof raw.delta === "string") {
+    return [{ kind: "assistant_delta", text: raw.delta }];
+  }
+
+  if (type === "response.output_text.done") {
+    const text = readString(raw.text) ?? extractTextBlocks(raw.item).trim();
+    return [...(text ? streamSnapshot(state, text) : []), ...closeAssistant(state)];
+  }
+
+  if (type.includes("error")) {
+    const message = isRecord(raw.error) ? readString(raw.error.message) : readString(raw.message);
+    return emitWarning(state, message ?? "Codex returned an error.");
+  }
+
+  const status = parseCodexStatus(raw, type);
+  if (status) return emitStatus(state, status);
+
+  if (type.includes("delta") && typeof raw.delta === "string") {
+    return [{ kind: "assistant_delta", text: raw.delta }];
+  }
+
+  const snapshot = extractStructuredMessage(raw);
+  if (snapshot && (type.includes("assistant") || type.includes("message") || type.includes("output") || type.includes("response"))) {
+    const events = streamSnapshot(state, snapshot);
+    if (type.includes("done") || type.includes("completed") || type.includes("finished")) {
+      events.push(...closeAssistant(state));
+    }
+    return events;
+  }
+
+  if (type.includes("done") || type.includes("completed") || type.includes("finished")) {
+    return closeAssistant(state);
+  }
+
+  return [];
+}
+
 export const codexAdapter: AgentAdapter = {
   id: "codex",
   label: "Codex",
@@ -206,8 +325,10 @@ export const codexAdapter: AgentAdapter = {
   },
   chatProvider: "codex",
   supportsPinnedSessionId: false,
+  buildCommand: buildCodexInvocation,
   generatedArtifactExcludes: [".codex/hooks.json"],
   writeRuntimeArtifacts: writeCodexRuntimeArtifacts,
-  buildCommand: buildCodexInvocation,
   listSessionIds: listCodexSessionIds,
+  buildInitCommand: buildCodexInitCommand,
+  parseInitStreamLine: parseCodexStreamLine,
 };

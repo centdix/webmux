@@ -32,6 +32,28 @@ export interface RuntimeArtifactsContext {
   webmuxDir: string;
 }
 
+export interface InitPromptSpec {
+  systemPrompt: string;
+  userPrompt: string;
+}
+
+export interface InitAgentCommandSpec {
+  agent: AgentKind;
+  cmd: string;
+  args: string[];
+  summaryPath?: string;
+}
+
+export interface InitAgentStreamEvent {
+  kind: "assistant_delta" | "assistant_done" | "status" | "warning";
+  text: string;
+}
+
+export interface InitAgentStreamState {
+  assistantSnapshot: string;
+  lastStatus: string | null;
+}
+
 /** Everything that differs between built-in agents lives behind this interface, one
  *  implementation per file in this directory. Register a new one in `./index.ts`. */
 export interface AgentAdapter {
@@ -49,6 +71,10 @@ export interface AgentAdapter {
   generatedArtifactExcludes: readonly string[];
   /** Writes the agent's lifecycle bridge (hooks/plugin/extension) that reports to `agentCtlPath`. */
   writeRuntimeArtifacts(ctx: RuntimeArtifactsContext): Promise<void>;
+  /** The non-interactive CLI invocation `webmux init` uses to let the agent scaffold `.webmux.yaml`. */
+  buildInitCommand(prompt: InitPromptSpec, outputPrefix: string): InitAgentCommandSpec;
+  /** Turns one parsed JSON line of that invocation's stdout into stream events. */
+  parseInitStreamLine(raw: Record<string, unknown>, state: InitAgentStreamState): InitAgentStreamEvent[];
   /** Session ids for `cwd`, newest first. */
   listSessionIds(cwd: string): Promise<string[]>;
 }

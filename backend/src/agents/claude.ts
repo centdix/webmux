@@ -2,8 +2,29 @@ import { mkdir, readdir, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { encodeClaudeProjectDir } from "../adapters/claude-cli";
 import { isRecord } from "../lib/type-guards";
-import { home, newestFirst, quoteShell, type HookConfigFile, type StampedSession } from "./shared";
-import type { AgentAdapter, BuiltInLaunchInput, RuntimeArtifactsContext } from "./types";
+import {
+  closeAssistant,
+  emitStatus,
+  emitWarning,
+  extractStructuredMessage,
+  extractTextBlocks,
+  home,
+  type HookConfigFile,
+  newestFirst,
+  quoteShell,
+  readString,
+  type StampedSession,
+  streamSnapshot,
+} from "./shared";
+import type {
+  AgentAdapter,
+  BuiltInLaunchInput,
+  InitAgentCommandSpec,
+  InitAgentStreamEvent,
+  InitAgentStreamState,
+  InitPromptSpec,
+  RuntimeArtifactsContext,
+} from "./types";
 
 function buildClaudeInvocation(input: BuiltInLaunchInput): string {
   const promptSuffix = input.prompt ? ` -- ${quoteShell(input.prompt)}` : "";
@@ -145,6 +166,78 @@ async function writeClaudeRuntimeArtifacts(ctx: RuntimeArtifactsContext): Promis
   await mergeClaudeSettings(settingsPath, hooks);
 }
 
+const FAST_CLAUDE_MODEL = "haiku";
+const FAST_CLAUDE_EFFORT = "low";
+
+function buildClaudeInitCommand(prompt: InitPromptSpec): InitAgentCommandSpec {
+  return {
+    agent: "claude",
+    cmd: "claude",
+    args: [
+      "-p",
+      "--verbose",
+      "--permission-mode",
+      "bypassPermissions",
+      "--model",
+      FAST_CLAUDE_MODEL,
+      "--effort",
+      FAST_CLAUDE_EFFORT,
+      "--output-format",
+      "stream-json",
+      "--include-partial-messages",
+      "--append-system-prompt",
+      prompt.systemPrompt,
+      prompt.userPrompt,
+    ],
+  };
+}
+
+function parseClaudeStreamLine(
+  raw: Record<string, unknown>,
+  state: InitAgentStreamState,
+): InitAgentStreamEvent[] {
+  const type = readString(raw.type) ?? "unknown";
+
+  if (type === "content_block_delta" && isRecord(raw.delta)) {
+    if (raw.delta.type === "text_delta" && typeof raw.delta.text === "string") {
+      return [{ kind: "assistant_delta", text: raw.delta.text }];
+    }
+    if (typeof raw.delta.text === "string") {
+      return [{ kind: "assistant_delta", text: raw.delta.text }];
+    }
+  }
+
+  if (type === "content_block_start" && isRecord(raw.content_block)) {
+    if (raw.content_block.type === "tool_use") {
+      return emitStatus(state, `Using ${readString(raw.content_block.name) ?? "tool"}...`);
+    }
+
+    const snapshot = extractTextBlocks(raw.content_block).trim();
+    return streamSnapshot(state, snapshot);
+  }
+
+  if (type === "message_stop" || type === "result_stop" || type === "content_block_stop") {
+    return closeAssistant(state);
+  }
+
+  if (type === "error") {
+    const message = isRecord(raw.error) ? readString(raw.error.message) : readString(raw.message);
+    return emitWarning(state, message ?? "Claude returned an error.");
+  }
+
+  if (type.includes("tool")) {
+    const toolName = readString(raw.tool_name)
+      ?? (isRecord(raw.tool) ? readString(raw.tool.name) : null)
+      ?? readString(raw.name);
+    if (toolName) return emitStatus(state, `Using ${toolName}...`);
+  }
+
+  const snapshot = extractStructuredMessage(raw);
+  if (snapshot) return streamSnapshot(state, snapshot);
+
+  return [];
+}
+
 export const claudeAdapter: AgentAdapter = {
   id: "claude",
   label: "Claude",
@@ -157,8 +250,10 @@ export const claudeAdapter: AgentAdapter = {
   },
   chatProvider: "claude",
   supportsPinnedSessionId: true,
+  buildCommand: buildClaudeInvocation,
   generatedArtifactExcludes: [],
   writeRuntimeArtifacts: writeClaudeRuntimeArtifacts,
-  buildCommand: buildClaudeInvocation,
   listSessionIds: listClaudeSessionIds,
+  buildInitCommand: buildClaudeInitCommand,
+  parseInitStreamLine: parseClaudeStreamLine,
 };

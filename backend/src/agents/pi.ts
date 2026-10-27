@@ -1,8 +1,27 @@
 import { readdir, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { isRecord } from "../lib/type-guards";
-import { home, newestFirst, quoteShell, type StampedSession } from "./shared";
-import type { AgentAdapter, BuiltInLaunchInput, RuntimeArtifactsContext } from "./types";
+import {
+  closeAssistant,
+  emitStatus,
+  extractCommandText,
+  home,
+  newestFirst,
+  quoteShell,
+  readString,
+  type StampedSession,
+  streamSnapshot,
+  truncateText,
+} from "./shared";
+import type {
+  AgentAdapter,
+  BuiltInLaunchInput,
+  InitAgentCommandSpec,
+  InitAgentStreamEvent,
+  InitAgentStreamState,
+  InitPromptSpec,
+  RuntimeArtifactsContext,
+} from "./types";
 
 const PI_EXTENSION_FILENAME = "webmux-pi-extension.js";
 
@@ -122,6 +141,46 @@ async function writePiRuntimeArtifacts(ctx: RuntimeArtifactsContext): Promise<vo
   await Bun.write(piExtensionPath(ctx.webmuxDir), buildPiExtension({ agentCtlPath: ctx.agentCtlPath }));
 }
 
+function buildPiInitCommand(prompt: InitPromptSpec): InitAgentCommandSpec {
+  return {
+    agent: "pi",
+    cmd: "pi",
+    // pi has no permission prompts, so editing .webmux.yaml needs no approval flag.
+    args: ["--mode", "json", "--append-system-prompt", prompt.systemPrompt, prompt.userPrompt],
+  };
+}
+
+/** `pi --mode json` emits session events: `message_update` carries text deltas and
+ *  `tool_execution_start` carries the tool call. */
+function parsePiStreamLine(
+  raw: Record<string, unknown>,
+  state: InitAgentStreamState,
+): InitAgentStreamEvent[] {
+  const type = readString(raw.type) ?? "unknown";
+
+  if (type === "message_update" && isRecord(raw.assistantMessageEvent)) {
+    const event = raw.assistantMessageEvent;
+    if (event.type === "text_delta" && typeof event.delta === "string") {
+      return streamSnapshot(state, state.assistantSnapshot + event.delta);
+    }
+    return [];
+  }
+
+  if (type === "tool_execution_start") {
+    const args = isRecord(raw.args) ? raw.args : null;
+    const command = args ? extractCommandText(args.command) : null;
+    const toolName = readString(raw.toolName);
+    if (command) return emitStatus(state, `Running ${truncateText(command)}`);
+    if (toolName) return emitStatus(state, `Using ${toolName}...`);
+  }
+
+  if (type === "message_end" || type === "turn_end") {
+    return closeAssistant(state);
+  }
+
+  return [];
+}
+
 export const piAdapter: AgentAdapter = {
   id: "pi",
   label: "pi",
@@ -135,8 +194,10 @@ export const piAdapter: AgentAdapter = {
   },
   chatProvider: null,
   supportsPinnedSessionId: true,
+  buildCommand: buildPiInvocation,
   generatedArtifactExcludes: [],
   writeRuntimeArtifacts: writePiRuntimeArtifacts,
-  buildCommand: buildPiInvocation,
   listSessionIds: listPiSessionIds,
+  buildInitCommand: buildPiInitCommand,
+  parseInitStreamLine: parsePiStreamLine,
 };
