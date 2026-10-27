@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { isAgentKind } from "../agents";
 import { log } from "../lib/log";
 import type {
   AgentId,
@@ -119,10 +120,7 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 function parseAgentKind(value: unknown): AgentKind {
-  if (value === "codex") return "codex";
-  if (value === "opencode") return "opencode";
-  if (value === "pi") return "pi";
-  return "claude";
+  return isAgentKind(value) ? value : "claude";
 }
 
 function parseIdeKind(value: unknown): IdeKind {

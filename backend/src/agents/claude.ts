@@ -241,6 +241,7 @@ function parseClaudeStreamLine(
 export const claudeAdapter: AgentAdapter = {
   id: "claude",
   label: "Claude",
+  binary: "claude",
   capabilities: {
     terminal: true,
     inAppChat: true,

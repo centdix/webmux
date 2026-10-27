@@ -8,13 +8,14 @@ import type {
   InitAgentStreamState,
   InitPromptSpec,
 } from "../agents/types";
+import type { AgentKind } from "../domain/config";
 import { detectProjectName, run } from "../lib/shell";
 import { isRecord } from "../lib/type-guards";
 
 export type { InitAgentCommandSpec, InitAgentStreamEvent, InitPromptSpec };
 
-export type InitAuthoringChoice = "claude" | "codex" | "opencode" | "pi" | "manual";
-export type InitAgent = Exclude<InitAuthoringChoice, "manual">;
+export type InitAgent = AgentKind;
+export type InitAuthoringChoice = InitAgent | "manual";
 export type InitPackageManager = "bun" | "npm" | "pnpm" | "yarn";
 
 export interface InitProjectContext {

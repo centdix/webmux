@@ -16,3 +16,10 @@ export const AGENT_ADAPTERS = {
 export function getAgentAdapter(kind: AgentKind): AgentAdapter {
   return AGENT_ADAPTERS[kind];
 }
+
+/** Built-in agent kinds in preference order (the order `AGENT_ADAPTERS` lists them in). */
+export const AGENT_KINDS = Object.keys(AGENT_ADAPTERS) as AgentKind[];
+
+export function isAgentKind(value: unknown): value is AgentKind {
+  return typeof value === "string" && Object.hasOwn(AGENT_ADAPTERS, value);
+}
