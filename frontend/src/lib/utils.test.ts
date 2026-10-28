@@ -3,13 +3,16 @@ import type { PrEntry } from "./types";
 import {
   LAST_SELECTED_WORKTREE_STORAGE_KEY,
   WEB_CHAT_UI_STORAGE_KEY,
+  FAVORITE_WORKTREES_STORAGE_KEY,
   ideLabelForUrl,
+  loadFavoriteWorktrees,
   loadSavedSelectedWorktree,
   loadUseWebChatUi,
   makeIdeUrl,
   resolveSelectedBranch,
   prBadgeClass,
   prStateTextClass,
+  saveFavoriteWorktrees,
   saveSelectedWorktree,
   saveUseWebChatUi,
 } from "./utils";
@@ -58,6 +61,23 @@ describe("worktree selection persistence", () => {
 
     expect(loadSavedSelectedWorktree()).toBeNull();
     expect(localStorage.getItem(LAST_SELECTED_WORKTREE_STORAGE_KEY)).toBeNull();
+  });
+
+  it("stores favorite worktrees per project and clears them when empty", () => {
+    saveFavoriteWorktrees("proj-a", new Set(["feature/a"]));
+
+    expect(loadFavoriteWorktrees("proj-a")).toEqual(new Set(["feature/a"]));
+    expect(loadFavoriteWorktrees("proj-b")).toEqual(new Set());
+
+    saveFavoriteWorktrees("proj-a", new Set());
+
+    expect(localStorage.getItem(`${FAVORITE_WORKTREES_STORAGE_KEY}:proj-a`)).toBeNull();
+  });
+
+  it("ignores malformed favorite worktrees data", () => {
+    localStorage.setItem(FAVORITE_WORKTREES_STORAGE_KEY, "not json");
+
+    expect(loadFavoriteWorktrees("")).toEqual(new Set());
   });
 
   it("stores and clears the web chat UI preference", () => {

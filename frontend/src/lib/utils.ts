@@ -7,6 +7,7 @@ export const THEME_STORAGE_KEY = "wt-theme";
 export const LAST_SELECTED_WORKTREE_STORAGE_KEY = "wt-last-selected-worktree";
 export const SIDEBAR_WIDTH_STORAGE_KEY = "wt-sidebar-width";
 export const WEB_CHAT_UI_STORAGE_KEY = "wt-use-web-chat-ui";
+export const FAVORITE_WORKTREES_STORAGE_KEY = "wt-favorite-worktrees";
 const DEFAULT_SIDEBAR_WIDTH = 220;
 
 export function prLabel(pr: Pick<PrEntry, "repo" | "number">): string {
@@ -108,6 +109,32 @@ export function saveSelectedWorktree(branch: string | null): void {
     return;
   }
   localStorage.removeItem(LAST_SELECTED_WORKTREE_STORAGE_KEY);
+}
+
+function favoriteWorktreesStorageKey(projectPrefix: string): string {
+  return projectPrefix ? `${FAVORITE_WORKTREES_STORAGE_KEY}:${projectPrefix}` : FAVORITE_WORKTREES_STORAGE_KEY;
+}
+
+export function loadFavoriteWorktrees(projectPrefix: string): Set<string> {
+  const stored = localStorage.getItem(favoriteWorktreesStorageKey(projectPrefix));
+  if (!stored) return new Set();
+  try {
+    const parsed: unknown = JSON.parse(stored);
+    return Array.isArray(parsed)
+      ? new Set(parsed.filter((branch): branch is string => typeof branch === "string"))
+      : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+export function saveFavoriteWorktrees(projectPrefix: string, branches: Set<string>): void {
+  const key = favoriteWorktreesStorageKey(projectPrefix);
+  if (branches.size === 0) {
+    localStorage.removeItem(key);
+    return;
+  }
+  localStorage.setItem(key, JSON.stringify([...branches]));
 }
 
 export function applyTheme(key: ThemeKey): void {

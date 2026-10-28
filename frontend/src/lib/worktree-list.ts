@@ -88,6 +88,13 @@ export function branchesWithAgentStatus(
     .map(({ worktree }) => worktree.branch);
 }
 
+export function sortFavoritesFirst(worktrees: WorktreeInfo[], favorites: Set<string>): WorktreeInfo[] {
+  return [
+    ...worktrees.filter((worktree) => favorites.has(worktree.branch)),
+    ...worktrees.filter((worktree) => !favorites.has(worktree.branch)),
+  ];
+}
+
 export function buildWorktreeListRows(worktrees: WorktreeInfo[]): WorktreeListRow[] {
   const worktreesByBranch = new Map(worktrees.map((worktree) => [worktree.branch, worktree]));
   const childrenByParent = new Map<string, WorktreeInfo[]>();
