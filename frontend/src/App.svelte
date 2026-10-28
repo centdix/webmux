@@ -48,12 +48,15 @@
     saveSidebarWidth,
     loadUseWebChatUi,
     saveUseWebChatUi,
+    loadFavoriteWorktrees,
+    saveFavoriteWorktrees,
   } from "./lib/utils";
   import {
     buildWorktreeListRows,
     countArchivedMatches,
     filterWorktrees,
     matchesWorktreeSearch,
+    sortFavoritesFirst,
   } from "./lib/worktree-list";
   import { supportsWorktreeChat, supportsWorktreeTabs } from "./lib/agent-capabilities";
   import { getTheme } from "./lib/themes";
@@ -106,6 +109,7 @@
   let worktrees = $state<WorktreeInfo[]>([]);
   let selectedBranch = $state<string | null>(loadSavedSelectedWorktree());
   let hasLoadedWorktrees = $state(false);
+  let favoriteBranches = $state<Set<string>>(loadFavoriteWorktrees(activePrefix));
   let removeBranch = $state<string | null>(null);
   let mergeBranch = $state<string | null>(null);
   let postToLinearBranch = $state<string | null>(null);
@@ -419,10 +423,13 @@
     showArchivedWorktrees ? 0 : countArchivedMatches(worktrees, trimmedWorktreeSearch),
   );
   let visibleWorktrees = $derived(
-    filterWorktrees(worktrees, {
-      query: trimmedWorktreeSearch,
-      showArchived: showArchivedWorktrees,
-    }),
+    sortFavoritesFirst(
+      filterWorktrees(worktrees, {
+        query: trimmedWorktreeSearch,
+        showArchived: showArchivedWorktrees,
+      }),
+      favoriteBranches,
+    ),
   );
   let visibleWorktreeRows = $derived(buildWorktreeListRows(visibleWorktrees));
   let creatingWorktrees = $derived(worktrees.filter((w) => w.creating));
@@ -713,6 +720,13 @@
     if (trimmedWorktreeSearch && !matchesWorktreeSearch(worktree, trimmedWorktreeSearch)) {
       searchQuery = "";
     }
+  }
+
+  function toggleFavoriteWorktree(branch: string): void {
+    const next = new Set(favoriteBranches);
+    if (!next.delete(branch)) next.add(branch);
+    favoriteBranches = next;
+    saveFavoriteWorktrees(activePrefix, next);
   }
 
   function handleSelectWorktree(branch: string): void {
@@ -1262,6 +1276,7 @@
         archiving={archivingBranches}
         postingLinear={postingLinearBranches}
         {notifiedBranches}
+        favorites={favoriteBranches}
         emptyMessage={worktreeListEmptyMessage}
         onselect={handleSelectWorktree}
         onclose={closeWorktree}
@@ -1272,6 +1287,7 @@
         onremove={(b) => (removeBranch = b)}
         oneditprofile={openProfileDialog}
         oncreatesubworktree={openSubworktreeDialog}
+        ontogglefavorite={toggleFavoriteWorktree}
         onposttolinear={handlePostToLinear}
       />
       {#if config.projectDir}

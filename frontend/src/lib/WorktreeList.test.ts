@@ -59,6 +59,7 @@ describe("WorktreeList", () => {
         archiving: new Set<string>(),
         postingLinear: new Set<string>(),
         notifiedBranches: new Set<string>(),
+        favorites: new Set<string>(),
         onselect,
         onclose: vi.fn(),
         onarchive: vi.fn(),
@@ -66,6 +67,7 @@ describe("WorktreeList", () => {
         oncreatesubworktree: vi.fn(),
         onremove,
         oneditprofile: vi.fn(),
+        ontogglefavorite: vi.fn(),
       },
     });
 
@@ -86,6 +88,7 @@ describe("WorktreeList", () => {
         archiving: new Set<string>(),
         postingLinear: new Set<string>(),
         notifiedBranches: new Set<string>(),
+        favorites: new Set<string>(),
         onselect: vi.fn(),
         onclose: vi.fn(),
         onarchive: vi.fn(),
@@ -93,6 +96,7 @@ describe("WorktreeList", () => {
         oncreatesubworktree: vi.fn(),
         onremove: vi.fn(),
         oneditprofile: vi.fn(),
+        ontogglefavorite: vi.fn(),
       },
     });
 
@@ -112,6 +116,7 @@ describe("WorktreeList", () => {
         archiving: new Set<string>(),
         postingLinear: new Set<string>(),
         notifiedBranches: new Set<string>(),
+        favorites: new Set<string>(),
         onselect: vi.fn(),
         onclose: vi.fn(),
         onarchive,
@@ -119,6 +124,7 @@ describe("WorktreeList", () => {
         oncreatesubworktree: vi.fn(),
         onremove: vi.fn(),
         oneditprofile: vi.fn(),
+        ontogglefavorite: vi.fn(),
       },
     });
 
@@ -145,6 +151,7 @@ describe("WorktreeList", () => {
         archiving: new Set<string>(),
         postingLinear: new Set<string>(),
         notifiedBranches: new Set<string>(),
+        favorites: new Set<string>(),
         onselect: vi.fn(),
         onclose: vi.fn(),
         onarchive: vi.fn(),
@@ -152,6 +159,7 @@ describe("WorktreeList", () => {
         oncreatesubworktree,
         onremove: vi.fn(),
         oneditprofile: vi.fn(),
+        ontogglefavorite: vi.fn(),
       },
     });
 
@@ -159,6 +167,42 @@ describe("WorktreeList", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Create sub-worktree" }));
 
     expect(oncreatesubworktree).toHaveBeenCalledWith("feature/sub-base");
+  });
+
+  it("toggles favorites from the menu and marks favorite rows", async () => {
+    const ontogglefavorite = vi.fn();
+
+    const { container } = render(WorktreeList, {
+      props: {
+        rows: [createRow(createWorktree("feature/fav")), createRow(createWorktree("feature/plain"))],
+        selected: null,
+        removing: new Set<string>(),
+        initializing: new Set<string>(),
+        archiving: new Set<string>(),
+        postingLinear: new Set<string>(),
+        notifiedBranches: new Set<string>(),
+        favorites: new Set<string>(["feature/fav"]),
+        onselect: vi.fn(),
+        onclose: vi.fn(),
+        onarchive: vi.fn(),
+        onmerge: vi.fn(),
+        oncreatesubworktree: vi.fn(),
+        onremove: vi.fn(),
+        oneditprofile: vi.fn(),
+        ontogglefavorite,
+      },
+    });
+
+    expect(container.querySelectorAll("[data-worktree-favorite]")).toHaveLength(1);
+    expect(container.querySelector('[data-branch="feature/fav"] [data-worktree-favorite]')).not.toBeNull();
+
+    await fireEvent.click(screen.getByRole("button", { name: /actions for feature\/fav/i }));
+    await fireEvent.click(screen.getByRole("button", { name: "Remove from favorites" }));
+    expect(ontogglefavorite).toHaveBeenCalledWith("feature/fav");
+
+    await fireEvent.click(screen.getByRole("button", { name: /actions for feature\/plain/i }));
+    await fireEvent.click(screen.getByRole("button", { name: "Add to favorites" }));
+    expect(ontogglefavorite).toHaveBeenCalledWith("feature/plain");
   });
 
   it("renders labels as the primary row name with the branch below", () => {
@@ -171,6 +215,7 @@ describe("WorktreeList", () => {
         archiving: new Set<string>(),
         postingLinear: new Set<string>(),
         notifiedBranches: new Set<string>(),
+        favorites: new Set<string>(),
         onselect: vi.fn(),
         onclose: vi.fn(),
         onarchive: vi.fn(),
@@ -178,6 +223,7 @@ describe("WorktreeList", () => {
         oncreatesubworktree: vi.fn(),
         onremove: vi.fn(),
         oneditprofile: vi.fn(),
+        ontogglefavorite: vi.fn(),
       },
     });
 
@@ -201,6 +247,7 @@ describe("WorktreeList", () => {
         archiving: new Set<string>(),
         postingLinear: new Set<string>(),
         notifiedBranches: new Set<string>(),
+        favorites: new Set<string>(),
         onselect: vi.fn(),
         onclose: vi.fn(),
         onarchive: vi.fn(),
@@ -208,6 +255,7 @@ describe("WorktreeList", () => {
         oncreatesubworktree: vi.fn(),
         onremove: vi.fn(),
         oneditprofile: vi.fn(),
+        ontogglefavorite: vi.fn(),
       },
     });
 
@@ -236,6 +284,7 @@ describe("WorktreeList", () => {
         archiving: new Set<string>(["feature/archiving"]),
         postingLinear: new Set<string>(),
         notifiedBranches: new Set<string>(),
+        favorites: new Set<string>(),
         onselect: vi.fn(),
         onclose: vi.fn(),
         onarchive: vi.fn(),
@@ -243,6 +292,7 @@ describe("WorktreeList", () => {
         oncreatesubworktree: vi.fn(),
         onremove: vi.fn(),
         oneditprofile: vi.fn(),
+        ontogglefavorite: vi.fn(),
       },
     });
 

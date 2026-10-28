@@ -24,6 +24,7 @@
     archiving,
     postingLinear,
     notifiedBranches,
+    favorites,
     emptyMessage = "No worktrees found.",
     onselect,
     onclose,
@@ -32,6 +33,7 @@
     onremove,
     oneditprofile,
     oncreatesubworktree,
+    ontogglefavorite,
     onposttolinear,
   }: {
     rows: WorktreeListRow[];
@@ -41,6 +43,7 @@
     archiving: Set<string>;
     postingLinear: Set<string>;
     notifiedBranches: Set<string>;
+    favorites: Set<string>;
     emptyMessage?: string;
     onselect: (branch: string) => void;
     onclose: (branch: string) => void;
@@ -49,6 +52,7 @@
     onremove: (branch: string) => void;
     oneditprofile: (branch: string) => void;
     oncreatesubworktree: (branch: string) => void;
+    ontogglefavorite: (branch: string) => void;
     onposttolinear?: (branch: string) => void;
   } = $props();
 
@@ -212,6 +216,7 @@
       {@const isArchiving = archiving.has(wt.branch)}
       {@const isCreating = wt.creating}
       {@const isArchived = wt.archived}
+      {@const isFavorite = favorites.has(wt.branch)}
       {@const isBusy = isRemoving || isInitializing}
       {@const hasLabel = !!wt.label}
       {@const hasBadgeRow = isArchived || isCreating || isInitializing || isClosed || wt.prs.length > 0 || !!wt.linearIssue || wt.source === "oneshot"}
@@ -243,6 +248,9 @@
                     <span class="text-[10px] leading-tight text-muted truncate">{wt.branch}</span>
                   {/if}
                 </span>
+                {#if isFavorite}
+                  <span class="shrink-0 text-warning" title="Favorite" data-worktree-favorite>★</span>
+                {/if}
                 {#if !isCreating && !isInitializing && !isClosed && agentIconVisible(wt.agent, notifiedBranches.has(wt.branch))}
                   <span class="shrink-0"
                     ><AgentStatusIcon
@@ -340,6 +348,16 @@
             class="absolute top-9 right-2 z-10 min-w-32 rounded-md border border-edge bg-surface shadow-lg p-1"
             data-worktree-row-menu
           >
+            <button
+              type="button"
+              class="w-full px-2 py-1.5 rounded text-left text-xs text-primary hover:bg-hover"
+              onclick={(event) => {
+                event.stopPropagation();
+                runMenuAction(wt.branch, ontogglefavorite);
+              }}
+            >
+              {isFavorite ? "Remove from favorites" : "Add to favorites"}
+            </button>
             <button
               type="button"
               disabled={isClosed || isCreating}

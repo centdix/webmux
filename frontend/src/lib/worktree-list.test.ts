@@ -5,6 +5,7 @@ import {
   countAgentStatusesIn,
   countArchivedMatches,
   filterWorktrees,
+  sortFavoritesFirst,
 } from "./worktree-list";
 import type { WorktreeInfo, WorktreeListRow } from "./types";
 
@@ -106,6 +107,36 @@ describe("buildWorktreeListRows", () => {
 function createRow(branch: string, overrides: Partial<WorktreeInfo> = {}): WorktreeListRow {
   return { worktree: createWorktree(branch, { mux: "✓", ...overrides }), depth: 0 };
 }
+
+describe("sortFavoritesFirst", () => {
+  it("moves favorites to the top while keeping relative order", () => {
+    const sorted = sortFavoritesFirst(
+      [createWorktree("a"), createWorktree("b"), createWorktree("c"), createWorktree("d")],
+      new Set(["d", "b"]),
+    );
+
+    expect(sorted.map((worktree) => worktree.branch)).toEqual(["b", "d", "a", "c"]);
+  });
+
+  it("moves a favorite root together with its sub-worktrees", () => {
+    const rows = buildWorktreeListRows(
+      sortFavoritesFirst(
+        [
+          createWorktree("other"),
+          createWorktree("fav"),
+          createWorktree("fav-child", { baseBranch: "fav" }),
+        ],
+        new Set(["fav"]),
+      ),
+    );
+
+    expect(rows.map((row) => [row.worktree.branch, row.depth])).toEqual([
+      ["fav", 0],
+      ["fav-child", 1],
+      ["other", 0],
+    ]);
+  });
+});
 
 describe("countAgentStatusesIn", () => {
   const rows = [
