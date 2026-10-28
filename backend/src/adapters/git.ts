@@ -384,7 +384,7 @@ export class BunGitGateway implements GitGateway {
   createWorktree(opts: CreateGitWorktreeOptions): void {
     const args = ["worktree", "add"];
     if (opts.mode === "new") {
-      args.push("-b", opts.branch, opts.worktreePath);
+      args.push("--no-track", "-b", opts.branch, opts.worktreePath);
       if (opts.baseBranch) args.push(opts.baseBranch);
     } else {
       if (opts.startPoint) {

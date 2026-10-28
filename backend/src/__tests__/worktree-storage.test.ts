@@ -32,6 +32,7 @@ class FakeGitGateway implements GitGateway {
   constructor(
     private readonly gitDir: string,
     private readonly calls: string[],
+    private readonly fetchResult: TryGitCommandResult = { ok: true, stdout: "" },
   ) {}
 
   resolveRepoRoot(dir: string): string | null {
@@ -114,8 +115,9 @@ class FakeGitGateway implements GitGateway {
     return [];
   }
 
-  fetchBranch(_repoRoot: string, _remote: string, _branch: string): TryGitCommandResult {
-    return { ok: true, stdout: "" };
+  fetchBranch(_repoRoot: string, remote: string, branch: string): TryGitCommandResult {
+    this.calls.push(`fetchBranch:${remote}:${branch}`);
+    return this.fetchResult;
   }
 
   fastForwardMerge(_repoRoot: string, _ref: string): TryGitCommandResult {
@@ -570,13 +572,80 @@ describe("initializeManagedWorktree", () => {
       { git, tmux },
     );
 
-    expect(calls[0]).toBe(`createWorktree:/repo/project:${worktreePath}:feature/search-panel:new:main:`);
+    expect(calls[0]).toBe("fetchBranch:origin:main");
+    expect(calls[1]).toBe(`createWorktree:/repo/project:${worktreePath}:feature/search-panel:new:origin/main:`);
     expect(calls).toContain("ensureServer");
     expect(calls.some((call) => call.startsWith("createWindow:wm-project-12345678:wm-feature/search-panel"))).toBe(true);
 
     const meta = await readWorktreeMeta(gitDir);
     expect(meta?.branch).toBe("feature/search-panel");
     expect(meta?.baseBranch).toBe("main");
+  });
+
+  it("starts new worktrees from the freshly fetched origin base, not the stale local one", async () => {
+    const originRoot = await mkdtemp(join(tmpdir(), "webmux-create-origin-"));
+    run(["git", "init", "-b", "main"], originRoot);
+    run(["git", "config", "user.name", "Test User"], originRoot);
+    run(["git", "config", "user.email", "test@example.com"], originRoot);
+    await Bun.write(join(originRoot, "README.md"), "# repo\n");
+    run(["git", "add", "README.md"], originRoot);
+    run(["git", "commit", "-m", "init"], originRoot);
+
+    repoRoot = await mkdtemp(join(tmpdir(), "webmux-create-stale-"));
+    run(["git", "clone", originRoot, repoRoot], tmpdir());
+
+    await Bun.write(join(originRoot, "LATEST.md"), "latest\n");
+    run(["git", "add", "LATEST.md"], originRoot);
+    run(["git", "commit", "-m", "latest"], originRoot);
+
+    await mkdir(join(repoRoot, "__worktrees"), { recursive: true });
+    worktreePath = join(repoRoot, "__worktrees", "feature-fresh");
+
+    try {
+      const created = await createManagedWorktree(
+        {
+          repoRoot,
+          worktreePath,
+          branch: "feature-fresh",
+          mode: "new",
+          baseBranch: "main",
+          profile: "default",
+          agent: "claude",
+          runtime: "host",
+        },
+        { git: new BunGitGateway() },
+      );
+
+      expect(await Bun.file(join(worktreePath, "LATEST.md")).exists()).toBe(true);
+      expect(Bun.spawnSync(["git", "config", "--get", "branch.feature-fresh.merge"], { cwd: repoRoot }).exitCode).toBe(1);
+      expect(created.meta.baseBranch).toBe("main");
+    } finally {
+      await rm(originRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the local base when fetching origin fails", async () => {
+    gitDir = await mkdtemp(join(tmpdir(), "webmux-create-gitdir-"));
+    worktreePath = await mkdtemp(join(tmpdir(), "webmux-create-worktree-"));
+
+    const calls: string[] = [];
+    const git = new FakeGitGateway(gitDir, calls, { ok: false, stderr: "no remote" });
+
+    await createManagedWorktree(
+      {
+        repoRoot: "/repo/project",
+        worktreePath,
+        branch: "feature/offline",
+        mode: "new",
+        baseBranch: "main",
+        profile: "default",
+        agent: "claude",
+        runtime: "host",
+      },
+      { git },
+    );
+
+    expect(calls[1]).toBe(`createWorktree:/repo/project:${worktreePath}:feature/offline:new:main:`);
   });
 
   it("rolls back the git worktree and branch when initialization fails after creation", async () => {

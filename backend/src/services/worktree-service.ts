@@ -20,6 +20,7 @@ import {
 } from "../domain/model";
 import { ensureSessionLayout, type SessionLayoutPlan } from "./session-service";
 import type { TmuxGateway } from "../adapters/tmux";
+import { log } from "../lib/log";
 
 export interface InitializeManagedWorktreeOptions {
   gitDir: string;
@@ -192,6 +193,15 @@ export async function initializeManagedWorktree(
   };
 }
 
+/** Fetch the base from origin so new worktrees start from the latest remote state.
+ *  Falls back to the local ref when origin is unreachable or doesn't have the branch. */
+function resolveRemoteBaseRef(git: GitGateway, repoRoot: string, baseBranch: string): string {
+  const fetched = git.fetchBranch(repoRoot, "origin", baseBranch);
+  if (fetched.ok) return `origin/${baseBranch}`;
+  log.warn(`[worktree:add] fetch origin/${baseBranch} failed, using local ${baseBranch}: ${fetched.stderr}`);
+  return baseBranch;
+}
+
 export async function createManagedWorktree(
   opts: CreateManagedWorktreeOptions,
   deps: CreateManagedWorktreeDependencies = {},
@@ -206,7 +216,7 @@ export async function createManagedWorktree(
       worktreePath: opts.worktreePath,
       branch: opts.branch,
       mode: opts.mode,
-      baseBranch: opts.baseBranch,
+      baseBranch: opts.mode === "new" && opts.baseBranch ? resolveRemoteBaseRef(git, opts.repoRoot, opts.baseBranch) : opts.baseBranch,
       startPoint: opts.startPoint,
     });
     worktreeCreated = true;
