@@ -169,10 +169,11 @@ describe("WorktreeList", () => {
     expect(oncreatesubworktree).toHaveBeenCalledWith("feature/sub-base");
   });
 
-  it("toggles favorites from the menu and marks favorite rows", async () => {
+  it("toggles favorites with the always-visible star button without selecting the row", async () => {
+    const onselect = vi.fn();
     const ontogglefavorite = vi.fn();
 
-    const { container } = render(WorktreeList, {
+    render(WorktreeList, {
       props: {
         rows: [createRow(createWorktree("feature/fav")), createRow(createWorktree("feature/plain"))],
         selected: null,
@@ -182,7 +183,7 @@ describe("WorktreeList", () => {
         postingLinear: new Set<string>(),
         notifiedBranches: new Set<string>(),
         favorites: new Set<string>(["feature/fav"]),
-        onselect: vi.fn(),
+        onselect,
         onclose: vi.fn(),
         onarchive: vi.fn(),
         onmerge: vi.fn(),
@@ -193,16 +194,17 @@ describe("WorktreeList", () => {
       },
     });
 
-    expect(container.querySelectorAll("[data-worktree-favorite]")).toHaveLength(1);
-    expect(container.querySelector('[data-branch="feature/fav"] [data-worktree-favorite]')).not.toBeNull();
+    const remove = screen.getByRole("button", { name: "Remove feature/fav from favorites" });
+    const add = screen.getByRole("button", { name: "Add feature/plain to favorites" });
+    expect(remove.getAttribute("aria-pressed")).toBe("true");
+    expect(add.getAttribute("aria-pressed")).toBe("false");
 
-    await fireEvent.click(screen.getByRole("button", { name: /actions for feature\/fav/i }));
-    await fireEvent.click(screen.getByRole("button", { name: "Remove from favorites" }));
+    await fireEvent.click(remove);
     expect(ontogglefavorite).toHaveBeenCalledWith("feature/fav");
 
-    await fireEvent.click(screen.getByRole("button", { name: /actions for feature\/plain/i }));
-    await fireEvent.click(screen.getByRole("button", { name: "Add to favorites" }));
+    await fireEvent.click(add);
     expect(ontogglefavorite).toHaveBeenCalledWith("feature/plain");
+    expect(onselect).not.toHaveBeenCalled();
   });
 
   it("renders labels as the primary row name with the branch below", () => {

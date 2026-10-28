@@ -230,13 +230,13 @@
           class="w-full py-2.5 rounded-md border cursor-pointer flex flex-col gap-1 text-left text-inherit text-sm bg-transparent hover:bg-hover {isActive
             ? 'bg-active border-accent'
             : 'border-transparent'} {isClosed && !isInitializing && !isCreating ? 'opacity-50' : ''} {isArchived ? 'opacity-70' : ''}"
-          style={`padding-left:${12 + row.depth * 18}px; padding-right:40px;`}
+          style={`padding-left:${12 + row.depth * 18}px; padding-right:64px;`}
           onclick={() => {
             openMenuBranch = null;
             onselect(wt.branch);
           }}
         >
-          <span class="flex min-w-0 items-start gap-2 pr-5">
+          <span class="flex min-w-0 items-start gap-2">
             {#if row.depth > 0}
               <span class="shrink-0 text-muted/60">↳</span>
             {/if}
@@ -248,9 +248,6 @@
                     <span class="text-[10px] leading-tight text-muted truncate">{wt.branch}</span>
                   {/if}
                 </span>
-                {#if isFavorite}
-                  <span class="shrink-0 text-warning" title="Favorite" data-worktree-favorite>★</span>
-                {/if}
                 {#if !isCreating && !isInitializing && !isClosed && agentIconVisible(wt.agent, notifiedBranches.has(wt.branch))}
                   <span class="shrink-0"
                     ><AgentStatusIcon
@@ -317,6 +314,23 @@
         <button
           type="button"
           disabled={isBusy}
+          class="absolute top-2 right-8 w-6 h-6 rounded flex items-center justify-center hover:bg-hover cursor-pointer {isFavorite
+            ? 'text-warning'
+            : 'text-muted hover:text-warning'}"
+          title={isFavorite ? "Remove from favorites" : "Add to favorites"}
+          aria-label={`${isFavorite ? "Remove" : "Add"} ${wt.branch} ${isFavorite ? "from" : "to"} favorites`}
+          aria-pressed={isFavorite}
+          data-worktree-favorite
+          onclick={(event) => {
+            event.stopPropagation();
+            ontogglefavorite(wt.branch);
+          }}
+        >
+          {isFavorite ? "★" : "☆"}
+        </button>
+        <button
+          type="button"
+          disabled={isBusy}
           class="absolute top-2 right-2 w-6 h-6 rounded flex items-center justify-center text-muted hover:text-primary hover:bg-hover opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
           title="Worktree actions"
           aria-label={`Actions for ${wt.branch}`}
@@ -348,16 +362,6 @@
             class="absolute top-9 right-2 z-10 min-w-32 rounded-md border border-edge bg-surface shadow-lg p-1"
             data-worktree-row-menu
           >
-            <button
-              type="button"
-              class="w-full px-2 py-1.5 rounded text-left text-xs text-primary hover:bg-hover"
-              onclick={(event) => {
-                event.stopPropagation();
-                runMenuAction(wt.branch, ontogglefavorite);
-              }}
-            >
-              {isFavorite ? "Remove from favorites" : "Add to favorites"}
-            </button>
             <button
               type="button"
               disabled={isClosed || isCreating}
