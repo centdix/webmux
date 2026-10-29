@@ -35,6 +35,7 @@ Usage:
   webmux merge        Merge a worktree into the main branch and remove it
   webmux send         Send a prompt to a running worktree agent
   webmux tab          List, create, switch, or close agent tabs in a worktree
+  webmux port         Get, list, or release a dev-server port for a worktree
   webmux prune        Remove all closed (not open) worktrees in the current project
   webmux restore      Re-open all worktree sessions that were open before
   webmux linear       Post a worktree conversation to a Linear issue/team
@@ -54,7 +55,7 @@ Environment:
 `);
 }
 
-type RootCommand = "serve" | "init" | "service" | "update" | "add" | "oneshot" | "list" | "open" | "close" | "refresh" | "archive" | "unarchive" | "label" | "profile" | "remove" | "merge" | "send" | "tab" | "prune" | "restore" | "linear" | "project" | "completion" | null;
+type RootCommand = "serve" | "init" | "service" | "update" | "add" | "oneshot" | "list" | "open" | "close" | "refresh" | "archive" | "unarchive" | "label" | "profile" | "remove" | "merge" | "send" | "tab" | "port" | "prune" | "restore" | "linear" | "project" | "completion" | null;
 
 interface ParsedRootArgs {
   port: number;
@@ -87,6 +88,7 @@ function isRootCommand(value: string): value is NonNullable<RootCommand> {
     || value === "merge"
     || value === "send"
     || value === "tab"
+    || value === "port"
     || value === "prune"
     || value === "restore"
     || value === "linear"
@@ -107,6 +109,7 @@ function isServeRootOption(value: string): boolean {
 export function parseRootArgs(args: string[]): ParsedRootArgs {
   let port = parseInt(process.env.PORT || "5111", 10);
   let portExplicit = process.env.PORT !== undefined;
+  let portFromFlag = false;
   let debug = false;
   let app = false;
   let command: RootCommand = null;
@@ -132,6 +135,7 @@ export function parseRootArgs(args: string[]): ParsedRootArgs {
           throw new Error("Error: --port requires a numeric value");
         }
         portExplicit = true;
+        portFromFlag = true;
         index += 1;
         break;
       }
@@ -158,6 +162,13 @@ export function parseRootArgs(args: string[]): ParsedRootArgs {
     }
   }
 
+  // `webmux port` runs inside agent shells, where an inherited PORT is the app's
+  // dev-server port, not webmux's — only an explicit --port flag pins the server.
+  if (command === "port" && !portFromFlag) {
+    port = 5111;
+    portExplicit = false;
+  }
+
   return {
     port,
     portExplicit,
@@ -168,7 +179,7 @@ export function parseRootArgs(args: string[]): ParsedRootArgs {
   };
 }
 
-function isWorktreeCommand(command: RootCommand): command is "add" | "list" | "open" | "close" | "refresh" | "archive" | "unarchive" | "label" | "profile" | "remove" | "merge" | "send" | "tab" | "prune" | "restore" {
+function isWorktreeCommand(command: RootCommand): command is "add" | "list" | "open" | "close" | "refresh" | "archive" | "unarchive" | "label" | "profile" | "remove" | "merge" | "send" | "tab" | "port" | "prune" | "restore" {
   return command === "add"
     || command === "list"
     || command === "open"
@@ -182,6 +193,7 @@ function isWorktreeCommand(command: RootCommand): command is "add" | "list" | "o
     || command === "merge"
     || command === "send"
     || command === "tab"
+    || command === "port"
     || command === "prune"
     || command === "restore";
 }

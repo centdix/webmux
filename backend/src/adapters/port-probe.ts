@@ -55,3 +55,21 @@ export class BunPortProbe implements PortProbe {
     });
   }
 }
+
+/** Whether `port` can be bound on all interfaces right now. */
+export function canBind(port: number): boolean {
+  try {
+    const server = Bun.serve({
+      hostname: "0.0.0.0",
+      port,
+      fetch(): Response {
+        return new Response();
+      },
+    });
+    server.stop(true);
+    return true;
+  } catch (err: unknown) {
+    if ((err as { code?: string } | null)?.code === "EADDRINUSE") return false;
+    throw err;
+  }
+}

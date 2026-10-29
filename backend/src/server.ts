@@ -16,6 +16,7 @@ import {
   PostWorktreeToLinearRequestSchema,
   type PostWorktreeToLinearTarget,
   PullMainRequestSchema,
+  RegisterWorktreePortRequestSchema,
   RunIdParamsSchema,
   SendWorktreePromptRequestSchema,
   SetWorktreeArchivedRequestSchema,
@@ -144,8 +145,20 @@ import { createWebmuxRuntime, type WebmuxRuntime } from "./runtime";
 import { createInstanceRegistry, type InstanceEntry } from "./adapters/instance-registry";
 import { createProjectsRegistry } from "./adapters/projects-registry";
 import { ProjectManager, type ManagedProject, type ProjectLoopController } from "./services/project-manager";
+import { canBind, BunPortProbe } from "./adapters/port-probe";
+import { createPortRegistry } from "./adapters/port-registry";
+import { isValidPortLabel } from "./domain/port-registrations";
+import { PortRegistrationService } from "./services/port-registration-service";
+import { startSerializedInterval } from "./lib/async";
 
 const PORT = parseInt(Bun.env.PORT || "5111", 10);
+/** Process-wide: one registry across every served project, so a port handed to
+ *  one worktree is never handed to another. */
+const portRegistrationService = new PortRegistrationService({
+  registry: createPortRegistry(),
+  portProbe: new BunPortProbe(),
+  canBind,
+});
 const STATIC_DIR = Bun.env.WEBMUX_STATIC_DIR || "";
 /** Strict check: is `dir` itself inside a git work tree? Unlike
  *  git.resolveRepoRoot it never scans child directories, so a non-repo path is
@@ -1760,6 +1773,40 @@ function apiGetAutoNameConfig(): Response {
   return jsonResponse({ autoName: config.autoName, linearAvailability });
 }
 
+async function resolveWorktreeId(name: string): Promise<string | null> {
+  await reconciliationService.reconcile(PROJECT_DIR);
+  return projectRuntime.getWorktreeByBranch(name)?.worktreeId ?? null;
+}
+
+async function apiRegisterWorktreePort(name: string, req: Request): Promise<Response> {
+  const parsed = await parseJsonBody(req, RegisterWorktreePortRequestSchema);
+  if (!parsed.ok) return parsed.response;
+  const { label, port } = parsed.data;
+  if (!isValidPortLabel(label)) return errorResponse(`Invalid port label: ${label}`, 400);
+  const worktreeId = await resolveWorktreeId(name);
+  if (!worktreeId) return errorResponse(`Worktree not found: ${name}`, 404);
+
+  const result = portRegistrationService.register({ projectDir: PROJECT_DIR, worktreeId, label }, port);
+  if (!result.ok) return errorResponse(result.error, result.reason === "conflict" ? 409 : 503);
+  log.info(`[worktree:port] name=${name} label=${label} port=${result.data.port}`);
+  return jsonResponse(result.data);
+}
+
+async function apiListWorktreePorts(name: string): Promise<Response> {
+  const worktreeId = await resolveWorktreeId(name);
+  if (!worktreeId) return errorResponse(`Worktree not found: ${name}`, 404);
+  return jsonResponse({ ports: await portRegistrationService.listWithStatus(PROJECT_DIR, worktreeId) });
+}
+
+async function apiDeleteWorktreePort(name: string, label: string): Promise<Response> {
+  const worktreeId = await resolveWorktreeId(name);
+  if (!worktreeId) return errorResponse(`Worktree not found: ${name}`, 404);
+  if (!portRegistrationService.unregister({ projectDir: PROJECT_DIR, worktreeId, label })) {
+    return errorResponse(`No port registered as "${label}" for ${name}`, 404);
+  }
+  return jsonResponse({ ok: true });
+}
+
 const MAX_DIFF_BYTES = 200 * 1024;
 
 async function apiGetWorktreeDiff(name: string): Promise<Response> {
@@ -2147,6 +2194,31 @@ function parseAgentIdParam(params: Record<string, string>):
         const name = parsed.data;
         const tabId = decodeURIComponent(req.params.tabId ?? "");
         return catching(`DELETE /api/worktrees/${name}/tabs/${tabId}`, () => apiDeleteWorktreeTab(name, tabId));
+      },
+    },
+
+    [apiPaths.worktreePorts]: {
+      GET: (req) => {
+        const parsed = parseWorktreeNameParam(req.params);
+        if (!parsed.ok) return parsed.response;
+        const name = parsed.data;
+        return catching(`GET /api/worktrees/${name}/ports`, () => apiListWorktreePorts(name));
+      },
+      POST: (req) => {
+        const parsed = parseWorktreeNameParam(req.params);
+        if (!parsed.ok) return parsed.response;
+        const name = parsed.data;
+        return catching(`POST /api/worktrees/${name}/ports`, () => apiRegisterWorktreePort(name, req));
+      },
+    },
+
+    [apiPaths.deleteWorktreePort]: {
+      DELETE: (req) => {
+        const parsed = parseWorktreeNameParam(req.params);
+        if (!parsed.ok) return parsed.response;
+        const name = parsed.data;
+        const label = decodeURIComponent(req.params.label ?? "");
+        return catching(`DELETE /api/worktrees/${name}/ports/${label}`, () => apiDeleteWorktreePort(name, label));
       },
     },
 
@@ -2741,7 +2813,8 @@ BOUND_PORT = actualPort(server, PORT);
 manager = new ProjectManager({
   registry: createProjectsRegistry(),
   port: BOUND_PORT,
-  createRuntime: ({ projectDir, port, prefix }) => createWebmuxRuntime({ projectDir, port, prefix }),
+  createRuntime: ({ projectDir, port, prefix }) =>
+    createWebmuxRuntime({ projectDir, port, prefix, portRegistrations: portRegistrationService }),
   createLoops: (project): ProjectLoopController => {
     const app = createProjectApp(project.runtime, project.prefix);
     apps.set(project.prefix, app);
@@ -2768,6 +2841,14 @@ cleanupStaleSessions();
 manager.loadPersisted();
 autoAddCwd();
 reloadRoutes();
+
+// Ungated by dashboard activity: registrations must expire even when nobody watches.
+startSerializedInterval(
+  () => portRegistrationService.sweep().catch((err: unknown) => {
+    log.error(`[port-registry] sweep error: ${err}`);
+  }),
+  15_000,
+);
 
 // Self-register as a migration sensor: record this server's port + the repo it
 // was started for, so a survivor can detect leftover single-project instances

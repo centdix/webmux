@@ -11,7 +11,7 @@ import { ArchiveStateService } from "./services/archive-state-service";
 import { LifecycleService, type CreateWorktreeProgress } from "./services/lifecycle-service";
 import { NotificationService as RuntimeNotificationService } from "./services/notification-service";
 import { ProjectRuntime } from "./services/project-runtime";
-import { ReconciliationService } from "./services/reconciliation-service";
+import { ReconciliationService, type ReconciliationServiceDependencies } from "./services/reconciliation-service";
 import { WorktreeCreationTracker } from "./services/worktree-creation-service";
 
 export interface WebmuxRuntimeOptions {
@@ -22,6 +22,8 @@ export interface WebmuxRuntimeOptions {
    *  the events fall through to the SPA and Claude's status never updates. */
   prefix?: string;
   onCreateProgress?: (progress: CreateWorktreeProgress) => void | Promise<void>;
+  /** The server's process-wide port registrations; absent for in-process CLI runtimes. */
+  portRegistrations?: ReconciliationServiceDependencies["portRegistrations"];
 }
 
 /** Base URL agent hooks POST runtime events to. The server serves each project
@@ -77,6 +79,7 @@ export function createWebmuxRuntime(options: WebmuxRuntimeOptions = {}): WebmuxR
     tmux,
     portProbe,
     runtime: projectRuntime,
+    ...(options.portRegistrations ? { portRegistrations: options.portRegistrations } : {}),
   });
   const lifecycleService = new LifecycleService({
     projectRoot: projectDir,

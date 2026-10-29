@@ -9,6 +9,7 @@ import {
   parseBranchCommandArgs,
   parseLabelCommandArgs,
   parseListCommandArgs,
+  parsePortCommandArgs,
   parseProfileCommandArgs,
   parseSendCommandArgs,
   parseTabCommandArgs,
@@ -1338,5 +1339,84 @@ describe("runWorktreeCommand restore", () => {
 
     expect(exitCode).toBe(0);
     expect(stdout[0]).toContain("webmux restore");
+  });
+});
+
+describe("parsePortCommandArgs", () => {
+  it("registers a label against the current worktree, optionally with a fixed port", () => {
+    expect(parsePortCommandArgs(["web"], "feature/x")).toEqual({ action: "register", branch: "feature/x", label: "web" });
+    expect(parsePortCommandArgs(["web", "--port", "5173"], "feature/x"))
+      .toEqual({ action: "register", branch: "feature/x", label: "web", port: 5173 });
+  });
+
+  it("parses ls and rm, and lets --worktree override the default", () => {
+    expect(parsePortCommandArgs(["ls"], "feature/x")).toEqual({ action: "list", branch: "feature/x" });
+    expect(parsePortCommandArgs(["rm", "web", "--worktree", "other"], "feature/x"))
+      .toEqual({ action: "remove", branch: "other", label: "web" });
+  });
+
+  it("rejects bad input", () => {
+    expect(() => parsePortCommandArgs(["web"], null)).toThrow("--worktree");
+    expect(() => parsePortCommandArgs([], "feature/x")).toThrow("<label>");
+    expect(() => parsePortCommandArgs(["Web"], "feature/x")).toThrow("Invalid label");
+    expect(() => parsePortCommandArgs(["web", "--port", "99999"], "feature/x")).toThrow("Invalid port");
+    expect(() => parsePortCommandArgs(["rm", "web", "--port", "1"], "feature/x")).toThrow("--port");
+  });
+
+  it("returns null for --help", () => {
+    expect(parsePortCommandArgs(["--help"], null)).toBeNull();
+  });
+});
+
+describe("runWorktreeCommand port", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("prints only the allocated port so it can be captured with $(...)", async () => {
+    const fetchCalls: Array<{ url: string; init: RequestInit }> = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      fetchCalls.push({ url: String(input), init: init! });
+      return Response.json({ label: "web", port: 4100 });
+    }) as typeof fetch;
+
+    const stdout: string[] = [];
+    const exitCode = await runWorktreeCommand(
+      { command: "port", args: ["web"], projectDir: "/repo", port: 5111 },
+      {
+        createRuntime: () => { throw new Error("unexpected"); },
+        resolveBaseUrl: async () => "http://localhost:5111/myproject",
+        resolveCurrentBranch: () => "feature/search",
+        stdout: (msg) => stdout.push(msg),
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toEqual(["4100"]);
+    expect(fetchCalls[0].url).toBe("http://localhost:5111/myproject/api/worktrees/feature%2Fsearch/ports");
+    expect(fetchCalls[0].init.method).toBe("POST");
+    expect(JSON.parse(fetchCalls[0].init.body as string)).toEqual({ label: "web" });
+  });
+
+  it("lists registrations with their status", async () => {
+    globalThis.fetch = (async () => Response.json({
+      ports: [{ label: "web", port: 4100, running: true }, { label: "api", port: 4101, running: false }],
+    })) as typeof fetch;
+
+    const stdout: string[] = [];
+    const exitCode = await runWorktreeCommand(
+      { command: "port", args: ["ls"], projectDir: "/repo", port: 5111 },
+      {
+        createRuntime: () => { throw new Error("unexpected"); },
+        resolveBaseUrl: async () => "http://localhost:5111/myproject",
+        resolveCurrentBranch: () => "feature/search",
+        stdout: (msg) => stdout.push(msg),
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toEqual(["web          4100   running", "api          4101   idle"]);
   });
 });

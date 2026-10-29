@@ -134,6 +134,7 @@ _webmux() {
     'remove:Remove a worktree'
     'merge:Merge a worktree into main'
     'send:Send a prompt to a running worktree agent'
+    'port:Get, list, or release a dev-server port for a worktree'
     'prune:Remove all closed (not open) worktrees in the current project'
     'restore:Re-open all worktree sessions that were open before'
     'linear:Post a worktree conversation to a Linear issue/team'
@@ -167,6 +168,13 @@ _webmux() {
         if (( \${#branches} )); then
           _describe 'worktree' branches
         fi
+      fi
+      ;;
+    port)
+      if (( CURRENT == 3 )); then
+        local -a subs
+        subs=('ls:List registered ports' 'rm:Release a port')
+        _describe 'port subcommand' subs
       fi
       ;;
     project)
@@ -207,7 +215,7 @@ const BASH_SCRIPT = `_webmux() {
   prev="\${COMP_WORDS[COMP_CWORD-1]}"
 
   if [[ \${COMP_CWORD} -eq 1 ]]; then
-    COMPREPLY=($(compgen -W "serve init service update add oneshot list open close refresh archive unarchive label profile remove merge send prune restore linear project completion" -- "\${cur}"))
+    COMPREPLY=($(compgen -W "serve init service update add oneshot list open close refresh archive unarchive label profile remove merge send port prune restore linear project completion" -- "\${cur}"))
     return
   fi
 
@@ -226,6 +234,11 @@ const BASH_SCRIPT = `_webmux() {
         local branches
         branches=$(webmux --completions send 2>/dev/null)
         COMPREPLY=($(compgen -W "\${branches}" -- "\${cur}"))
+      fi
+      ;;
+    port)
+      if [[ \${COMP_CWORD} -eq 2 ]]; then
+        COMPREPLY=($(compgen -W "ls rm" -- "\${cur}"))
       fi
       ;;
     project)

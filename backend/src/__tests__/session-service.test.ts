@@ -155,6 +155,16 @@ describe("buildTmuxPaneSystemPrompt", () => {
   });
 });
 
+describe("buildTmuxPaneSystemPrompt port registration", () => {
+  it("tells the agent to get server ports from webmux", () => {
+    const prompt = buildTmuxPaneSystemPrompt([{ id: "agent", kind: "agent", focus: true }]);
+
+    expect(prompt).toContain("`PORT=$(webmux port web) bun run dev`");
+    expect(prompt).toContain("`webmux port web --port 5173`");
+    expect(prompt).toContain("`webmux port rm <label>`");
+  });
+});
+
 describe("planSessionLayout", () => {
   it("materializes pane cwd and command with a deterministic session/window name", () => {
     const plan = planSessionLayout(
