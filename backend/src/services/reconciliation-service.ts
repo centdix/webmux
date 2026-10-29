@@ -16,6 +16,7 @@ import { buildRuntimeEnvMap, readWorktreeMeta, readWorktreePrs } from "../adapte
 import type { AgentId, ProjectConfig } from "../domain/config";
 import type { OneshotMeta, PrEntry, ServiceRuntimeState, WorktreeSource, WorktreeTab } from "../domain/model";
 import { mapWithConcurrency } from "../lib/async";
+import type { RegisteredPort } from "./port-registration-service";
 import { ProjectRuntime } from "./project-runtime";
 
 function makeUnmanagedWorktreeId(path: string): string {
@@ -27,8 +28,9 @@ function isValidPort(port: number | null): port is number {
 }
 
 async function buildServiceStates(
-  deps: Pick<ReconciliationServiceDependencies, "config" | "portProbe">,
+  deps: Pick<ReconciliationServiceDependencies, "config" | "portProbe" | "portRegistrations">,
   input: {
+    repoRoot: string;
     allocatedPorts: Record<string, number>;
     startupEnvValues: Record<string, string>;
     worktreeId: string;
@@ -50,7 +52,7 @@ async function buildServiceStates(
     allocatedPorts: input.allocatedPorts,
   });
 
-  return Promise.all(deps.config.services.map(async (service) => {
+  const configured = await Promise.all(deps.config.services.map(async (service) => {
     const port = input.allocatedPorts[service.portEnv] ?? null;
     const running = isValidPort(port)
       ? await deps.portProbe.isListening(port)
@@ -64,6 +66,17 @@ async function buildServiceStates(
         : null,
     };
   }));
+
+  const configuredNames = new Set(configured.map((service) => service.name));
+  const registered = (deps.portRegistrations?.list(input.repoRoot, input.worktreeId) ?? [])
+    .filter((entry) => !configuredNames.has(entry.label));
+  const registeredStates = await Promise.all(registered.map(async (entry) => ({
+    name: entry.label,
+    port: entry.port,
+    running: await deps.portProbe.isListening(entry.port),
+    url: `http://localhost:${entry.port}`,
+  })));
+  return [...configured, ...registeredStates.filter((service) => service.running)];
 }
 
 /** Locate a worktree's window by its stable id anchor, falling back to the legacy name match for
@@ -105,6 +118,8 @@ export interface ReconciliationServiceDependencies {
   tmux: TmuxGateway;
   portProbe: PortProbe;
   runtime: ProjectRuntime;
+  /** Agent-registered ports (`webmux port`); only the running ones are surfaced. */
+  portRegistrations?: { list(projectDir: string, worktreeId: string): RegisteredPort[] };
 }
 
 export interface ReconciliationServiceOptions {
@@ -240,6 +255,7 @@ export class ReconciliationService {
         },
         services: meta
           ? await buildServiceStates(this.deps, {
+              repoRoot: normalizedRepoRoot,
               allocatedPorts: meta.allocatedPorts,
               startupEnvValues: meta.startupEnvValues,
               worktreeId: meta.worktreeId,

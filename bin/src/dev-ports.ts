@@ -1,3 +1,5 @@
+import { canBind } from "../../backend/src/adapters/port-probe";
+
 export interface DevPortPair {
   backendPort: number;
   frontendPort: number;
@@ -17,23 +19,6 @@ export function selectDevPortPair(
     }
   }
   throw new Error(`Could not find two adjacent free ports starting at ${startPort}`);
-}
-
-function canBind(port: number): boolean {
-  try {
-    const server = Bun.serve({
-      hostname: "0.0.0.0",
-      port,
-      fetch(): Response {
-        return new Response();
-      },
-    });
-    server.stop(true);
-    return true;
-  } catch (err: unknown) {
-    if ((err as { code?: string } | null)?.code === "EADDRINUSE") return false;
-    throw err;
-  }
 }
 
 if (import.meta.main) {

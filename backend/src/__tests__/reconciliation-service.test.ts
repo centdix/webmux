@@ -372,6 +372,61 @@ describe("ReconciliationService", () => {
     expect(runtime.getWorktree("wt_stale")).toBeNull();
   });
 
+  it("surfaces running agent-registered ports as services, behind configured ones", async () => {
+    const repoRoot = "/repo/project";
+    const managedPath = "/repo/project/__worktrees/feature-ports";
+    const managedGitDir = await mkdtemp(join(tmpdir(), "webmux-reconcile-ports-"));
+    tempDirs.push(managedGitDir);
+
+    await writeWorktreeMeta(managedGitDir, {
+      schemaVersion: 1,
+      worktreeId: "wt_ports",
+      branch: "feature/ports",
+      createdAt: "2026-03-06T00:00:00.000Z",
+      profile: "default",
+      agent: "claude",
+      runtime: "host",
+      startupEnvValues: {},
+      allocatedPorts: {},
+    });
+
+    const runtime = new ProjectRuntime();
+    const git = new FakeGitGateway(
+      [
+        { path: repoRoot, branch: "main", head: "aaa111", detached: false, bare: false },
+        { path: managedPath, branch: "feature/ports", head: "bbb222", detached: false, bare: false },
+      ],
+      new Map([[managedPath, managedGitDir]]),
+      new Map([[managedPath, { dirty: false, aheadCount: 0, currentCommit: "bbb222" }]]),
+    );
+    const listCalls: Array<[string, string]> = [];
+    const service = new ReconciliationService({
+      config: TEST_CONFIG,
+      git,
+      tmux: new FakeTmuxGateway([]),
+      portProbe: new FakePortProbe(new Set([4100, 4102])),
+      runtime,
+      portRegistrations: {
+        list: (projectDir, worktreeId) => {
+          listCalls.push([projectDir, worktreeId]);
+          return [
+            { label: "web", port: 4100 },
+            { label: "api", port: 4101 },
+            { label: "frontend", port: 4102 },
+          ];
+        },
+      },
+    });
+
+    await service.reconcile(repoRoot);
+
+    expect(listCalls).toEqual([[repoRoot, "wt_ports"]]);
+    expect(runtime.getWorktree("wt_ports")?.services).toEqual([
+      { name: "frontend", port: null, running: false, url: null },
+      { name: "web", port: 4100, running: true, url: "http://localhost:4100" },
+    ]);
+  });
+
   it("keeps the existing window after an in-worktree branch rename and renames it in place", async () => {
     // Repro: `git checkout -b feature/new` inside the worktree. The live tmux window is still
     // named after the old branch. Identity must come from the @wm_worktree_id anchor, so the
