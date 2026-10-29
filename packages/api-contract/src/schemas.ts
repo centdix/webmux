@@ -587,6 +587,27 @@ export const CreateTabResponseSchema = z.object({
   tab: WorktreeTabSchema,
 });
 
+export const WorktreePortParamsSchema = z.object({
+  name: z.string(),
+  label: z.string(),
+});
+
+export const RegisterWorktreePortRequestSchema = z.object({
+  label: z.string(),
+  port: z.number().int().min(1).max(65535).optional(),
+});
+
+export const RegisteredPortSchema = z.object({
+  label: z.string(),
+  port: z.number().int(),
+});
+
+export const RegisterWorktreePortResponseSchema = RegisteredPortSchema;
+
+export const WorktreePortListResponseSchema = z.object({
+  ports: z.array(RegisteredPortSchema.extend({ running: z.boolean() })),
+});
+
 export const NotificationIdParamsSchema = z.object({
   id: NumberLikePathParamSchema,
 });
@@ -747,6 +768,10 @@ export type ProjectWorktreeSnapshot = z.infer<typeof ProjectWorktreeSnapshotSche
 export type WorktreeTab = z.infer<typeof WorktreeTabSchema>;
 export type WorktreeTabParams = z.infer<typeof WorktreeTabParamsSchema>;
 export type CreateTabResponse = z.infer<typeof CreateTabResponseSchema>;
+export type WorktreePortParams = z.infer<typeof WorktreePortParamsSchema>;
+export type RegisterWorktreePortRequest = z.infer<typeof RegisterWorktreePortRequestSchema>;
+export type RegisterWorktreePortResponse = z.infer<typeof RegisterWorktreePortResponseSchema>;
+export type WorktreePortListResponse = z.infer<typeof WorktreePortListResponseSchema>;
 export type ProjectSnapshot = z.infer<typeof ProjectSnapshotSchema>;
 export type WorktreeConversationProvider = z.infer<typeof WorktreeConversationProviderSchema>;
 export type CodexWorktreeConversationRef = z.infer<typeof CodexWorktreeConversationRefSchema>;

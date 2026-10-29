@@ -2,13 +2,14 @@ import * as p from "@clack/prompts";
 import { createApi } from "@webmux/api-contract";
 import { basename, resolve } from "node:path";
 import { buildSeedFromLinear, defaultSeedFromLinearDeps } from "../../backend/src/services/conversation-export-service";
-import { CommandUsageError, resolveProjectBaseUrl, resolveProjectPrefix, withServerConnection } from "./shared";
+import { CommandUsageError, resolveProjectBaseUrl, resolveProjectPrefix, run, withServerConnection } from "./shared";
 import { readOpenSessionsState, readWorktreeArchiveState, readWorktreeMeta, readWorktreePrs } from "../../backend/src/adapters/fs";
 import type { OpenSessionsState, PrEntry } from "../../backend/src/domain/model";
 import { buildProjectSessionName, buildWorktreeWindowName } from "../../backend/src/adapters/tmux";
 import type { AgentId } from "../../backend/src/domain/config";
 import type { WorktreeCreationPhase } from "../../backend/src/domain/model";
 import { compareWorktreeOrder, isValidWorktreeName } from "../../backend/src/domain/policies";
+import { isValidPortLabel } from "../../backend/src/domain/port-registrations";
 import { buildArchivedWorktreePathSet } from "../../backend/src/services/archive-service";
 import { createWebmuxRuntime } from "../../backend/src/runtime";
 import type { CreateLifecycleWorktreeInput, CreateLifecycleWorktreesInput, CreateLifecycleWorktreesResult, CreateWorktreeProgress, PruneWorktreesResult } from "../../backend/src/services/lifecycle-service";
@@ -21,7 +22,7 @@ const PHASE_LABELS: Record<WorktreeCreationPhase, string> = {
   reconciling: "Reconciling",
 };
 
-export type WorktreeSubcommand = "add" | "list" | "open" | "close" | "refresh" | "remove" | "merge" | "send" | "prune" | "restore" | "archive" | "unarchive" | "label" | "profile" | "tab";
+export type WorktreeSubcommand = "add" | "list" | "open" | "close" | "refresh" | "remove" | "merge" | "send" | "prune" | "restore" | "archive" | "unarchive" | "label" | "profile" | "tab" | "port";
 
 type WorktreeListMode = "active" | "all" | "archived";
 
@@ -90,6 +91,9 @@ interface WorktreeCommandDependencies {
   /** Read the saved open-sessions snapshot (used by `restore`). Injectable so
    *  tests can drive restore without touching the filesystem. */
   readOpenSessions?: (gitDir: string) => Promise<OpenSessionsState>;
+  /** Worktree `port` targets when `--worktree` is omitted. Defaults to the agent's
+   *  `$WEBMUX_BRANCH`, else the current git branch of `projectDir`. */
+  resolveCurrentBranch?: (projectDir: string) => string | null;
 }
 
 export function getWorktreeCommandUsage(command: WorktreeSubcommand): string {
@@ -174,6 +178,21 @@ export function getWorktreeCommandUsage(command: WorktreeSubcommand): string {
       return "Usage:\n  webmux prune";
     case "restore":
       return "Usage:\n  webmux restore\n\nRe-open every worktree session that was open the last time sessions were saved.";
+    case "port":
+      return [
+        "Usage:",
+        "  webmux port <label> [--port <n>]    Get a port for a service and print it",
+        "  webmux port ls                      List registered ports",
+        "  webmux port rm <label>              Release a port",
+        "",
+        "The same label returns the same port. A port is shown in the dashboard",
+        "while something listens on it, and released after 5 minutes idle.",
+        "",
+        "Options:",
+        "  --port <n>               Register a port the service already uses",
+        "  --worktree <branch>      Target worktree (defaults to the current one)",
+        "  --help                   Show this help message",
+      ].join("\n");
     case "tab":
       return [
         "Usage:",
@@ -369,6 +388,79 @@ export function parseTabCommandArgs(args: string[]): ParsedTabCommand | null {
   if (rest.length > 0) throw new CommandUsageError(`Unexpected argument: ${rest[0]}`);
 
   return { branch, action: rawAction, ...(tabId ? { tabId } : {}) };
+}
+
+export type ParsedPortCommand =
+  | { action: "register"; branch: string; label: string; port?: number }
+  | { action: "list"; branch: string }
+  | { action: "remove"; branch: string; label: string };
+
+export function parsePortCommandArgs(args: string[], defaultBranch: string | null): ParsedPortCommand | null {
+  const positional: string[] = [];
+  let branch: string | null = null;
+  let port: number | undefined;
+
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (!arg) continue;
+    if (arg === "--help" || arg === "-h") return null;
+
+    if (arg === "--worktree" || arg.startsWith("--worktree=")) {
+      const { value, nextIndex } = readOptionValue(args, index, "--worktree");
+      branch = value;
+      index = nextIndex;
+      continue;
+    }
+
+    if (arg === "--port" || arg.startsWith("--port=")) {
+      const { value, nextIndex } = readOptionValue(args, index, "--port");
+      const parsed = Number(value);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+        throw new CommandUsageError(`Invalid port: ${value}`);
+      }
+      port = parsed;
+      index = nextIndex;
+      continue;
+    }
+
+    if (arg.startsWith("-")) throw new CommandUsageError(`Unknown option: ${arg}`);
+    positional.push(arg);
+  }
+
+  const target = branch ?? defaultBranch;
+  if (!target) {
+    throw new CommandUsageError("Could not tell which worktree this is; pass --worktree <branch>");
+  }
+  if (!isValidWorktreeName(target)) throw new CommandUsageError("Invalid worktree name");
+
+  const [first, second, ...rest] = positional;
+  if (!first) throw new CommandUsageError("Missing required argument: <label>");
+
+  if (first === "ls") {
+    if (second || port !== undefined) throw new CommandUsageError("The \"ls\" action takes no arguments");
+    return { action: "list", branch: target };
+  }
+
+  const isRemove = first === "rm";
+  const label = isRemove ? second : first;
+  const extra = isRemove ? rest[0] : second;
+  if (!label) throw new CommandUsageError("Missing required argument: <label>");
+  if (extra) throw new CommandUsageError(`Unexpected argument: ${extra}`);
+  if (!isValidPortLabel(label)) {
+    throw new CommandUsageError(`Invalid label: ${label} (use lowercase letters, digits, - or _)`);
+  }
+  if (isRemove) {
+    if (port !== undefined) throw new CommandUsageError("The \"rm\" action does not take --port");
+    return { action: "remove", branch: target, label };
+  }
+  return { action: "register", branch: target, label, ...(port !== undefined ? { port } : {}) };
+}
+
+function defaultResolveCurrentBranch(projectDir: string): string | null {
+  if (Bun.env.WEBMUX_BRANCH) return Bun.env.WEBMUX_BRANCH;
+  const result = run("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: projectDir });
+  const branch = result.success ? result.stdout.toString().trim() : "";
+  return branch && branch !== "HEAD" ? branch : null;
 }
 
 export function parseBranchCommandArgs(args: string[]): string | null {
@@ -1158,6 +1250,38 @@ export async function runWorktreeCommand(
         for (const tab of worktree.tabs) {
           const marker = tab.tabId === worktree.activeTabId ? "★" : " ";
           stdout(`${marker} ${tab.label.padEnd(10)} ${tab.tabId}`);
+        }
+      });
+      return 0;
+    }
+
+    if (context.command === "port") {
+      const resolveCurrentBranch = deps.resolveCurrentBranch ?? defaultResolveCurrentBranch;
+      const parsed = parsePortCommandArgs(context.args, resolveCurrentBranch(context.projectDir));
+      if (!parsed) {
+        stdout(getWorktreeCommandUsage("port"));
+        return 0;
+      }
+
+      const api = createApi(await withServerConnection(context.port, () => resolveBaseUrl(context.port, context.projectDir)));
+      await withServerConnection(context.port, async () => {
+        if (parsed.action === "register") {
+          const { port } = await api.registerWorktreePort({
+            params: { name: parsed.branch },
+            body: { label: parsed.label, ...(parsed.port !== undefined ? { port: parsed.port } : {}) },
+          });
+          // Bare port on stdout so `PORT=$(webmux port web)` works.
+          stdout(String(port));
+          return;
+        }
+        if (parsed.action === "remove") {
+          await api.deleteWorktreePort({ params: { name: parsed.branch, label: parsed.label } });
+          stdout(`Released ${parsed.label} in ${parsed.branch}`);
+          return;
+        }
+        const { ports } = await api.fetchWorktreePorts({ params: { name: parsed.branch } });
+        for (const entry of ports) {
+          stdout(`${entry.label.padEnd(12)} ${String(entry.port).padEnd(6)} ${entry.running ? "running" : "idle"}`);
         }
       });
       return 0;

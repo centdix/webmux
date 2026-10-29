@@ -164,6 +164,20 @@ describe("webmux entrypoint", () => {
     });
   });
 
+  it("ignores an inherited PORT for the port command so it finds the live server", () => {
+    process.env.PORT = "4100";
+
+    expect(parseRootArgs(["port", "web", "--port", "5173"])).toEqual({
+      port: 5111,
+      portExplicit: false,
+      debug: false,
+      app: false,
+      command: "port",
+      commandArgs: ["web", "--port", "5173"],
+    });
+    expect(parseRootArgs(["--port", "6000", "port", "web"]).port).toBe(6000);
+  });
+
   it("runs worktree commands from a project subdirectory", async () => {
     const repoRoot = await mkdtemp(join(tmpdir(), "webmux-cli-"));
     tempDirs.push(repoRoot);
