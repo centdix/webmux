@@ -514,6 +514,11 @@ function sendAgentsWs(ws: { readyState: number; send: (data: string) => void }, 
   }
 }
 
+/** Log label for a project route: `METHOD /path` with the given params filled in. */
+function routeLabel(method: string, path: string, params: Record<string, string> = {}): string {
+  return `${method} ${path.replace(/:(\w+)/g, (placeholder: string, key: string) => params[key] ?? placeholder)}`;
+}
+
 /** Wrap an async API handler to catch and log unhandled errors. */
 function catching(label: string, fn: () => Promise<Response>): Promise<Response> {
   return fn().catch((err: unknown) => {
@@ -1983,36 +1988,36 @@ function parseAgentIdParam(params: Record<string, string>):
     },
 
     [projectApiPaths.fetchAvailableBranches]: {
-      GET: (req) => catching("GET /api/branches", () => apiListBranches(req)),
+      GET: (req) => catching(routeLabel("GET", projectApiPaths.fetchAvailableBranches), () => apiListBranches(req)),
     },
 
     [projectApiPaths.fetchBaseBranches]: {
-      GET: () => catching("GET /api/base-branches", () => apiListBaseBranches()),
+      GET: () => catching(routeLabel("GET", projectApiPaths.fetchBaseBranches), () => apiListBaseBranches()),
     },
 
     [projectApiPaths.fetchProject]: {
-      GET: () => catching("GET /api/project", () => apiGetProject()),
+      GET: () => catching(routeLabel("GET", projectApiPaths.fetchProject), () => apiGetProject()),
     },
 
     [projectApiPaths.fetchAgents]: {
-      GET: () => catching("GET /api/agents", () => apiListAgents()),
-      POST: (req) => catching("POST /api/agents", () => apiCreateAgent(req)),
+      GET: () => catching(routeLabel("GET", projectApiPaths.fetchAgents), () => apiListAgents()),
+      POST: (req) => catching(routeLabel("POST", projectApiPaths.createAgent), () => apiCreateAgent(req)),
     },
 
     [projectApiPaths.validateAgent]: {
-      POST: (req) => catching("POST /api/agents/validate", () => apiValidateAgent(req)),
+      POST: (req) => catching(routeLabel("POST", projectApiPaths.validateAgent), () => apiValidateAgent(req)),
     },
 
     [projectApiPaths.updateAgent]: {
       PUT: (req) => {
         const parsed = parseAgentIdParam(req.params);
         if (!parsed.ok) return parsed.response;
-        return catching("PUT /api/agents/:id", () => apiUpdateAgent(parsed.data, req));
+        return catching(routeLabel("PUT", projectApiPaths.updateAgent, { id: parsed.data }), () => apiUpdateAgent(parsed.data, req));
       },
       DELETE: (req) => {
         const parsed = parseAgentIdParam(req.params);
         if (!parsed.ok) return parsed.response;
-        return catching("DELETE /api/agents/:id", () => apiDeleteAgent(parsed.data));
+        return catching(routeLabel("DELETE", projectApiPaths.deleteAgent, { id: parsed.data }), () => apiDeleteAgent(parsed.data));
       },
     },
 
@@ -2021,7 +2026,7 @@ function parseAgentIdParam(params: Record<string, string>):
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`POST ${projectApiPaths.attachAgentsWorktreeConversation}`, () => apiAttachAgentsWorktree(name));
+        return catching(routeLabel("POST", projectApiPaths.attachAgentsWorktreeConversation, { name }), () => apiAttachAgentsWorktree(name));
       },
     },
 
@@ -2030,7 +2035,7 @@ function parseAgentIdParam(params: Record<string, string>):
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`GET ${projectApiPaths.fetchAgentsWorktreeConversationHistory}`, () => apiGetAgentsWorktreeHistory(name));
+        return catching(routeLabel("GET", projectApiPaths.fetchAgentsWorktreeConversationHistory, { name }), () => apiGetAgentsWorktreeHistory(name));
       },
     },
 
@@ -2040,7 +2045,7 @@ function parseAgentIdParam(params: Record<string, string>):
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
         return catching(
-          `POST ${projectApiPaths.sendAgentsWorktreeConversationMessage}`,
+          routeLabel("POST", projectApiPaths.sendAgentsWorktreeConversationMessage, { name }),
           () => apiSendAgentsWorktreeMessage(name, req),
         );
       },
@@ -2052,19 +2057,19 @@ function parseAgentIdParam(params: Record<string, string>):
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
         return catching(
-          `POST ${projectApiPaths.interruptAgentsWorktreeConversation}`,
+          routeLabel("POST", projectApiPaths.interruptAgentsWorktreeConversation, { name }),
           () => apiInterruptAgentsWorktree(name),
         );
       },
     },
 
     [projectApiPaths.postRuntimeEvent]: {
-      POST: (req) => catching("POST /api/runtime/events", () => apiRuntimeEvent(req)),
+      POST: (req) => catching(routeLabel("POST", projectApiPaths.postRuntimeEvent), () => apiRuntimeEvent(req)),
     },
 
     [projectApiPaths.fetchWorktrees]: {
-      GET: () => catching("GET /api/worktrees", () => apiGetWorktrees()),
-      POST: (req) => catching("POST /api/worktrees", () => apiCreateWorktree(req)),
+      GET: () => catching(routeLabel("GET", projectApiPaths.fetchWorktrees), () => apiGetWorktrees()),
+      POST: (req) => catching(routeLabel("POST", projectApiPaths.createWorktree), () => apiCreateWorktree(req)),
     },
 
     [projectApiPaths.removeWorktree]: {
@@ -2072,7 +2077,7 @@ function parseAgentIdParam(params: Record<string, string>):
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`DELETE /api/worktrees/${name}`, () => apiDeleteWorktree(name));
+        return catching(routeLabel("DELETE", projectApiPaths.removeWorktree, { name }), () => apiDeleteWorktree(name));
       },
     },
 
@@ -2081,16 +2086,16 @@ function parseAgentIdParam(params: Record<string, string>):
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`POST /api/worktrees/${name}/open`, () => apiOpenWorktree(name, req));
+        return catching(routeLabel("POST", projectApiPaths.openWorktree, { name }), () => apiOpenWorktree(name, req));
       },
     },
 
-    "/worktrees/:name/terminal-launch": {
+    [projectApiPaths.fetchNativeTerminalLaunch]: {
       GET: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`GET /api/worktrees/${name}/terminal-launch`, () => apiGetNativeTerminalLaunch(name));
+        return catching(routeLabel("GET", projectApiPaths.fetchNativeTerminalLaunch, { name }), () => apiGetNativeTerminalLaunch(name));
       },
     },
 
@@ -2099,7 +2104,7 @@ function parseAgentIdParam(params: Record<string, string>):
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`POST /api/worktrees/${name}/close`, () => apiCloseWorktree(name));
+        return catching(routeLabel("POST", projectApiPaths.closeWorktree, { name }), () => apiCloseWorktree(name));
       },
     },
 
@@ -2108,7 +2113,7 @@ function parseAgentIdParam(params: Record<string, string>):
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`POST /api/worktrees/${name}/agent-terminal/refresh`, () => apiRefreshWorktreeAgentTerminal(name));
+        return catching(routeLabel("POST", projectApiPaths.refreshWorktreeAgentTerminal, { name }), () => apiRefreshWorktreeAgentTerminal(name));
       },
     },
 
@@ -2117,7 +2122,7 @@ function parseAgentIdParam(params: Record<string, string>):
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`PUT /api/worktrees/${name}/archive`, () => apiSetWorktreeArchived(name, req));
+        return catching(routeLabel("PUT", projectApiPaths.setWorktreeArchived, { name }), () => apiSetWorktreeArchived(name, req));
       },
     },
 
@@ -2126,7 +2131,7 @@ function parseAgentIdParam(params: Record<string, string>):
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`POST /api/worktrees/${name}/linear/post`, () => apiPostWorktreeToLinear(name, req));
+        return catching(routeLabel("POST", projectApiPaths.postWorktreeToLinear, { name }), () => apiPostWorktreeToLinear(name, req));
       },
     },
 
@@ -2135,7 +2140,7 @@ function parseAgentIdParam(params: Record<string, string>):
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`POST /api/worktrees/${name}/sync-prs`, () => apiSyncWorktreePrs(name));
+        return catching(routeLabel("POST", projectApiPaths.syncWorktreePrs, { name }), () => apiSyncWorktreePrs(name));
       },
     },
 
@@ -2144,7 +2149,7 @@ function parseAgentIdParam(params: Record<string, string>):
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`PUT /api/worktrees/${name}/label`, () => apiSetWorktreeLabel(name, req));
+        return catching(routeLabel("PUT", projectApiPaths.setWorktreeLabel, { name }), () => apiSetWorktreeLabel(name, req));
       },
     },
 
@@ -2153,7 +2158,7 @@ function parseAgentIdParam(params: Record<string, string>):
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`PUT /api/worktrees/${name}/profile`, () => apiSetWorktreeProfile(name, req));
+        return catching(routeLabel("PUT", projectApiPaths.setWorktreeProfile, { name }), () => apiSetWorktreeProfile(name, req));
       },
     },
 
@@ -2162,7 +2167,7 @@ function parseAgentIdParam(params: Record<string, string>):
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`POST /api/worktrees/${name}/send`, () => apiSendPrompt(name, req));
+        return catching(routeLabel("POST", projectApiPaths.sendWorktreePrompt, { name }), () => apiSendPrompt(name, req));
       },
     },
 
@@ -2171,7 +2176,7 @@ function parseAgentIdParam(params: Record<string, string>):
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`POST /api/worktrees/${name}/upload`, () => apiUploadFiles(name, req));
+        return catching(routeLabel("POST", projectApiPaths.uploadWorktreeFiles, { name }), () => apiUploadFiles(name, req));
       },
     },
 
@@ -2180,7 +2185,7 @@ function parseAgentIdParam(params: Record<string, string>):
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`POST /api/worktrees/${name}/tabs`, () => apiCreateWorktreeTab(name));
+        return catching(routeLabel("POST", projectApiPaths.createWorktreeTab, { name }), () => apiCreateWorktreeTab(name));
       },
     },
 
@@ -2190,7 +2195,7 @@ function parseAgentIdParam(params: Record<string, string>):
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
         const tabId = decodeURIComponent(req.params.tabId ?? "");
-        return catching(`POST /api/worktrees/${name}/tabs/${tabId}/select`, () => apiSelectWorktreeTab(name, tabId));
+        return catching(routeLabel("POST", projectApiPaths.selectWorktreeTab, { name, tabId }), () => apiSelectWorktreeTab(name, tabId));
       },
     },
 
@@ -2200,7 +2205,7 @@ function parseAgentIdParam(params: Record<string, string>):
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
         const tabId = decodeURIComponent(req.params.tabId ?? "");
-        return catching(`DELETE /api/worktrees/${name}/tabs/${tabId}`, () => apiDeleteWorktreeTab(name, tabId));
+        return catching(routeLabel("DELETE", projectApiPaths.deleteWorktreeTab, { name, tabId }), () => apiDeleteWorktreeTab(name, tabId));
       },
     },
 
@@ -2209,13 +2214,13 @@ function parseAgentIdParam(params: Record<string, string>):
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`GET /api/worktrees/${name}/ports`, () => apiListWorktreePorts(name));
+        return catching(routeLabel("GET", projectApiPaths.worktreePorts, { name }), () => apiListWorktreePorts(name));
       },
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`POST /api/worktrees/${name}/ports`, () => apiRegisterWorktreePort(name, req));
+        return catching(routeLabel("POST", projectApiPaths.worktreePorts, { name }), () => apiRegisterWorktreePort(name, req));
       },
     },
 
@@ -2225,7 +2230,7 @@ function parseAgentIdParam(params: Record<string, string>):
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
         const label = decodeURIComponent(req.params.label ?? "");
-        return catching(`DELETE /api/worktrees/${name}/ports/${label}`, () => apiDeleteWorktreePort(name, label));
+        return catching(routeLabel("DELETE", projectApiPaths.deleteWorktreePort, { name, label }), () => apiDeleteWorktreePort(name, label));
       },
     },
 
@@ -2234,7 +2239,7 @@ function parseAgentIdParam(params: Record<string, string>):
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`POST /api/worktrees/${name}/merge`, () => apiMergeWorktree(name));
+        return catching(routeLabel("POST", projectApiPaths.mergeWorktree, { name }), () => apiMergeWorktree(name));
       },
     },
 
@@ -2243,35 +2248,35 @@ function parseAgentIdParam(params: Record<string, string>):
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`GET /api/worktrees/${name}/diff`, () => apiGetWorktreeDiff(name));
+        return catching(routeLabel("GET", projectApiPaths.fetchWorktreeDiff, { name }), () => apiGetWorktreeDiff(name));
       },
     },
 
     [projectApiPaths.fetchLinearIssues]: {
-      GET: () => catching("GET /api/linear/issues", () => apiGetLinearIssues()),
+      GET: () => catching(routeLabel("GET", projectApiPaths.fetchLinearIssues), () => apiGetLinearIssues()),
     },
 
     [projectApiPaths.fetchAutoNameConfig]: {
-      GET: () => catching("GET /api/project/auto-name", async () => apiGetAutoNameConfig()),
+      GET: () => catching(routeLabel("GET", projectApiPaths.fetchAutoNameConfig), async () => apiGetAutoNameConfig()),
     },
 
     [projectApiPaths.setLinearAutoCreate]: {
-      PUT: (req) => catching("PUT /api/linear/auto-create", () => apiSetLinearAutoCreate(req)),
+      PUT: (req) => catching(routeLabel("PUT", projectApiPaths.setLinearAutoCreate), () => apiSetLinearAutoCreate(req)),
     },
 
     [projectApiPaths.setAutoRemoveOnMerge]: {
-      PUT: (req) => catching("PUT /api/github/auto-remove-on-merge", () => apiSetAutoRemoveOnMerge(req)),
+      PUT: (req) => catching(routeLabel("PUT", projectApiPaths.setAutoRemoveOnMerge), () => apiSetAutoRemoveOnMerge(req)),
     },
 
     [projectApiPaths.pullMain]: {
-      POST: (req) => catching("POST /api/pull-main", () => apiPullMain(req)),
+      POST: (req) => catching(routeLabel("POST", projectApiPaths.pullMain), () => apiPullMain(req)),
     },
 
     [projectApiPaths.fetchCiLogs]: {
       GET: (req) => {
         const parsed = parseRunIdParam(req.params);
         if (!parsed.ok) return parsed.response;
-        return catching(`GET /api/ci-logs/${parsed.data}`, () => apiCiLogs(parsed.data));
+        return catching(routeLabel("GET", projectApiPaths.fetchCiLogs, { runId: String(parsed.data) }), () => apiCiLogs(parsed.data));
       },
     },
 

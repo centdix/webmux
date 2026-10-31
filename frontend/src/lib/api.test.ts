@@ -60,6 +60,12 @@ describe("project-prefixed network calls", () => {
     expect(urls).toEqual([`ws://${window.location.host}/api/projects/myproject/ws/agents/worktrees/feat%2Fx`]);
   });
 
+  it("terminalStreamUrl targets the terminal socket under the active prefix", async () => {
+    const api = await loadApiAt("/myproject/");
+
+    expect(api.terminalStreamUrl("feat/x")).toBe(`ws://${window.location.host}/api/projects/myproject/ws/feat%2Fx`);
+  });
+
   it("uploadFiles posts under the active prefix", async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,

@@ -33,7 +33,8 @@ import type {
  *  when at the root before the bootstrap redirect picks a project. */
 export const activePrefix: string = window.location.pathname.split("/")[1] ?? "";
 
-/** Base path for the active project's API + WebSocket calls. */
+/** Base path for the active project's API + WebSocket calls. Meaningless at `/`
+ *  before a project is selected — main.ts runs the bootstrap redirect first. */
 export const apiBase: string = projectApiBasePath(activePrefix);
 
 /** Per-project client — every worktree/agent/config call is scoped to the
@@ -176,6 +177,15 @@ function withWorktreeName(path: string, branch: string): string {
   return path.replace(":name", encodeURIComponent(branch));
 }
 
+function projectWsUrl(path: string): string {
+  return `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}${apiBase}${path}`;
+}
+
+/** WebSocket URL of a worktree's terminal stream in the active project. */
+export function terminalStreamUrl(worktree: string): string {
+  return projectWsUrl(projectApiPaths.streamTerminal.replace(":worktree", encodeURIComponent(worktree)));
+}
+
 export function connectWorktreeConversationStream(
   branch: string,
   callbacks: {
@@ -184,11 +194,7 @@ export function connectWorktreeConversationStream(
     onClose?: () => void;
   },
 ): () => void {
-  const socket = new WebSocket(
-    `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}${apiBase}${
-      withWorktreeName(projectApiPaths.streamAgentsWorktreeConversation, branch)
-    }`,
-  );
+  const socket = new WebSocket(projectWsUrl(withWorktreeName(projectApiPaths.streamAgentsWorktreeConversation, branch)));
   let closedByClient = false;
 
   socket.addEventListener("message", (event) => {

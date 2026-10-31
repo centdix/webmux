@@ -98,6 +98,7 @@ export const projectApiPaths = {
   createWorktree: "/worktrees",
   removeWorktree: "/worktrees/:name",
   openWorktree: "/worktrees/:name/open",
+  fetchNativeTerminalLaunch: "/worktrees/:name/terminal-launch",
   closeWorktree: "/worktrees/:name/close",
   refreshWorktreeAgentTerminal: "/worktrees/:name/agent-terminal/refresh",
   setWorktreeArchived: "/worktrees/:name/archive",

@@ -128,7 +128,7 @@ vi.mock("./lib/api", () => ({
   subscribeNotifications: vi.fn(),
   uploadFiles: vi.fn(),
   activePrefix: "",
-  apiBase: "",
+  terminalStreamUrl: (worktree: string) => `ws://localhost/ws/${encodeURIComponent(worktree)}`,
   fetchProjects: vi.fn(async () => []),
   fetchInstances: vi.fn(async () => []),
   setUpProject: vi.fn(),
