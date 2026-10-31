@@ -325,8 +325,8 @@
           Docker Sandboxing
         </h3>
         <p class="text-sm leading-relaxed text-muted">
-          Isolated containers with automatic port forwarding and volume mounts
-          for untrusted workloads.
+          Isolated containers on the host network with volume mounts for
+          untrusted workloads.
         </p>
       </div>
     </div>
@@ -390,9 +390,9 @@
         Service Health Monitoring
       </h3>
       <p class="max-w-2xl text-muted leading-relaxed">
-        Track dev server ports across worktrees. webmux polls configured
-        services and shows live health badges so you know which worktrees have
-        their servers running.
+        Track dev server ports across worktrees. Servers started with webmux
+        port get a port no other worktree holds, and the dashboard links each
+        one while it listens.
       </p>
       <div class="overflow-hidden rounded-xl border border-edge">
         <video
@@ -441,8 +441,8 @@
       One config file. Full control.
     </h2>
     <p class="mx-auto mb-10 max-w-xl text-center text-muted">
-      Define worktree layout, service ports, agent profiles, and Docker
-      sandboxes in a single YAML file.
+      Define worktree layout, agent profiles, and Docker sandboxes in a
+      single YAML file.
     </p>
     <div class="overflow-hidden rounded-xl border border-edge bg-surface">
       <div class="flex items-center gap-2 border-b border-edge px-4 py-2.5">

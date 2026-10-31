@@ -272,9 +272,10 @@
             .webmux.yaml is loaded from the git root and normalized into the
             final project config shape. .webmux.local.yaml can locally override
             worktreeRoot, profiles, lifecycle hooks, auto-pull, and selected
-            integration toggles. The example below includes services, profiles,
-            docker mounts, startup envs, integrations, lifecycle hooks, and
-            auto naming.
+            integration toggles. The example below includes profiles, docker
+            mounts, startup envs, integrations, lifecycle hooks, and auto
+            naming. Dev server ports are not configured here: command panes
+            get one with webmux port.
           </p>
         </div>
         <div class="max-w-5xl">
@@ -316,8 +317,7 @@
           <p class="mt-3 leading-7 text-muted">
             The details below are the implementation-level behaviors that matter
             when you automate webmux, write lifecycle hooks, or rely on
-            generated branch names, startup envs, and per-worktree port
-            allocation.
+            generated branch names and startup envs.
           </p>
         </div>
         <div class="max-w-5xl">

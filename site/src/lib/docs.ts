@@ -44,7 +44,7 @@ export const featureHighlights: DocFeature[] = [
   {
     title: "Service health and port management",
     description:
-      "webmux allocates ports per worktree, polls configured services, and can expose direct service URLs through urlTemplate.",
+      "Dev servers get a port from webmux port <label> that no other worktree holds, and the dashboard links each one while it listens.",
   },
   {
     title: "Host and docker runtimes",
@@ -266,6 +266,19 @@ export const worktreeCommands: DocCommand[] = [
     ],
   },
   {
+    title: "port",
+    usage:
+      "webmux port <label> [--port <n>] [--keep] [--worktree <branch>]\nwebmux port ls\nwebmux port rm <label>",
+    description: "Get a dev server port for the current worktree and show it in the dashboard.",
+    details: [
+      "Prints the lowest free port in 4100-4999 that no other worktree holds. The same label returns the same port, so use it inline: PORT=$(webmux port web) bun run dev.",
+      "--port <n> registers a port the tool picked itself.",
+      "A port nothing has listened on for 5 minutes is released. --keep exempts it, for ports that must stay stable such as ones written to .env or used in OAuth callbacks.",
+      "ls lists the worktree's ports and which are kept; rm releases one. Removing the worktree releases all of them.",
+      "Docker sandboxes use host networking and mount the CLI, so it works the same inside them. On macOS that needs Docker Desktop 4.34+ with Settings > Resources > Network > Enable host networking turned on, or OrbStack.",
+    ],
+  },
+  {
     title: "prune",
     usage: "webmux prune",
     description: "Confirm and remove every managed worktree in the current project.",
@@ -286,14 +299,6 @@ workspace:
     enabled: true
     intervalSeconds: 300
 
-services:
-  - name: API
-    portEnv: PORT
-    portStart: 3000
-  - name: Frontend
-    portEnv: FRONTEND_PORT
-    portStart: 5173
-
 profiles:
   default:
     runtime: host
@@ -306,7 +311,7 @@ profiles:
         split: right
         cwd: repo
         workingDir: frontend
-        command: FRONTEND_PORT=$FRONTEND_PORT bun run dev
+        command: PORT=$(webmux port web) bun run dev
 
   sandbox:
     runtime: docker
@@ -330,18 +335,6 @@ workspace:
     enabled: true
     intervalSeconds: 300
 
-services:
-  - name: API
-    portEnv: PORT
-    portStart: 3000
-    portStep: 10
-    urlTemplate: http://127.0.0.1:\${PORT}
-  - name: FE
-    portEnv: FRONTEND_PORT
-    portStart: 5173
-    portStep: 10
-    urlTemplate: http://127.0.0.1:\${FRONTEND_PORT}
-
 profiles:
   default:
     runtime: host
@@ -362,7 +355,7 @@ profiles:
         split: bottom
         cwd: repo
         workingDir: frontend
-        command: FRONTEND_PORT=$FRONTEND_PORT bun run dev
+        command: PORT=$(webmux port web) bun run dev
 
   sandbox:
     runtime: docker
@@ -468,44 +461,6 @@ export const configGroups: ConfigGroup[] = [
         required: "no",
         defaultValue: "300 (minimum 30)",
         description: "Seconds between auto-pull attempts when autoPull is enabled.",
-      },
-    ],
-  },
-  {
-    title: "Services",
-    description:
-      "Service definitions drive port allocation, health checks, and optional direct links in the UI.",
-    fields: [
-      {
-        key: "services[].name",
-        type: "string",
-        required: "yes",
-        description: "Display name shown in the dashboard.",
-      },
-      {
-        key: "services[].portEnv",
-        type: "string",
-        required: "yes",
-        description: "Runtime env key where the allocated port is injected.",
-      },
-      {
-        key: "services[].portStart",
-        type: "number",
-        required: "no",
-        description: "Base port for auto-allocation across worktrees.",
-      },
-      {
-        key: "services[].portStep",
-        type: "number",
-        required: "no",
-        defaultValue: "1",
-        description: "Increment between worktree slots when ports are auto-allocated.",
-      },
-      {
-        key: "services[].urlTemplate",
-        type: "string",
-        required: "no",
-        description: "Expanded with runtime env values to generate a clickable service URL.",
       },
     ],
   },
@@ -750,7 +705,7 @@ export const runtimeEnvGroups: ConfigGroup[] = [
   {
     title: "Managed runtime variables",
     description:
-      "webmux writes runtime env files for managed worktrees and injects these variables into panes and lifecycle hooks, alongside startupEnvs, allocated service ports, and worktree-local .env.local values.",
+      "webmux writes runtime env files for managed worktrees and injects these variables into panes and lifecycle hooks, alongside startupEnvs and worktree-local .env.local values. Dev server ports come from webmux port instead.",
     fields: [
       {
         key: "WEBMUX_WORKTREE_ID",
