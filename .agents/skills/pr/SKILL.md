@@ -67,7 +67,7 @@ Generated with [Claude Code](https://claude.com/claude-code)
 5. Push to remote if needed: `git push -u origin HEAD`
 6. Create draft PR using gh CLI:
    ```bash
-   gh pr create --draft --title "<type>: <description>" --body "$(cat <<'EOF'
+   gh pr create --repo centdix/webmux --base main --draft --title "<type>: <description>" --body "$(cat <<'EOF'
    ## Summary
    <description>
 
