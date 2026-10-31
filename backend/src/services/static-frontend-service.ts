@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
  *  `staticDir` (Vite-hashed `/assets/*` are cached forever), else 404 — there
  *  is no SPA fallback, so `/<project>` no longer renders the dashboard. */
 export async function serveStaticFrontend(staticDir: string, pathname: string): Promise<Response> {
-  if (pathname === "/") {
+  if (pathname === "/" || pathname === "/index.html") {
     return new Response(Bun.file(join(staticDir, "index.html")), {
       headers: { "Cache-Control": "no-cache" },
     });

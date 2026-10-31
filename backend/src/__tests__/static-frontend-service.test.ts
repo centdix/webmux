@@ -26,6 +26,12 @@ describe("serveStaticFrontend", () => {
     expect(await res.text()).toBe("<html>app</html>");
   });
 
+  it("serves /index.html without caching too", async () => {
+    const res = await serveStaticFrontend(dir, "/index.html");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Cache-Control")).toBe("no-cache");
+  });
+
   it("returns 404 for a project path instead of falling back to the app", async () => {
     expect((await serveStaticFrontend(dir, "/webmux")).status).toBe(404);
     expect((await serveStaticFrontend(dir, "/webmux/")).status).toBe(404);
