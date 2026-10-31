@@ -2670,7 +2670,7 @@ function closeProjectSockets(prefix: string): void {
 async function apiRemoveProject(prefix: string): Promise<Response> {
   if (!apps.has(prefix)) return errorResponse("Project not found", 404);
   // Ordering matters: closeProjectSockets() runs the cleanup synchronously, then
-  // manager.remove() → stopLight() → apps.delete(prefix) also runs synchronously.
+  // manager.remove() → dispose() → apps.delete(prefix) also runs synchronously.
   // Bun fires the real `close` event for the sockets we just closed only after
   // this turn, by which point apps.delete has happened, so the global close
   // handler no-ops instead of double-running the cleanup. Keep these in order.
@@ -2863,13 +2863,13 @@ manager = new ProjectManager({
     notificationHub.addSource(project.runtime.runtimeNotifications);
     return {
       startLight: (): void => app.startLight(),
-      stopLight: (): void => {
-        app.stopLight();
+      stopLight: (): void => app.stopLight(),
+      startHeavy: (): void => {},
+      stopHeavy: (): void => {},
+      dispose: (): void => {
         apps.delete(project.prefix);
         notificationHub.removeSource(project.prefix);
       },
-      startHeavy: (): void => {},
-      stopHeavy: (): void => {},
     };
   },
 });
