@@ -1,5 +1,6 @@
 import type {
   AgentId,
+  AppNotification,
   BuiltInAgentId,
   LinkedLinearIssue,
   OneshotConfig,
@@ -153,7 +154,7 @@ export interface UiToastItem extends ToastInput {
 export interface NotificationToastItem extends ToastInput {
   id: string;
   source: "notification";
-  notificationId: number;
+  notification: AppNotification;
   branch: string;
   url?: string;
 }

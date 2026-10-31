@@ -188,7 +188,7 @@
     ...notifications.map((notification): ToastItem => ({
       id: `notification:${notification.id}`,
       source: "notification",
-      notificationId: notification.id,
+      notification,
       tone: notification.type === "runtime_error"
         ? "error"
         : notification.type === "agent_stopped" || notification.type === "worktree_auto_removed"
@@ -311,15 +311,15 @@
     }
   }
 
+  // TODO(PR4b): key notifications by project + id; ids are only unique per project.
   function handleInitialNotification(n: AppNotification): void {
     if (notificationHistory.some((x) => x.id === n.id)) return;
     notificationHistory = [n, ...notificationHistory].slice(0, MAX_HISTORY);
   }
 
-  function handleDismissNotification(id: number): void {
-    const notification = notifications.find((n) => n.id === id);
-    notifications = notifications.filter((n) => n.id !== id);
-    if (notification) dismissNotification(notification).catch(() => {});
+  function handleDismissNotification(notification: AppNotification): void {
+    notifications = notifications.filter((n) => n.id !== notification.id);
+    dismissNotification(notification).catch(() => {});
   }
 
   function handleSseDismiss(id: number): void {
@@ -331,7 +331,7 @@
     if (!toast) return;
 
     if (toast.source === "notification") {
-      handleDismissNotification(toast.notificationId);
+      handleDismissNotification(toast.notification);
       return;
     }
 

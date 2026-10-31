@@ -560,7 +560,7 @@ describe("App create selection", () => {
     render(App);
 
     await screen.findByText("Select a worktree");
-    onNotification?.(createAppNotification({ id: 42, message: "Background error" }));
+    onNotification?.(createAppNotification({ id: 42, project: "images", message: "Background error" }));
 
     const toast = await screen.findByRole("alert");
     const dismissButton = Array.from(toast.querySelectorAll("button")).find(
@@ -570,7 +570,7 @@ describe("App create selection", () => {
     expect(dismissButton).toBeDefined();
     await fireEvent.click(dismissButton!);
 
-    expect(dismissNotification).toHaveBeenCalledWith(expect.objectContaining({ project: "webmux", id: 42 }));
+    expect(dismissNotification).toHaveBeenCalledWith(expect.objectContaining({ project: "images", id: 42 }));
   });
 
   it("shows a success toast when pulling main succeeds", async () => {
