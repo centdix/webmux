@@ -206,7 +206,7 @@ lifecycleHooks:
 
 </details>
 
-For fresh agents using a host profile, webmux automatically includes capture commands for configured command and shell panes in the agent system prompt. Profile `systemPrompt` values only need to contain project-specific guidance.
+For fresh agents using a host profile, webmux automatically includes capture commands for configured command and shell panes in the agent system prompt. Every fresh agent — host or Docker, plus chat-mode Claude in the dashboard — is also told to get server ports from `webmux port <label>`. Custom agents receive this combined system prompt through `${SYSTEM_PROMPT}` in their start command, so reference that placeholder to pass it on. Profile `systemPrompt` values only need to contain project-specific guidance.
 
 <details>
 <summary><strong>.webmux.yaml full schema</strong></summary>

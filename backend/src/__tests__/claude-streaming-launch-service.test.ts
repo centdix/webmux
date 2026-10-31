@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { ProfileConfig } from "../domain/config";
 import type { WorktreeMeta } from "../domain/model";
 import { buildClaudeStreamingLaunchContext } from "../services/claude-streaming-launch-service";
+import { buildPortRegistrationSystemPrompt } from "../services/port-prompt";
 
 const tempDirs: string[] = [];
 
@@ -68,8 +69,21 @@ describe("buildClaudeStreamingLaunchContext", () => {
         WEBMUX_RUNTIME: "host",
       },
       permissionMode: "bypassPermissions",
-      systemPrompt: "Ship carefully",
+      systemPrompt: `Ship carefully\n\n${buildPortRegistrationSystemPrompt()}`,
     });
+  });
+
+  it("gives chat-mode Claude the webmux port instructions without a profile prompt", async () => {
+    const worktreePath = await mkdtemp(join(tmpdir(), "webmux-claude-stream-"));
+    tempDirs.push(worktreePath);
+
+    const context = await buildClaudeStreamingLaunchContext({
+      meta: makeMeta(),
+      profile: makeProfile(),
+      worktreePath,
+    });
+
+    expect(context?.systemPrompt).toBe(buildPortRegistrationSystemPrompt());
   });
 
   it("does not build a streaming launch context for non-host runtimes", async () => {

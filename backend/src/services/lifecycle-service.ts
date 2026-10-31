@@ -46,6 +46,7 @@ import {
 import { getAgentDefinition, type AgentDefinition } from "./agent-registry";
 import type { ReconciliationService } from "./reconciliation-service";
 import { buildTmuxPaneSystemPrompt, ensureSessionLayout, isWorktreeOpen, planSessionLayout } from "./session-service";
+import { buildPortRegistrationSystemPrompt } from "./port-prompt";
 import { ArchiveStateService } from "./archive-state-service";
 import {
   createManagedWorktree,
@@ -1186,7 +1187,8 @@ export class LifecycleService {
     const tmuxPanePrompt = input.launchMode === "fresh" && input.profile.runtime === "host"
       ? buildTmuxPaneSystemPrompt(input.profile.panes)
       : undefined;
-    const systemPromptParts = [baseSystemPrompt, tmuxPanePrompt, oneshotPrompt]
+    const portPrompt = input.launchMode === "fresh" ? buildPortRegistrationSystemPrompt() : undefined;
+    const systemPromptParts = [baseSystemPrompt, tmuxPanePrompt, portPrompt, oneshotPrompt]
       .filter((part): part is string => part !== undefined && part.length > 0);
     const systemPrompt = systemPromptParts.length > 0
       ? systemPromptParts.join("\n\n")

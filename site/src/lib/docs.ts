@@ -532,7 +532,7 @@ export const configGroups: ConfigGroup[] = [
         key: "profiles.<name>.systemPrompt",
         type: "string",
         required: "no",
-        description: "Prompt template applied to the agent for that profile.",
+        description: "Prompt template applied to the agent for that profile. webmux appends its own instructions, such as how to get server ports from webmux port; custom agents receive the combined prompt through ${SYSTEM_PROMPT} in their start command.",
       },
       {
         key: "profiles.<name>.yolo",
