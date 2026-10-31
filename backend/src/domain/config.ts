@@ -51,14 +51,6 @@ export interface ProfileConfig {
   mounts?: MountSpec[];
 }
 
-export interface ServiceSpec {
-  name: string;
-  portEnv: string;
-  portStart?: number;
-  portStep?: number;
-  urlTemplate?: string;
-}
-
 export interface LinkedRepoConfig {
   repo: string;
   alias: string;
@@ -104,7 +96,6 @@ export interface ProjectConfig {
   workspace: WorkspaceConfig;
   profiles: Record<string, ProfileConfig>;
   agents: Record<AgentId, CustomAgentConfig>;
-  services: ServiceSpec[];
   startupEnvs: Record<string, string | boolean>;
   integrations: IntegrationConfig;
   lifecycleHooks: LifecycleHooksConfig;

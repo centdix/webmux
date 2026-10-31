@@ -77,7 +77,8 @@ export class PortRegistrationService {
     if (requestedPort !== undefined) {
       const holder = others.find((entry) => entry.port === requestedPort);
       if (holder) {
-        return { ok: false, reason: "conflict", error: `Port ${requestedPort} is already registered as "${holder.label}" by another worktree` };
+        const owner = holder.projectDir === key.projectDir && holder.worktreeId === key.worktreeId ? "this" : "another";
+        return { ok: false, reason: "conflict", error: `Port ${requestedPort} is already registered as "${holder.label}" by ${owner} worktree` };
       }
       port = requestedPort;
     } else {

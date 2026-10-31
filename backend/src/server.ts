@@ -141,24 +141,17 @@ import type {
 } from "./domain/agents-ui";
 import type { OneshotMeta, ProjectSnapshot, WorktreeSnapshot } from "./domain/model";
 import { isValidBranchName, isValidWorktreeName } from "./domain/policies";
-import { createWebmuxRuntime, type WebmuxRuntime } from "./runtime";
+import { createPortRegistrationService, createWebmuxRuntime, type WebmuxRuntime } from "./runtime";
 import { createInstanceRegistry, type InstanceEntry } from "./adapters/instance-registry";
 import { createProjectsRegistry } from "./adapters/projects-registry";
 import { ProjectManager, type ManagedProject, type ProjectLoopController } from "./services/project-manager";
-import { canBind, BunPortProbe } from "./adapters/port-probe";
-import { createPortRegistry } from "./adapters/port-registry";
 import { isValidPortLabel } from "./domain/port-registrations";
-import { PortRegistrationService } from "./services/port-registration-service";
 import { startSerializedInterval } from "./lib/async";
 
 const PORT = parseInt(Bun.env.PORT || "5111", 10);
 /** Process-wide: one registry across every served project, so a port handed to
  *  one worktree is never handed to another. */
-const portRegistrationService = new PortRegistrationService({
-  registry: createPortRegistry(),
-  portProbe: new BunPortProbe(),
-  canBind,
-});
+const portRegistrationService = createPortRegistrationService();
 portRegistrationService.restartTtls();
 const STATIC_DIR = Bun.env.WEBMUX_STATIC_DIR || "";
 /** Strict check: is `dir` itself inside a git work tree? Unlike
@@ -389,7 +382,6 @@ const autoRemoveDeps: AutoRemoveDependencies = {
 
 function getFrontendConfig(): {
   name: string;
-  services: ProjectConfig["services"];
   profiles: Array<{ name: string; systemPrompt?: string }>;
   agents: ReturnType<typeof listAgentSummaries>;
   defaultProfileName: string;
@@ -413,7 +405,6 @@ function getFrontendConfig(): {
 
   return {
     name: config.name,
-    services: config.services,
     profiles: orderedProfileEntries.map(([name, profile]) => ({
       name,
       ...(profile.systemPrompt ? { systemPrompt: profile.systemPrompt } : {}),

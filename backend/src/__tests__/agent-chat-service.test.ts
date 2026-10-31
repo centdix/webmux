@@ -25,7 +25,6 @@ const TEST_CONFIG: ProjectConfig = {
       startCommand: 'gemini --prompt "${PROMPT}"',
     },
   },
-  services: [],
   startupEnvs: {},
   integrations: {
     github: { linkedRepos: [], autoRemoveOnMerge: false },

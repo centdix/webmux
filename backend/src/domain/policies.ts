@@ -1,5 +1,4 @@
-import type { ServiceSpec } from "./config";
-import type { PrEntry, WorktreeMeta } from "./model";
+import type { PrEntry } from "./model";
 
 const INVALID_BRANCH_CHARS_RE = /[~^:?*\[\]\\]+/g;
 const UNSAFE_ENV_KEY_RE = /^[a-z_][a-z0-9_]*$/i;
@@ -83,36 +82,4 @@ function worktreeOrderRank(worktree: WorktreeOrderFields): number {
 export function compareWorktreeOrder(left: WorktreeOrderFields, right: WorktreeOrderFields): number {
   const byRank = worktreeOrderRank(left) - worktreeOrderRank(right);
   return byRank !== 0 ? byRank : left.branch.localeCompare(right.branch);
-}
-
-export function allocateServicePorts(
-  existingMetas: WorktreeMeta[],
-  services: ServiceSpec[],
-): Record<string, number> {
-  const allocatable = services.filter((service) => service.portStart != null);
-  if (allocatable.length === 0) return {};
-
-  const reference = allocatable[0];
-  const referenceStart = reference.portStart!;
-  const referenceStep = reference.portStep ?? 1;
-  const occupiedSlots = new Set<number>();
-
-  for (const meta of existingMetas) {
-    const port = meta.allocatedPorts[reference.portEnv];
-    if (!Number.isInteger(port) || port < referenceStart) continue;
-    const diff = port - referenceStart;
-    if (diff % referenceStep !== 0) continue;
-    occupiedSlots.add(diff / referenceStep);
-  }
-
-  let slot = 1;
-  while (occupiedSlots.has(slot)) slot += 1;
-
-  const result: Record<string, number> = {};
-  for (const service of allocatable) {
-    const start = service.portStart!;
-    const step = service.portStep ?? 1;
-    result[service.portEnv] = start + slot * step;
-  }
-  return result;
 }

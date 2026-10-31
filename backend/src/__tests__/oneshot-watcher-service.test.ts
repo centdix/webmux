@@ -59,7 +59,6 @@ function makeMeta(oneshot: WorktreeMeta["oneshot"] | undefined): WorktreeMeta {
     agent: "claude",
     runtime: "host",
     startupEnvValues: {},
-    allocatedPorts: {},
     ...(oneshot ? { oneshot } : {}),
   };
 }

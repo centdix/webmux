@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,10 +42,6 @@ describe("loadConfig", () => {
         "  mainBranch: trunk",
         "  worktreeRoot: worktrees",
         "  defaultAgent: codex",
-        "services:",
-        "  - name: API",
-        "    portEnv: API_PORT",
-        "    portStart: 4100",
         "profiles:",
         "  default:",
         "    runtime: host",
@@ -91,7 +87,6 @@ describe("loadConfig", () => {
     expect(config.workspace.mainBranch).toBe("trunk");
     expect(config.workspace.worktreeRoot).toBe("worktrees");
     expect(config.workspace.defaultAgent).toBe("codex");
-    expect(config.services).toEqual([{ name: "API", portEnv: "API_PORT", portStart: 4100 }]);
     expect(config.profiles.default.runtime).toBe("host");
     expect(config.profiles.default.yolo).toBe(true);
     expect(config.profiles.default.envPassthrough).toEqual(["GITHUB_TOKEN"]);
@@ -111,6 +106,36 @@ describe("loadConfig", () => {
     expect(config.integrations.linear.enabled).toBe(false);
     expect(config.integrations.linear.createTicketOption).toBe(true);
     expect(config.integrations.linear.watchTeams).toEqual(["ENG", "OPS"]);
+  });
+
+  it("ignores a legacy services key and warns once", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "webmux-config-"));
+    tempDirs.push(dir);
+    Bun.spawnSync(["git", "init"], { cwd: dir });
+
+    await Bun.write(
+      join(dir, ".webmux.yaml"),
+      [
+        "name: Legacy",
+        "services:",
+        "  - name: API",
+        "    portEnv: API_PORT",
+        "    portStart: 4100",
+        "",
+      ].join("\n"),
+    );
+
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const config = loadConfig(dir);
+
+      expect(config.name).toBe("Legacy");
+      expect(config).not.toHaveProperty("services");
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toContain("`services` is no longer supported; use `webmux port`");
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("uses the first configured profile when no default profile exists", async () => {

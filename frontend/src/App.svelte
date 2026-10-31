@@ -80,7 +80,6 @@
   function createDefaultConfig(): AppConfig {
     return {
       name: "",
-      services: [],
       profiles: [],
       agents: [],
       defaultProfileName: "",

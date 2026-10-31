@@ -30,7 +30,6 @@ export interface InitializeManagedWorktreeOptions {
   agent: AgentId;
   runtime: RuntimeKind;
   startupEnvValues?: Record<string, string>;
-  allocatedPorts?: Record<string, number>;
   runtimeEnvExtras?: Record<string, string>;
   dotenvValues?: Record<string, string>;
   controlUrl?: string;
@@ -59,7 +58,6 @@ export interface CreateManagedWorktreeOptions {
   agent: AgentId;
   runtime: RuntimeKind;
   startupEnvValues?: Record<string, string>;
-  allocatedPorts?: Record<string, number>;
   runtimeEnvExtras?: Record<string, string>;
   controlUrl?: string;
   controlToken?: string;
@@ -163,7 +161,6 @@ export async function initializeManagedWorktree(
     agent: opts.agent,
     runtime: opts.runtime,
     startupEnvValues: { ...(opts.startupEnvValues ?? {}) },
-    allocatedPorts: { ...(opts.allocatedPorts ?? {}) },
     ...(opts.source ? { source: opts.source } : {}),
     ...(opts.oneshot ? { oneshot: opts.oneshot } : {}),
   };
@@ -231,7 +228,6 @@ export async function createManagedWorktree(
       agent: opts.agent,
       runtime: opts.runtime,
       startupEnvValues: opts.startupEnvValues,
-      allocatedPorts: opts.allocatedPorts,
       runtimeEnvExtras: opts.runtimeEnvExtras,
       dotenvValues,
       controlUrl: opts.controlUrl,

@@ -369,7 +369,6 @@ describe("buildStarterTemplate", () => {
     expect(config.name).toBe("example");
     expect(config.workspace.mainBranch).toBe("main");
     expect(config.workspace.defaultAgent).toBe("codex");
-    expect(config.services).toEqual([]);
     expect(config.profiles.default.panes).toEqual([
       {
         id: "agent",

@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ProjectConfig } from "../domain/config";
 import type { GitGateway, GitWorktreeEntry, GitWorktreeStatus, TryGitCommandResult, UnpushedCommit } from "../adapters/git";
 import type { PortProbe } from "../adapters/port-probe";
 import type { TmuxGateway, TmuxWindowSummary } from "../adapters/tmux";
@@ -231,40 +230,6 @@ function deferred(): Deferred {
   };
 }
 
-const TEST_CONFIG: ProjectConfig = {
-  name: "Project",
-  workspace: {
-    mainBranch: "main",
-    worktreeRoot: "__worktrees",
-    defaultAgent: "claude",
-    autoPull: { enabled: false, intervalSeconds: 300 },
-    ide: "cursor",
-  },
-  profiles: {
-    default: {
-      runtime: "host",
-      envPassthrough: [],
-      panes: [],
-    },
-  },
-  agents: {},
-  services: [
-    {
-      name: "frontend",
-      portEnv: "FRONTEND_PORT",
-      urlTemplate: "http://127.0.0.1:${FRONTEND_PORT}",
-    },
-  ],
-  startupEnvs: {},
-  integrations: {
-    github: { linkedRepos: [], autoRemoveOnMerge: false },
-    linear: { enabled: true, autoCreateWorktrees: false, createTicketOption: false },
-  },
-  lifecycleHooks: {},
-  autoName: null,
-  oneshot: { systemPrompt: "" },
-};
-
 describe("ReconciliationService", () => {
   const tempDirs: string[] = [];
 
@@ -288,7 +253,6 @@ describe("ReconciliationService", () => {
       agent: "claude",
       runtime: "host",
       startupEnvValues: {},
-      allocatedPorts: { FRONTEND_PORT: 3010 },
     });
     await writeWorktreePrs(managedGitDir, [
       {
@@ -329,11 +293,11 @@ describe("ReconciliationService", () => {
     ]);
 
     const service = new ReconciliationService({
-      config: TEST_CONFIG,
       git,
       tmux,
       portProbe: new FakePortProbe(new Set([3010])),
       runtime,
+      portRegistrations: { list: () => [{ label: "frontend", port: 3010, keep: false }] },
     });
 
     await service.reconcile(repoRoot);
@@ -353,7 +317,7 @@ describe("ReconciliationService", () => {
         name: "frontend",
         port: 3010,
         running: true,
-        url: "http://127.0.0.1:3010",
+        url: null,
       },
     ]);
     expect(state?.prs).toEqual([
@@ -372,7 +336,7 @@ describe("ReconciliationService", () => {
     expect(runtime.getWorktree("wt_stale")).toBeNull();
   });
 
-  it("surfaces running agent-registered ports as services, behind configured ones", async () => {
+  it("surfaces only the worktree's running registrations as services", async () => {
     const repoRoot = "/repo/project";
     const managedPath = "/repo/project/__worktrees/feature-ports";
     const managedGitDir = await mkdtemp(join(tmpdir(), "webmux-reconcile-ports-"));
@@ -387,7 +351,6 @@ describe("ReconciliationService", () => {
       agent: "claude",
       runtime: "host",
       startupEnvValues: {},
-      allocatedPorts: {},
     });
 
     const runtime = new ProjectRuntime();
@@ -401,10 +364,9 @@ describe("ReconciliationService", () => {
     );
     const listCalls: Array<[string, string]> = [];
     const service = new ReconciliationService({
-      config: TEST_CONFIG,
       git,
       tmux: new FakeTmuxGateway([]),
-      portProbe: new FakePortProbe(new Set([4100, 4102])),
+      portProbe: new FakePortProbe(new Set([4100])),
       runtime,
       portRegistrations: {
         list: (projectDir, worktreeId) => {
@@ -412,7 +374,6 @@ describe("ReconciliationService", () => {
           return [
             { label: "web", port: 4100, keep: false },
             { label: "api", port: 4101, keep: false },
-            { label: "frontend", port: 4102, keep: false },
           ];
         },
       },
@@ -422,7 +383,6 @@ describe("ReconciliationService", () => {
 
     expect(listCalls).toEqual([[repoRoot, "wt_ports"]]);
     expect(runtime.getWorktree("wt_ports")?.services).toEqual([
-      { name: "frontend", port: null, running: false, url: null },
       { name: "web", port: 4100, running: true, url: null },
     ]);
   });
@@ -445,7 +405,6 @@ describe("ReconciliationService", () => {
       agent: "claude",
       runtime: "host",
       startupEnvValues: {},
-      allocatedPorts: {},
     });
 
     const sessionName = buildProjectSessionName(repoRoot);
@@ -477,11 +436,11 @@ describe("ReconciliationService", () => {
     ]);
 
     const service = new ReconciliationService({
-      config: TEST_CONFIG,
       git,
       tmux,
       portProbe: new FakePortProbe(),
       runtime,
+      portRegistrations: { list: () => [] },
     });
 
     await service.reconcile(repoRoot);
@@ -522,7 +481,6 @@ describe("ReconciliationService", () => {
       agent: "claude",
       runtime: "host",
       startupEnvValues: {},
-      allocatedPorts: {},
     });
 
     const sessionName = buildProjectSessionName(repoRoot);
@@ -545,11 +503,11 @@ describe("ReconciliationService", () => {
     ]);
 
     const service = new ReconciliationService({
-      config: TEST_CONFIG,
       git,
       tmux,
       portProbe: new FakePortProbe(),
       runtime,
+      portRegistrations: { list: () => [] },
     });
 
     await service.reconcile(repoRoot);
@@ -585,7 +543,6 @@ describe("ReconciliationService", () => {
       agent: "claude",
       runtime: "host",
       startupEnvValues: {},
-      allocatedPorts: {},
     });
 
     const sessionName = buildProjectSessionName(repoRoot);
@@ -617,11 +574,11 @@ describe("ReconciliationService", () => {
     ]);
 
     const service = new ReconciliationService({
-      config: TEST_CONFIG,
       git,
       tmux,
       portProbe: new FakePortProbe(),
       runtime,
+      portRegistrations: { list: () => [] },
     });
 
     await service.reconcile(repoRoot);
@@ -659,7 +616,6 @@ describe("ReconciliationService", () => {
       agent: "claude",
       runtime: "host",
       startupEnvValues: {},
-      allocatedPorts: { FRONTEND_PORT: 3010 },
     });
 
     const runtime = new ProjectRuntime();
@@ -679,11 +635,11 @@ describe("ReconciliationService", () => {
     );
 
     const service = new ReconciliationService({
-      config: TEST_CONFIG,
       git,
       tmux: new FakeTmuxGateway([]),
-      portProbe: new FakePortProbe(new Set([3010])),
+      portProbe: new FakePortProbe(),
       runtime,
+      portRegistrations: { list: () => [] },
     });
 
     await service.reconcile(repoRoot);
@@ -708,11 +664,11 @@ describe("ReconciliationService", () => {
     const tmux = new FakeTmuxGateway([]);
 
     const service = new ReconciliationService({
-      config: TEST_CONFIG,
       git,
       tmux,
       portProbe: new FakePortProbe(),
       runtime,
+      portRegistrations: { list: () => [] },
     });
 
     await service.reconcile(repoRoot);
@@ -740,7 +696,6 @@ describe("ReconciliationService", () => {
       agent: "claude",
       runtime: "host",
       startupEnvValues: {},
-      allocatedPorts: { FRONTEND_PORT: 3010 },
     });
 
     let probeCount = 0;
@@ -774,11 +729,11 @@ describe("ReconciliationService", () => {
     );
     const service = new ReconciliationService(
       {
-        config: TEST_CONFIG,
         git,
         tmux: new FakeTmuxGateway([]),
         portProbe,
         runtime,
+        portRegistrations: { list: () => [{ label: "web", port: 3010, keep: false }] },
       },
       {
         freshnessMs: 1000,

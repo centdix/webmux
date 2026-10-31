@@ -22,7 +22,6 @@ function baseMeta(overrides: Partial<WorktreeMeta> = {}): WorktreeMeta {
     agent: "claude",
     runtime: "host",
     startupEnvValues: {},
-    allocatedPorts: {},
     tabs: [
       { tabId: ROOT_TAB_ID, kind: "root", label: "Root", seq: null, sessionId: "root-sess", createdAt: "2026-01-01T00:00:00.000Z" },
     ],

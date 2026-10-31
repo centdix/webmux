@@ -24,9 +24,13 @@ export interface WebmuxRuntimeOptions {
    *  the events fall through to the SPA and Claude's status never updates. */
   prefix?: string;
   onCreateProgress?: (progress: CreateWorktreeProgress) => void | Promise<void>;
-  /** The server's process-wide port registrations. In-process CLI runtimes default
-   *  to their own service over the same `~/.webmux/ports.json`. */
-  portRegistrations?: PortRegistrationService;
+  /** The process-wide port registrations: the server's single instance, or an
+   *  in-process CLI runtime's own service over the same `~/.webmux/ports.json`. */
+  portRegistrations: PortRegistrationService;
+}
+
+export function createPortRegistrationService(): PortRegistrationService {
+  return new PortRegistrationService({ registry: createPortRegistry(), portProbe: new BunPortProbe(), canBind });
 }
 
 /** Base URL agent hooks POST runtime events to. The server serves each project
@@ -60,7 +64,7 @@ export interface WebmuxRuntime {
   lifecycleService: LifecycleService;
 }
 
-export function createWebmuxRuntime(options: WebmuxRuntimeOptions = {}): WebmuxRuntime {
+export function createWebmuxRuntime(options: WebmuxRuntimeOptions): WebmuxRuntime {
   const port = options.port ?? parseInt(Bun.env.PORT || "5111", 10);
   // ProjectManager (the only server-side caller) always passes an explicit
   // projectDir; cwd is just the default for direct/CLI/test calls.
@@ -69,8 +73,7 @@ export function createWebmuxRuntime(options: WebmuxRuntimeOptions = {}): WebmuxR
   const git = new BunGitGateway();
   const archiveStateService = new ArchiveStateService(git.resolveWorktreeGitDir(projectDir));
   const portProbe = new BunPortProbe();
-  const portRegistrations = options.portRegistrations
-    ?? new PortRegistrationService({ registry: createPortRegistry(), portProbe, canBind });
+  const portRegistrations = options.portRegistrations;
   const tmux = new BunTmuxGateway();
   const docker = new BunDockerGateway();
   const hooks = new BunLifecycleHookRunner();
@@ -79,7 +82,6 @@ export function createWebmuxRuntime(options: WebmuxRuntimeOptions = {}): WebmuxR
   const worktreeCreationTracker = new WorktreeCreationTracker();
   const runtimeNotifications = new RuntimeNotificationService();
   const reconciliationService = new ReconciliationService({
-    config,
     git,
     tmux,
     portProbe,

@@ -58,6 +58,13 @@ describe("PortRegistrationService.register", () => {
     if (!other.ok) expect(other.reason).toBe("conflict");
   });
 
+  it("names the holder correctly when the conflicting port belongs to the same worktree", () => {
+    const { service } = makeService();
+    service.register(web, { port: 5173 });
+    const result = service.register({ ...web, label: "api" }, { port: 5173 });
+    expect(result).toEqual({ ok: false, reason: "conflict", error: 'Port 5173 is already registered as "web" by this worktree' });
+  });
+
   it("moves an existing label to a newly requested port", () => {
     const { service } = makeService();
     service.register(web);
