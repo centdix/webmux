@@ -29,7 +29,6 @@
     onselect,
     onclose,
     onarchive,
-    onmerge,
     onremove,
     oneditprofile,
     oncreatesubworktree,
@@ -48,7 +47,6 @@
     onselect: (branch: string) => void;
     onclose: (branch: string) => void;
     onarchive: (branch: string) => void;
-    onmerge: (branch: string) => void;
     onremove: (branch: string) => void;
     oneditprofile: (branch: string) => void;
     oncreatesubworktree: (branch: string) => void;
@@ -394,16 +392,6 @@
               }}
             >
               Change profile…
-            </button>
-            <button
-              type="button"
-              class="w-full px-2 py-1.5 rounded text-left text-xs text-primary hover:bg-hover"
-              onclick={(event) => {
-                event.stopPropagation();
-                runMenuAction(wt.branch, onmerge);
-              }}
-            >
-              Merge
             </button>
             <button
               type="button"

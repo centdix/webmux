@@ -24,7 +24,6 @@
     ontogglesidebar,
     onclose,
     onarchive,
-    onmerge,
     onremove,
     oneditlabel,
     onsettings,
@@ -46,7 +45,6 @@
     ontogglesidebar?: () => void;
     onclose: () => void;
     onarchive: () => void;
-    onmerge: () => void;
     onremove: () => void;
     oneditlabel?: () => void;
     onsettings: () => void;
@@ -234,9 +232,6 @@
       >
         {isMobile ? (worktree.archived ? "Re" : "A") : (worktree.archived ? "Restore" : "Archive")}
       </Btn>
-      <Btn variant="accent-outline" onclick={onmerge} title="Merge worktree"
-        >{isMobile ? "M" : "Merge"}</Btn
-      >
       <Btn variant="danger-outline" onclick={onremove} title="Remove worktree"
         >{isMobile ? "R" : "Remove"}</Btn
       >

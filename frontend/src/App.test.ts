@@ -109,7 +109,6 @@ vi.mock("./lib/api", () => ({
     fetchConfig: vi.fn(),
     fetchWorktreeDiff: vi.fn(),
     fetchLinearIssues: vi.fn(),
-    mergeWorktree: vi.fn(),
     openWorktree: vi.fn(),
     pullMain: vi.fn(),
     removeWorktree: vi.fn(),
@@ -446,7 +445,6 @@ describe("App create selection", () => {
     vi.mocked(api.closeWorktree).mockResolvedValue({ ok: true });
     vi.mocked(api.removeWorktree).mockResolvedValue({ ok: true });
     vi.mocked(api.setWorktreeArchived).mockResolvedValue({ ok: true, archived: true });
-    vi.mocked(api.mergeWorktree).mockResolvedValue({ ok: true });
     vi.mocked(api.pullMain).mockResolvedValue({ status: "updated" });
     vi.mocked(api.dismissNotification).mockResolvedValue({ ok: true });
     vi.mocked(api.fetchCiLogs).mockResolvedValue({ logs: "" });

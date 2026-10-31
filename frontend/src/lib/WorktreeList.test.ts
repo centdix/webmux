@@ -63,7 +63,6 @@ describe("WorktreeList", () => {
         onselect,
         onclose: vi.fn(),
         onarchive: vi.fn(),
-        onmerge: vi.fn(),
         oncreatesubworktree: vi.fn(),
         onremove,
         oneditprofile: vi.fn(),
@@ -92,7 +91,6 @@ describe("WorktreeList", () => {
         onselect: vi.fn(),
         onclose: vi.fn(),
         onarchive: vi.fn(),
-        onmerge: vi.fn(),
         oncreatesubworktree: vi.fn(),
         onremove: vi.fn(),
         oneditprofile: vi.fn(),
@@ -120,7 +118,6 @@ describe("WorktreeList", () => {
         onselect: vi.fn(),
         onclose: vi.fn(),
         onarchive,
-        onmerge: vi.fn(),
         oncreatesubworktree: vi.fn(),
         onremove: vi.fn(),
         oneditprofile: vi.fn(),
@@ -132,7 +129,7 @@ describe("WorktreeList", () => {
 
     expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Archive" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Merge" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Merge" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument();
 
     await fireEvent.click(screen.getByRole("button", { name: "Archive" }));
@@ -155,7 +152,6 @@ describe("WorktreeList", () => {
         onselect: vi.fn(),
         onclose: vi.fn(),
         onarchive: vi.fn(),
-        onmerge: vi.fn(),
         oncreatesubworktree,
         onremove: vi.fn(),
         oneditprofile: vi.fn(),
@@ -186,7 +182,6 @@ describe("WorktreeList", () => {
         onselect,
         onclose: vi.fn(),
         onarchive: vi.fn(),
-        onmerge: vi.fn(),
         oncreatesubworktree: vi.fn(),
         onremove: vi.fn(),
         oneditprofile: vi.fn(),
@@ -221,7 +216,6 @@ describe("WorktreeList", () => {
         onselect: vi.fn(),
         onclose: vi.fn(),
         onarchive: vi.fn(),
-        onmerge: vi.fn(),
         oncreatesubworktree: vi.fn(),
         onremove: vi.fn(),
         oneditprofile: vi.fn(),
@@ -253,7 +247,6 @@ describe("WorktreeList", () => {
         onselect: vi.fn(),
         onclose: vi.fn(),
         onarchive: vi.fn(),
-        onmerge: vi.fn(),
         oncreatesubworktree: vi.fn(),
         onremove: vi.fn(),
         oneditprofile: vi.fn(),
@@ -290,7 +283,6 @@ describe("WorktreeList", () => {
         onselect: vi.fn(),
         onclose: vi.fn(),
         onarchive: vi.fn(),
-        onmerge: vi.fn(),
         oncreatesubworktree: vi.fn(),
         onremove: vi.fn(),
         oneditprofile: vi.fn(),
