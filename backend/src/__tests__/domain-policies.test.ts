@@ -1,7 +1,9 @@
 import { describe, expect, it } from "bun:test";
+import { hubApiPaths, PROJECT_API_ROOT } from "@webmux/api-contract";
 import {
   compareWorktreeOrder,
   deriveProjectPrefix,
+  RESERVED_PROJECT_PREFIXES,
   sanitizeProjectPrefix,
   type WorktreeOrderFields,
 } from "../domain/policies";
@@ -44,6 +46,20 @@ describe("deriveProjectPrefix", () => {
     expect(deriveProjectPrefix("/srv/api", [])).toBe("api-2");
     expect(deriveProjectPrefix("/srv/ws", [])).toBe("ws-2");
     expect(deriveProjectPrefix("/srv/assets", [])).toBe("assets-2");
+    expect(deriveProjectPrefix("/srv/worktrees", [])).toBe("worktrees-2");
+    expect(deriveProjectPrefix("/srv/init", [])).toBe("init-2");
+    expect(deriveProjectPrefix("/srv/migrate", [])).toBe("migrate-2");
+  });
+
+  it("reserves every static hub segment under the project mount point", () => {
+    const staticSegments = Object.values(hubApiPaths)
+      .filter((path) => path.startsWith(`${PROJECT_API_ROOT}/`))
+      .map((path) => path.slice(PROJECT_API_ROOT.length + 1).split("/")[0])
+      .filter((segment) => !segment.startsWith(":"));
+    expect(staticSegments.length).toBeGreaterThan(0);
+    for (const segment of staticSegments) {
+      expect(RESERVED_PROJECT_PREFIXES.has(segment)).toBe(true);
+    }
   });
 });
 
