@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -9,6 +9,7 @@ const tempDirs: string[] = [];
 const decoder = new TextDecoder();
 const webmuxEntry = join(dirname(fileURLToPath(import.meta.url)), "webmux.ts");
 const originalPort = process.env.PORT;
+const originalWorktreeId = process.env.WEBMUX_WORKTREE_ID;
 
 function runOrThrow(cmd: string[], cwd: string): void {
   const result = Bun.spawnSync(cmd, {
@@ -51,11 +52,20 @@ async function installFakeTmux(binDir: string): Promise<void> {
 }
 
 describe("webmux entrypoint", () => {
+  beforeEach(() => {
+    delete process.env.WEBMUX_WORKTREE_ID;
+  });
+
   afterEach(async () => {
     if (originalPort === undefined) {
       delete process.env.PORT;
     } else {
       process.env.PORT = originalPort;
+    }
+    if (originalWorktreeId === undefined) {
+      delete process.env.WEBMUX_WORKTREE_ID;
+    } else {
+      process.env.WEBMUX_WORKTREE_ID = originalWorktreeId;
     }
     await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
@@ -176,6 +186,38 @@ describe("webmux entrypoint", () => {
       commandArgs: ["web", "--port", "5173"],
     });
     expect(parseRootArgs(["--port", "6000", "port", "web"]).port).toBe(6000);
+  });
+
+  it("ignores an inherited PORT for every command inside a worktree shell", () => {
+    process.env.PORT = "4100";
+    process.env.WEBMUX_WORKTREE_ID = "wt_test";
+
+    expect(parseRootArgs(["send", "feature/search", "hi"])).toEqual({
+      port: 5111,
+      portExplicit: false,
+      debug: false,
+      app: false,
+      command: "send",
+      commandArgs: ["feature/search", "hi"],
+    });
+    expect(parseRootArgs(["list"])).toMatchObject({ port: 5111, portExplicit: false });
+    expect(parseRootArgs(["oneshot"])).toMatchObject({ port: 5111, portExplicit: false });
+    expect(parseRootArgs(["serve"])).toMatchObject({ port: 5111, portExplicit: false });
+  });
+
+  it("honors an explicit --port flag inside a worktree shell", () => {
+    process.env.PORT = "4100";
+    process.env.WEBMUX_WORKTREE_ID = "wt_test";
+
+    expect(parseRootArgs(["--port", "6000", "list"])).toMatchObject({ port: 6000, portExplicit: true });
+    expect(parseRootArgs(["--port", "6000", "port", "web"])).toMatchObject({ port: 6000, portExplicit: true });
+  });
+
+  it("keeps an inherited PORT outside a worktree shell", () => {
+    process.env.PORT = "4100";
+
+    expect(parseRootArgs(["list"])).toMatchObject({ port: 4100, portExplicit: true });
+    expect(parseRootArgs(["--port", "6000", "list"])).toMatchObject({ port: 6000, portExplicit: true });
   });
 
   it("runs worktree commands from a project subdirectory", async () => {
