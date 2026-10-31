@@ -410,9 +410,9 @@ describe("ReconciliationService", () => {
         list: (projectDir, worktreeId) => {
           listCalls.push([projectDir, worktreeId]);
           return [
-            { label: "web", port: 4100 },
-            { label: "api", port: 4101 },
-            { label: "frontend", port: 4102 },
+            { label: "web", port: 4100, keep: false },
+            { label: "api", port: 4101, keep: false },
+            { label: "frontend", port: 4102, keep: false },
           ];
         },
       },
@@ -423,7 +423,7 @@ describe("ReconciliationService", () => {
     expect(listCalls).toEqual([[repoRoot, "wt_ports"]]);
     expect(runtime.getWorktree("wt_ports")?.services).toEqual([
       { name: "frontend", port: null, running: false, url: null },
-      { name: "web", port: 4100, running: true, url: "http://localhost:4100" },
+      { name: "web", port: 4100, running: true, url: null },
     ]);
   });
 

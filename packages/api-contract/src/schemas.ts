@@ -595,11 +595,13 @@ export const WorktreePortParamsSchema = z.object({
 export const RegisterWorktreePortRequestSchema = z.object({
   label: z.string(),
   port: z.number().int().min(1).max(65535).optional(),
+  keep: z.boolean().optional(),
 });
 
 export const RegisteredPortSchema = z.object({
   label: z.string(),
   port: z.number().int(),
+  keep: z.boolean(),
 });
 
 export const RegisterWorktreePortResponseSchema = RegisteredPortSchema;

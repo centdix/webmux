@@ -181,15 +181,17 @@ export function getWorktreeCommandUsage(command: WorktreeSubcommand): string {
     case "port":
       return [
         "Usage:",
-        "  webmux port <label> [--port <n>]    Get a port for a service and print it",
-        "  webmux port ls                      List registered ports",
-        "  webmux port rm <label>              Release a port",
+        "  webmux port <label> [--port <n>] [--keep]   Get a port for a service and print it",
+        "  webmux port ls                              List registered ports",
+        "  webmux port rm <label>                      Release a port",
         "",
         "The same label returns the same port. A port is shown in the dashboard",
-        "while something listens on it, and released after 5 minutes idle.",
+        "while something listens on it, and released after 5 minutes idle (unless",
+        "kept) or when the worktree is removed.",
         "",
         "Options:",
         "  --port <n>               Register a port the service already uses",
+        "  --keep                   Never release the port for being idle",
         "  --worktree <branch>      Target worktree (defaults to the current one)",
         "  --help                   Show this help message",
       ].join("\n");
@@ -391,7 +393,7 @@ export function parseTabCommandArgs(args: string[]): ParsedTabCommand | null {
 }
 
 export type ParsedPortCommand =
-  | { action: "register"; branch: string; label: string; port?: number }
+  | { action: "register"; branch: string; label: string; port?: number; keep?: true }
   | { action: "list"; branch: string }
   | { action: "remove"; branch: string; label: string };
 
@@ -399,11 +401,17 @@ export function parsePortCommandArgs(args: string[], defaultBranch: string | nul
   const positional: string[] = [];
   let branch: string | null = null;
   let port: number | undefined;
+  let keep = false;
 
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
     if (!arg) continue;
     if (arg === "--help" || arg === "-h") return null;
+
+    if (arg === "--keep") {
+      keep = true;
+      continue;
+    }
 
     if (arg === "--worktree" || arg.startsWith("--worktree=")) {
       const { value, nextIndex } = readOptionValue(args, index, "--worktree");
@@ -437,7 +445,7 @@ export function parsePortCommandArgs(args: string[], defaultBranch: string | nul
   if (!first) throw new CommandUsageError("Missing required argument: <label>");
 
   if (first === "ls") {
-    if (second || port !== undefined) throw new CommandUsageError("The \"ls\" action takes no arguments");
+    if (second || port !== undefined || keep) throw new CommandUsageError("The \"ls\" action takes no arguments");
     return { action: "list", branch: target };
   }
 
@@ -450,10 +458,16 @@ export function parsePortCommandArgs(args: string[], defaultBranch: string | nul
     throw new CommandUsageError(`Invalid label: ${label} (use lowercase letters, digits, - or _)`);
   }
   if (isRemove) {
-    if (port !== undefined) throw new CommandUsageError("The \"rm\" action does not take --port");
+    if (port !== undefined || keep) throw new CommandUsageError("The \"rm\" action does not take --port or --keep");
     return { action: "remove", branch: target, label };
   }
-  return { action: "register", branch: target, label, ...(port !== undefined ? { port } : {}) };
+  return {
+    action: "register",
+    branch: target,
+    label,
+    ...(port !== undefined ? { port } : {}),
+    ...(keep ? { keep: true as const } : {}),
+  };
 }
 
 function defaultResolveCurrentBranch(projectDir: string): string | null {
@@ -1268,7 +1282,11 @@ export async function runWorktreeCommand(
         if (parsed.action === "register") {
           const { port } = await api.registerWorktreePort({
             params: { name: parsed.branch },
-            body: { label: parsed.label, ...(parsed.port !== undefined ? { port: parsed.port } : {}) },
+            body: {
+              label: parsed.label,
+              ...(parsed.port !== undefined ? { port: parsed.port } : {}),
+              ...(parsed.keep ? { keep: true } : {}),
+            },
           });
           // Bare port on stdout so `PORT=$(webmux port web)` works.
           stdout(String(port));
@@ -1281,7 +1299,8 @@ export async function runWorktreeCommand(
         }
         const { ports } = await api.fetchWorktreePorts({ params: { name: parsed.branch } });
         for (const entry of ports) {
-          stdout(`${entry.label.padEnd(12)} ${String(entry.port).padEnd(6)} ${entry.running ? "running" : "idle"}`);
+          const status = entry.running ? "running" : "idle";
+          stdout(`${entry.label.padEnd(12)} ${String(entry.port).padEnd(6)} ${entry.keep ? `${status.padEnd(7)} kept` : status}`);
         }
       });
       return 0;

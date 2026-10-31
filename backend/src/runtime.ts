@@ -3,15 +3,17 @@ import { loadControlToken } from "./adapters/control-token";
 import { BunDockerGateway } from "./adapters/docker";
 import { BunGitGateway } from "./adapters/git";
 import { BunLifecycleHookRunner } from "./adapters/hooks";
-import { BunPortProbe } from "./adapters/port-probe";
+import { BunPortProbe, canBind } from "./adapters/port-probe";
+import { createPortRegistry } from "./adapters/port-registry";
 import { BunTmuxGateway } from "./adapters/tmux";
 import { FileSessionDiscovery } from "./adapters/session-discovery";
 import { AutoNameService } from "./services/auto-name-service";
 import { ArchiveStateService } from "./services/archive-state-service";
 import { LifecycleService, type CreateWorktreeProgress } from "./services/lifecycle-service";
 import { NotificationService as RuntimeNotificationService } from "./services/notification-service";
+import { PortRegistrationService } from "./services/port-registration-service";
 import { ProjectRuntime } from "./services/project-runtime";
-import { ReconciliationService, type ReconciliationServiceDependencies } from "./services/reconciliation-service";
+import { ReconciliationService } from "./services/reconciliation-service";
 import { WorktreeCreationTracker } from "./services/worktree-creation-service";
 
 export interface WebmuxRuntimeOptions {
@@ -22,8 +24,9 @@ export interface WebmuxRuntimeOptions {
    *  the events fall through to the SPA and Claude's status never updates. */
   prefix?: string;
   onCreateProgress?: (progress: CreateWorktreeProgress) => void | Promise<void>;
-  /** The server's process-wide port registrations; absent for in-process CLI runtimes. */
-  portRegistrations?: ReconciliationServiceDependencies["portRegistrations"];
+  /** The server's process-wide port registrations. In-process CLI runtimes default
+   *  to their own service over the same `~/.webmux/ports.json`. */
+  portRegistrations?: PortRegistrationService;
 }
 
 /** Base URL agent hooks POST runtime events to. The server serves each project
@@ -66,6 +69,8 @@ export function createWebmuxRuntime(options: WebmuxRuntimeOptions = {}): WebmuxR
   const git = new BunGitGateway();
   const archiveStateService = new ArchiveStateService(git.resolveWorktreeGitDir(projectDir));
   const portProbe = new BunPortProbe();
+  const portRegistrations = options.portRegistrations
+    ?? new PortRegistrationService({ registry: createPortRegistry(), portProbe, canBind });
   const tmux = new BunTmuxGateway();
   const docker = new BunDockerGateway();
   const hooks = new BunLifecycleHookRunner();
@@ -79,7 +84,7 @@ export function createWebmuxRuntime(options: WebmuxRuntimeOptions = {}): WebmuxR
     tmux,
     portProbe,
     runtime: projectRuntime,
-    ...(options.portRegistrations ? { portRegistrations: options.portRegistrations } : {}),
+    portRegistrations,
   });
   const lifecycleService = new LifecycleService({
     projectRoot: projectDir,
@@ -92,6 +97,7 @@ export function createWebmuxRuntime(options: WebmuxRuntimeOptions = {}): WebmuxR
     sessionDiscovery: new FileSessionDiscovery(),
     docker,
     reconciliation: reconciliationService,
+    portRegistrations,
     hooks,
     autoName,
     onCreateProgress: (progress) => {

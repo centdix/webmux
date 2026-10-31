@@ -2,7 +2,7 @@
 // of the shared file can't interleave with another request in this process.
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { isPortRegistration, type PortRegistration } from "../domain/port-registrations";
+import { parsePortRegistration, type PortRegistration } from "../domain/port-registrations";
 import { log } from "../lib/log";
 import { webmuxRuntimeStateDir } from "./webmux-paths";
 
@@ -32,7 +32,7 @@ export function createPortRegistry(file: string = defaultRegistryFile()): PortRe
         return [];
       }
       if (!Array.isArray(parsed)) return [];
-      return parsed.filter(isPortRegistration);
+      return parsed.map(parsePortRegistration).filter((entry) => entry !== null);
     },
 
     replaceAll(entries: PortRegistration[]): void {

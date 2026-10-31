@@ -3,8 +3,10 @@ import {
   bumpRunning,
   expireRegistrations,
   isValidPortLabel,
+  parsePortRegistration,
   pickFreePort,
   PORT_REGISTRATION_TTL_MS,
+  releaseWorktreeRegistrations,
   type PortRegistration,
 } from "../domain/port-registrations";
 
@@ -16,6 +18,7 @@ function makeEntry(overrides: Partial<PortRegistration> = {}): PortRegistration 
     port: 4100,
     registeredAt: 0,
     lastSeenRunningAt: 0,
+    keep: false,
     ...overrides,
   };
 }
@@ -59,5 +62,41 @@ describe("bumpRunning / expireRegistrations", () => {
       makeEntry({ label: "api", lastSeenRunningAt: 1 }),
     ];
     expect(expireRegistrations(entries, PORT_REGISTRATION_TTL_MS + 1).map((entry) => entry.label)).toEqual(["api"]);
+  });
+
+  it("never expires kept registrations", () => {
+    const entries = [
+      makeEntry({ lastSeenRunningAt: 0, keep: true }),
+      makeEntry({ label: "api", lastSeenRunningAt: 0 }),
+    ];
+    expect(expireRegistrations(entries, PORT_REGISTRATION_TTL_MS * 100).map((entry) => entry.label)).toEqual(["web"]);
+  });
+});
+
+describe("parsePortRegistration", () => {
+  it("loads entries written before keep existed as not kept", () => {
+    const { keep: _keep, ...legacy } = makeEntry();
+    expect(parsePortRegistration(legacy)).toEqual(makeEntry({ keep: false }));
+    expect(parsePortRegistration(makeEntry({ keep: true }))?.keep).toBe(true);
+  });
+
+  it("rejects malformed entries", () => {
+    expect(parsePortRegistration(null)).toBeNull();
+    expect(parsePortRegistration({ ...makeEntry(), port: "4100" })).toBeNull();
+  });
+});
+
+describe("releaseWorktreeRegistrations", () => {
+  it("drops every entry of the worktree, kept ones included, and nothing else", () => {
+    const entries = [
+      makeEntry({ label: "web" }),
+      makeEntry({ label: "api", keep: true }),
+      makeEntry({ worktreeId: "wt-2" }),
+      makeEntry({ projectDir: "/other" }),
+    ];
+    expect(releaseWorktreeRegistrations(entries, "/repo", "wt-1")).toEqual([
+      makeEntry({ worktreeId: "wt-2" }),
+      makeEntry({ projectDir: "/other" }),
+    ]);
   });
 });
