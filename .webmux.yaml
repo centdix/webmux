@@ -9,16 +9,6 @@ auto_name:
   provider: claude
   model: haiku
 
-services:
-  - name: BE
-    portEnv: PORT
-    portStart: 5111
-    portStep: 10
-  - name: FE
-    portEnv: FRONTEND_PORT
-    portStart: 5112
-    portStep: 10
-
 profiles:
   slim:
     runtime: host
@@ -41,14 +31,14 @@ profiles:
         kind: command
         split: right
         workingDir: backend
-        command: bun install && bun run dev
+        command: bun install && PORT=$(webmux port be) bun run dev
       - id: frontend
         kind: command
         split: bottom
         workingDir: frontend
-        command: bun install && bun run dev
+        command: bun install && PORT=$(webmux port be) FRONTEND_PORT=$(webmux port fe) bun run dev
     systemPrompt: >
-      For this window specifically, backend is running on: ${PORT} and frontend is running on: ${FRONTEND_PORT}.
+      The backend and frontend dev servers run in the other panes; `webmux port ls` shows their ports.
       IMPORTANT: Read docs/autonomous-mode.md before starting any work.
     yolo: true
   sandbox:
@@ -68,12 +58,12 @@ profiles:
         kind: command
         split: bottom
         workingDir: backend
-        command: bun run dev
+        command: PORT=$(webmux port be) bun run dev
       - id: frontend
         kind: command
         split: bottom
         workingDir: frontend
-        command: bun run dev
+        command: PORT=$(webmux port be) FRONTEND_PORT=$(webmux port fe) bun run dev
     systemPrompt: >
       You are running inside a sandboxed container with full permissions.
       IMPORTANT: Read docs/autonomous-mode.md before starting any work.
@@ -81,20 +71,15 @@ profiles:
       $(git rev-parse --git-dir)/webmux/runtime.env
       Load it with:
       source "$(git rev-parse --git-dir)/webmux/runtime.env"
-      This worktree is configured with the following ports:
-
-      - Backend: port ${PORT}.
-        Start with: source "$(git rev-parse --git-dir)/webmux/runtime.env" && cd backend && bun run dev
-
-      - Frontend: port ${FRONTEND_PORT}.
-        Start with: source "$(git rev-parse --git-dir)/webmux/runtime.env" && cd frontend && bun run dev
+      The backend and frontend dev servers run in the other panes;
+      `webmux port ls` shows their ports (labels `be` and `fe`).
 
       --- Screenshots ---
       You can take screenshots of the frontend UI and upload them to R2
       for use in PR descriptions.
       1) Take a screenshot:
          bunx playwright screenshot --browser chromium
-         http://localhost:${FRONTEND_PORT}/path/to/page /tmp/screenshot.png
+         "http://localhost:$(webmux port fe)/path/to/page" /tmp/screenshot.png
       2) Upload to R2:
          aws s3 cp /tmp/screenshot.png
          "s3://$(printenv R2_BUCKET)/$(git rev-parse --abbrev-ref HEAD)/screenshot.png"

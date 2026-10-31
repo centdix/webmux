@@ -30,7 +30,7 @@ See pull request status, CI check results, and review comments right next to eac
 
 ![service health](https://github.com/windmill-labs/webmux/raw/main/site/static/videos/health.gif)
 
-Track dev server ports across worktrees. webmux polls configured services and shows live health badges so you know which worktrees have their servers running.
+Track dev server ports across worktrees. Servers started with `PORT=$(webmux port <label>) <cmd>` get a port no other worktree holds, and the dashboard shows a live link for each one while it listens.
 
 ### Docker Sandbox Mode
 
@@ -120,7 +120,7 @@ Projects added with `webmux project add` are remembered in `~/.webmux/projects.j
 
 webmux uses a project config file in the project root, plus an optional local overlay:
 
-- **`.webmux.yaml`** — Worktree root, pane layout, service ports, profiles, linked repos, and Docker sandbox settings.
+- **`.webmux.yaml`** — Worktree root, pane layout, profiles, linked repos, and Docker sandbox settings.
 - **`.webmux.local.yaml`** — Optional local-only overlay for additional `profiles` and `lifecycleHooks`, and the recommended place to override per-developer settings like `workspace.ide`. Profiles are additive, conflicting profile names are replaced by the local definition, and local lifecycle hook commands run after the project-level command for the same hook.
 
 <details>
@@ -137,16 +137,6 @@ workspace:
     enabled: true
     intervalSeconds: 300
 
-services:
-  - name: BE
-    portEnv: PORT
-    portStart: 5111
-    portStep: 10
-  - name: FE
-    portEnv: FRONTEND_PORT
-    portStart: 5112
-    portStep: 10
-
 profiles:
   default:
     runtime: host
@@ -160,7 +150,7 @@ profiles:
         kind: command
         split: right
         workingDir: frontend
-        command: FRONTEND_PORT=$FRONTEND_PORT npm run dev
+        command: PORT=$(webmux port web) npm run dev
 
   sandbox:
     runtime: docker
@@ -181,7 +171,6 @@ profiles:
         writable: true
     systemPrompt: >
       You are running inside a sandboxed container.
-      Backend port: ${PORT}. Frontend port: ${FRONTEND_PORT}.
 
 Custom sandbox images should make `claude`, `codex`, `opencode`, or `pi` available on the container's normal `PATH` (for example with `ENV PATH=/your/tool/bin:$PATH`). webmux does not rely on login-shell dotfiles like `.bashrc` to discover agent binaries inside the container.
 
@@ -222,10 +211,6 @@ For fresh agents using a host profile, webmux automatically includes capture com
 | `workspace.ide` | string | no | Editor used by the "Open in..." button: `cursor` or `vscode` (default: `cursor`) |
 | `workspace.autoPull.enabled` | boolean | no | Periodically fetch and fast-forward merge the main branch (default: `false`) |
 | `workspace.autoPull.intervalSeconds` | number | no | Seconds between auto-pull attempts (default: `300`, minimum: `30`) |
-| `services[].name` | string | yes | Display name shown in the dashboard |
-| `services[].portEnv` | string | yes | Env var containing the service port |
-| `services[].portStart` | number | no | Base port for auto-allocation |
-| `services[].portStep` | number | no | Port increment per worktree slot (default: `1`) |
 | `profiles.<name>.runtime` | string | yes | `host` or `docker` |
 | `profiles.<name>.yolo` | boolean | no | Enables `--dangerously-skip-permissions` for Claude, `--yolo` for Codex, `--auto` for opencode (pi has no permission prompts, so it ignores it) |
 | `profiles.<name>.panes[]` | array | yes | Pane layout for that profile |
@@ -251,7 +236,25 @@ For fresh agents using a host profile, webmux automatically includes capture com
 
 </details>
 
-Lifecycle hooks run with the worktree as `cwd` and receive the same computed runtime env that the managed panes will use, including `startupEnvs`, allocated service ports, and `WEBMUX_*` metadata.
+Lifecycle hooks run with the worktree as `cwd` and receive the same computed runtime env that the managed panes will use, including `startupEnvs` and `WEBMUX_*` metadata.
+
+### Dev server ports
+
+webmux hands out dev server ports on demand instead of from config. Run a server as `PORT=$(webmux port <label>) <cmd>` in a command pane, a hook or an agent shell:
+
+```bash
+webmux port web                  # print a free port for "web" in this worktree
+webmux port web --keep           # same, but never release it for being idle
+webmux port web --port 5173      # register a port the tool picked itself
+webmux port ls                   # list this worktree's ports (and which are kept)
+webmux port rm web               # release it
+```
+
+- Ports come from 4100–4999 and are never held by two worktrees at once. The same label returns the same port.
+- The dashboard links each port while something listens on it.
+- A port nothing has listened on for 5 minutes is released, unless it was registered with `--keep`. Use `--keep` for ports that must stay stable, such as ones written to `.env` or used in OAuth callbacks.
+- Removing a worktree releases all its ports.
+- Docker sandboxes use host networking, so `webmux port` works the same inside them. On macOS this needs Docker Desktop with host networking enabled, or OrbStack (see [Docker Sandbox Mode](#docker-sandbox-mode)).
 
 When `auto_name` is enabled, `webmux` calls the provider API directly with structured output and uses `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, or `OPENAI_API_KEY` based on the configured model.
 

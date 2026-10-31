@@ -163,6 +163,7 @@ describe("buildPortRegistrationSystemPrompt", () => {
     expect(prompt).toContain("`PORT=$(webmux port web) bun run dev`");
     expect(prompt).toContain("`webmux port web --port 5173`");
     expect(prompt).toContain("`webmux port rm <label>`");
+    expect(prompt).toContain("`webmux port web --keep`");
   });
 
   it("is kept out of the tmux pane instructions", () => {

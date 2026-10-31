@@ -20,31 +20,6 @@ workspace:
   # Personal preference: override this in .webmux.local.yaml instead.
   ide: cursor
 
-# Auto-generated service ports that are injected into pane processes,
-# lifecycle hooks, and runtime env files.
-services:
-  # Human-readable label shown in the UI.
-  - name: Backend
-
-    # Env var that receives the allocated port number.
-    portEnv: PORT
-
-    # Starting port for the first worktree.
-    portStart: 5111
-
-    # Increment applied per worktree slot.
-    portStep: 10
-
-    # Optional URL template used by the UI when showing service links.
-    # `${PORT_ENV_NAME}` placeholders are expanded from allocated ports.
-    urlTemplate: http://127.0.0.1:${PORT}
-
-  - name: Frontend
-    portEnv: FRONTEND_PORT
-    portStart: 5112
-    portStep: 10
-    urlTemplate: http://127.0.0.1:${FRONTEND_PORT}
-
 # Extra env vars materialized into the worktree runtime env.
 # Values can be strings or booleans.
 startupEnvs:
@@ -70,9 +45,7 @@ profiles:
     # Optional system prompt for the agent pane.
     # `${VAR}` placeholders are expanded from the computed runtime env.
     systemPrompt: >
-      You are working inside a webmux-managed worktree.
-      Backend: ${PORT}
-      Frontend: ${FRONTEND_PORT}
+      You are working inside ${WEBMUX_WORKTREE_PATH}.
 
     panes:
       # `agent` panes start the configured coding agent.
@@ -101,12 +74,14 @@ profiles:
         cwd: worktree
 
       # `command` panes run a startup command.
+      # `webmux port <label>` prints a free port for this worktree and shows
+      # the server in the dashboard while it listens.
       - id: frontend
         kind: command
         split: right
         sizePct: 40
         cwd: worktree
-        command: bun run frontend:dev
+        command: PORT=$(webmux port web) bun run frontend:dev
 
   sandbox:
     runtime: docker
@@ -145,7 +120,7 @@ profiles:
         kind: command
         split: right
         cwd: worktree
-        command: bun run backend:dev
+        command: PORT=$(webmux port api) bun run backend:dev
 
 integrations:
   github:
@@ -163,8 +138,8 @@ integrations:
 
 lifecycleHooks:
   # Shell command run after a managed worktree is created and its session exists.
-  # Runs with the worktree as cwd and receives startupEnvs, allocated ports,
-  # and WEBMUX_* metadata in its environment.
+  # Runs with the worktree as cwd and receives startupEnvs and WEBMUX_*
+  # metadata in its environment.
   postCreate: scripts/post-create.sh
 
   # Shell command run before a managed worktree is removed.

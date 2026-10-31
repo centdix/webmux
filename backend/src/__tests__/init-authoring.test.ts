@@ -280,6 +280,9 @@ describe("buildInitPromptSpec", () => {
     expect(prompt.systemPrompt).toContain("Infer the config from the repository contents.");
     expect(prompt.systemPrompt).toContain("Do not remove other starter sections or their explanatory comments just because they are unused.");
     expect(prompt.systemPrompt).toContain("Keep optional examples and comments in place so the user can uncomment and use them later.");
+    expect(prompt.systemPrompt).toContain("`PORT=$(webmux port web) bun run dev`");
+    expect(prompt.systemPrompt).toContain("Do not add a services section");
+    expect(prompt.systemPrompt).not.toContain("portEnv");
     expect(prompt.userPrompt).toBe("Adapt the existing starter `.webmux.yaml` for this repository.");
     expect(prompt.userPrompt).not.toContain("Project name:");
     expect(prompt.userPrompt).not.toContain("Main branch:");
@@ -304,7 +307,7 @@ describe("buildStarterTemplate", () => {
 
     expect(template).toContain("defaultAgent: codex");
     expect(template).toContain("mainBranch: main");
-    expect(template).toContain("#   command: PORT=$PORT bun run dev");
+    expect(template).toContain("#   command: PORT=$(webmux port app) bun run dev");
   });
 
   it("defaults worktrees to opencode while keeping a supported auto_name provider", async () => {
@@ -340,8 +343,6 @@ describe("buildStarterTemplate", () => {
 
     expect(template).toContain("# autoPull:");
     expect(template).toContain("# Git branch new worktrees start from.");
-    expect(template).toContain("# Services define the ports webmux allocates and tracks per worktree.");
-    expect(template).toContain("#   urlTemplate: http://localhost:${PORT}");
     expect(template).toContain("# Panes define the tmux layout created for each worktree session.");
     expect(template).toContain("# systemPrompt: >");
     expect(template).toContain("# yolo: true");
@@ -378,5 +379,19 @@ describe("buildStarterTemplate", () => {
     ]);
     expect(config.integrations.github.linkedRepos).toEqual([]);
     expect(config.integrations.linear.enabled).toBe(true);
+  });
+
+  it("does not generate services or pretend startupEnvs expand ports", () => {
+    const template = buildStarterTemplate({
+      projectName: "example",
+      mainBranch: "main",
+      packageManager: "npm",
+    });
+
+    expect(template).not.toMatch(/^#?\s*services:/m);
+    expect(template).not.toContain("portEnv");
+    expect(template).not.toContain("urlTemplate");
+    expect(template).not.toContain("${PORT}");
+    expect(template).toContain("#   command: PORT=$(webmux port app) npm run dev");
   });
 });
