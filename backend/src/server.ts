@@ -28,6 +28,7 @@ import {
   WorktreeNameParamsSchema,
 } from "@webmux/api-contract";
 import { log } from "./lib/log";
+import { serveStaticFrontend } from "./services/static-frontend-service";
 import {
   attach,
   detach,
@@ -2734,27 +2735,7 @@ async function globalFetch(req: Request): Promise<Response> {
   }
 
   // Static frontend files in production mode (fallback for unmatched routes)
-  if (STATIC_DIR) {
-    const rawPath = url.pathname === "/" ? "index.html" : url.pathname;
-    const filePath = join(STATIC_DIR, rawPath);
-    const staticRoot = resolve(STATIC_DIR);
-    // Path traversal protection: resolved path must stay within STATIC_DIR
-    if (!resolve(filePath).startsWith(staticRoot + "/")) {
-      return new Response("Forbidden", { status: 403 });
-    }
-    const file = Bun.file(filePath);
-    if (await file.exists()) {
-      // Vite-hashed assets are immutable — cache forever
-      const headers: HeadersInit = rawPath.startsWith("/assets/")
-        ? { "Cache-Control": "public, max-age=31536000, immutable" }
-        : {};
-      return new Response(file, { headers });
-    }
-    // SPA fallback: serve index.html (never cache so new deploys take effect)
-    return new Response(Bun.file(join(STATIC_DIR, "index.html")), {
-      headers: { "Cache-Control": "no-cache" },
-    });
-  }
+  if (STATIC_DIR) return serveStaticFrontend(STATIC_DIR, url.pathname);
   return new Response("Not Found", { status: 404 });
 }
 

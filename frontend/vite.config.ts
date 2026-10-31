@@ -16,6 +16,9 @@ const proxy = {
 
 export default defineConfig({
   plugins: [svelte(), tailwindcss()],
+  // No SPA fallback: the app only lives at `/`, any other HTML path 404s
+  // (matches the backend's static serving).
+  appType: "mpa",
   build: {
     rollupOptions: {
       output: {
