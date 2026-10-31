@@ -1,7 +1,7 @@
-import { render, screen } from "@testing-library/svelte";
+import { fireEvent, render, screen } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import TopBar from "./TopBar.svelte";
-import type { WorktreeInfo } from "./types";
+import type { AppNotification, WorktreeInfo } from "./types";
 
 function createWorktree(
   branch: string,
@@ -61,6 +61,43 @@ function renderTopBar(
 }
 
 describe("TopBar", () => {
+  it("opens the PR url and selects the branch when a notification with a url is clicked", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const onnotificationselect = vi.fn();
+    const notification: AppNotification = {
+      id: 1,
+      branch: "feature/pr-notif",
+      type: "pr_opened",
+      message: "PR opened",
+      url: "https://github.com/org/repo/pull/1",
+      timestamp: Date.UTC(2026, 9, 31),
+    };
+
+    render(TopBar, {
+      props: {
+        name: "feature/pr-notif",
+        worktree: createWorktree("feature/pr-notif"),
+        sshHost: "",
+        ide: "cursor",
+        notificationHistory: [notification],
+        onclose: vi.fn(),
+        onarchive: vi.fn(),
+        onremove: vi.fn(),
+        onsettings: vi.fn(),
+        onCiClick: vi.fn(),
+        onReviewsClick: vi.fn(),
+        onnotificationselect,
+      },
+    });
+
+    await fireEvent.click(screen.getByTitle("Notifications"));
+    await fireEvent.click(screen.getByRole("button", { name: /PR opened/ }));
+
+    expect(open).toHaveBeenCalledWith("https://github.com/org/repo/pull/1", "_blank", "noopener,noreferrer");
+    expect(onnotificationselect).toHaveBeenCalledWith("feature/pr-notif");
+    open.mockRestore();
+  });
+
   it("truncates worktree names longer than 30 characters in the header", () => {
     const branch = "feature/abcdefghijklmnopqrstuvwxyz-1234567890";
 

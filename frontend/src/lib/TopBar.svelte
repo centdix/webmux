@@ -332,6 +332,7 @@
                     type="button"
                     class="w-full px-3 py-2 text-left bg-transparent border-none text-inherit cursor-pointer hover:bg-hover flex items-center gap-2"
                     onclick={() => {
+                      if (n.url) window.open(n.url, "_blank", "noopener,noreferrer");
                       onnotificationselect?.(n.branch);
                       bellOpen = false;
                     }}
