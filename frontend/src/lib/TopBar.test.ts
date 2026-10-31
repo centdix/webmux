@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/svelte";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import TopBar from "./TopBar.svelte";
 import type { AppNotification, WorktreeInfo } from "./types";
 
@@ -62,6 +62,8 @@ function renderTopBar(
 }
 
 describe("TopBar", () => {
+  afterEach(cleanup);
+
   it("opens the PR url and selects the branch when a notification with a url is clicked", async () => {
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     const onnotificationselect = vi.fn();
@@ -96,8 +98,35 @@ describe("TopBar", () => {
     await fireEvent.click(screen.getByRole("button", { name: /PR opened/ }));
 
     expect(open).toHaveBeenCalledWith("https://github.com/org/repo/pull/1", "_blank", "noopener,noreferrer");
-    expect(onnotificationselect).toHaveBeenCalledWith("feature/pr-notif");
+    expect(onnotificationselect).toHaveBeenCalledWith(notification);
     open.mockRestore();
+  });
+
+  it("lists notifications of two projects that share an id", async () => {
+    const base = { id: 1, branch: "main", type: "agent_stopped" as const, timestamp: Date.UTC(2026, 9, 31) };
+    render(TopBar, {
+      props: {
+        name: null,
+        worktree: undefined,
+        sshHost: "",
+        ide: "cursor",
+        notificationHistory: [
+          { ...base, project: "alpha", message: "Alpha stopped" },
+          { ...base, project: "beta", message: "Beta stopped" },
+        ],
+        onclose: vi.fn(),
+        onarchive: vi.fn(),
+        onremove: vi.fn(),
+        onsettings: vi.fn(),
+        onCiClick: vi.fn(),
+        onReviewsClick: vi.fn(),
+      },
+    });
+
+    await fireEvent.click(screen.getByTitle("Notifications"));
+
+    expect(screen.getByText("Alpha stopped")).toBeInTheDocument();
+    expect(screen.getByText("Beta stopped")).toBeInTheDocument();
   });
 
   it("truncates worktree names longer than 30 characters in the header", () => {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AppNotification, InitialProject } from "./types";
+import type { AppNotification, InitialProject, NotificationDismissal, ProjectWorktreeSnapshot } from "./types";
 
 /**
  * Every project-scoped call names its project explicitly — `api.ts` holds no
@@ -33,21 +33,21 @@ describe("project-scoped network calls", () => {
   }
 
   it("targets each project's own base path through the same module (no hidden global)", async () => {
-    const fetchMock = vi.fn(async (_input: string | URL | Request) => jsonResponse({ worktrees: [] }));
+    const fetchMock = vi.fn(async (_input: string | URL | Request) => jsonResponse({ agents: [] }));
     vi.stubGlobal("fetch", fetchMock);
     const urls = stubWebSocket();
 
     const api = await loadApi();
-    await api.fetchWorktrees("alpha");
-    await api.fetchWorktrees("beta");
-    await api.fetchWorktrees("alpha");
+    await api.fetchAgents("alpha");
+    await api.fetchAgents("beta");
+    await api.fetchAgents("alpha");
     api.connectWorktreeConversationStream("beta", "feat/x", { onEvent: () => {}, onError: () => {} });
     api.connectWorktreeConversationStream("alpha", "feat/x", { onEvent: () => {}, onError: () => {} });
 
     expect(fetchMock.mock.calls.map(([input]) => urlOf(input))).toEqual([
-      "/api/projects/alpha/worktrees",
-      "/api/projects/beta/worktrees",
-      "/api/projects/alpha/worktrees",
+      "/api/projects/alpha/agents",
+      "/api/projects/beta/agents",
+      "/api/projects/alpha/agents",
     ]);
     expect(urls).toEqual([
       `ws://${window.location.host}/api/projects/beta/ws/agents/worktrees/feat%2Fx`,
@@ -83,6 +83,34 @@ describe("project-scoped network calls", () => {
     );
   });
 });
+
+function snapshot(branch: string): ProjectWorktreeSnapshot {
+  return {
+    branch,
+    label: null,
+    path: `/repo/${branch}`,
+    dir: `/repo/${branch}`,
+    archived: false,
+    profile: null,
+    agentName: null,
+    agentLabel: null,
+    agentTerminalStale: false,
+    mux: false,
+    dirty: false,
+    unpushed: false,
+    paneCount: 0,
+    status: "idle",
+    elapsed: "",
+    services: [],
+    prs: [],
+    linearIssue: null,
+    creation: null,
+    source: "ui",
+    oneshot: null,
+    tabs: [],
+    activeTabId: null,
+  };
+}
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -186,29 +214,45 @@ describe("notifications", () => {
   it("subscribeNotifications opens the hub stream", async () => {
     const source = stubEventSource();
     const api = await loadApi();
-    api.subscribeNotifications("myproject", () => {}, () => {});
+    api.subscribeNotifications(() => {}, () => {});
 
     expect(source.urls).toEqual(["/api/notifications/stream"]);
   });
 
-  it("subscribeNotifications only delivers the given project's events", async () => {
+  it("subscribeNotifications delivers every project's events", async () => {
     const source = stubEventSource();
     const api = await loadApi();
     const initial: AppNotification[] = [];
     const live: AppNotification[] = [];
-    const dismissed: number[] = [];
-    api.subscribeNotifications("myproject", (n) => live.push(n), (id) => dismissed.push(id), (n) => initial.push(n));
+    const dismissed: NotificationDismissal[] = [];
+    api.subscribeNotifications((n) => live.push(n), (d) => dismissed.push(d), (n) => initial.push(n));
 
     source.emit("initial", notification("other", 1));
-    source.emit("initial", notification("myproject", 2));
+    source.emit("initial", notification("myproject", 1));
     source.emit("notification", notification("other", 3));
-    source.emit("notification", notification("myproject", 4));
     source.emit("dismiss", { project: "other", id: 4 });
-    source.emit("dismiss", { project: "myproject", id: 2 });
+    source.emit("notification", { malformed: true });
 
-    expect(initial.map((n) => n.id)).toEqual([2]);
-    expect(live.map((n) => n.id)).toEqual([4]);
-    expect(dismissed).toEqual([2]);
+    expect(initial.map((n) => [n.project, n.id])).toEqual([["other", 1], ["myproject", 1]]);
+    expect(live.map((n) => [n.project, n.id])).toEqual([["other", 3]]);
+    expect(dismissed).toEqual([{ project: "other", id: 4 }]);
+  });
+
+  it("fetchAllProjectWorktrees tags each worktree with its project", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
+      projects: [
+        { prefix: "alpha", name: "Alpha", worktrees: [snapshot("main")], error: null },
+        { prefix: "beta", name: "Beta", worktrees: [], error: "boom" },
+      ],
+    })));
+    const api = await loadApi();
+
+    const projects = await api.fetchAllProjectWorktrees();
+
+    expect(projects.map((p) => [p.prefix, p.error, p.worktrees.map((w) => `${w.project}/${w.branch}`)])).toEqual([
+      ["alpha", null, ["alpha/main"]],
+      ["beta", "boom", []],
+    ]);
   });
 
   it("dismissNotification posts to the notification's own project", async () => {

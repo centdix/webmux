@@ -1,5 +1,6 @@
 import type { IdeKind, PrEntry, ProjectInitPhase, WorktreeCreationPhase, WorktreeInfo } from "./types";
 import { THEME_KEYS, getTheme } from "./themes";
+import { worktreeKey } from "./worktree-ref";
 import type { ThemeKey } from "./themes";
 
 export const SSH_STORAGE_KEY = "wt-ssh-host";
@@ -7,7 +8,9 @@ export const THEME_STORAGE_KEY = "wt-theme";
 export const LAST_SELECTED_WORKTREE_STORAGE_KEY = "wt-last-selected-worktree";
 export const SIDEBAR_WIDTH_STORAGE_KEY = "wt-sidebar-width";
 export const WEB_CHAT_UI_STORAGE_KEY = "wt-use-web-chat-ui";
+/** Legacy per-project favorites (`<key>:<project>` → branches), migrated on load. */
 export const FAVORITE_WORKTREES_STORAGE_KEY = "wt-favorite-worktrees";
+export const FAVORITE_WORKTREE_KEYS_STORAGE_KEY = "wt-favorite-worktree-keys";
 export const LAST_PROJECT_STORAGE_KEY = "wt-last-project";
 const DEFAULT_SIDEBAR_WIDTH = 220;
 
@@ -139,26 +142,41 @@ export function saveSelectedWorktree(projectPrefix: string, branch: string | nul
   saveStoredString(projectStorageKey(LAST_SELECTED_WORKTREE_STORAGE_KEY, projectPrefix), branch);
 }
 
-export function loadFavoriteWorktrees(projectPrefix: string): Set<string> {
-  const stored = localStorage.getItem(projectStorageKey(FAVORITE_WORKTREES_STORAGE_KEY, projectPrefix));
-  if (!stored) return new Set();
+function parseStringArray(stored: string | null): string[] {
+  if (!stored) return [];
   try {
     const parsed: unknown = JSON.parse(stored);
-    return Array.isArray(parsed)
-      ? new Set(parsed.filter((branch): branch is string => typeof branch === "string"))
-      : new Set();
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
   } catch {
-    return new Set();
+    return [];
   }
 }
 
-export function saveFavoriteWorktrees(projectPrefix: string, branches: Set<string>): void {
-  const key = projectStorageKey(FAVORITE_WORKTREES_STORAGE_KEY, projectPrefix);
-  if (branches.size === 0) {
-    localStorage.removeItem(key);
+/** Favorites of every project, as `worktreeKey`s. The first load folds the
+ *  per-project branch lists (`wt-favorite-worktrees:<project>`) into it. */
+export function loadFavoriteWorktreeKeys(): Set<string> {
+  const keys = new Set(parseStringArray(localStorage.getItem(FAVORITE_WORKTREE_KEYS_STORAGE_KEY)));
+  const legacyPrefix = `${FAVORITE_WORKTREES_STORAGE_KEY}:`;
+  const legacyKeys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
+    .filter((key): key is string => key?.startsWith(legacyPrefix) ?? false);
+  if (legacyKeys.length === 0) return keys;
+  for (const legacyKey of legacyKeys) {
+    const project = legacyKey.slice(legacyPrefix.length);
+    for (const branch of parseStringArray(localStorage.getItem(legacyKey))) {
+      keys.add(worktreeKey({ project, branch }));
+    }
+    localStorage.removeItem(legacyKey);
+  }
+  saveFavoriteWorktreeKeys(keys);
+  return keys;
+}
+
+export function saveFavoriteWorktreeKeys(keys: ReadonlySet<string>): void {
+  if (keys.size === 0) {
+    localStorage.removeItem(FAVORITE_WORKTREE_KEYS_STORAGE_KEY);
     return;
   }
-  localStorage.setItem(key, JSON.stringify([...branches]));
+  localStorage.setItem(FAVORITE_WORKTREE_KEYS_STORAGE_KEY, JSON.stringify([...keys]));
 }
 
 export function applyTheme(key: ThemeKey): void {

@@ -6,11 +6,14 @@
   import { resolveInitialProject } from "./lib/api";
   import { writeLocationHash } from "./lib/project-location";
   import { applyTheme, loadSavedTheme, saveLastProject } from "./lib/utils";
+  import { WorktreeSelection } from "./lib/worktree-selection.svelte";
   import type { InitialProject } from "./lib/types";
 
   let { initial }: { initial: InitialProject } = $props();
 
-  let project = $state<string | null>(null);
+  /** Null in the empty state; App mounts once and moves between projects
+   *  through it. */
+  let selection = $state<WorktreeSelection | null>(null);
   let loadError = $state<string | null>(null);
   let retrying = $state(false);
 
@@ -19,12 +22,17 @@
   // Boot-time choice only; later switches come from the dashboard/empty state.
   untrack(() => applyInitial(initial));
 
-  /** Switch the dashboard to `next` in memory: no reload, no path change —
-   *  `{#key}` remounts App against the new project. */
-  function switchProject(next: string | null): void {
-    if (!next) writeLocationHash(null, null);
-    saveLastProject(next);
-    project = next;
+  $effect(() => {
+    if (selection) saveLastProject(selection.project);
+  });
+
+  /** Open the dashboard on `next`, or the empty state when null. */
+  function openProject(next: string | null): void {
+    if (!next) {
+      writeLocationHash(null, null);
+      saveLastProject(null);
+    }
+    selection = next ? new WorktreeSelection(next) : null;
   }
 
   /** A failed project fetch keeps the hash and last project untouched; only a
@@ -35,7 +43,7 @@
       return;
     }
     loadError = null;
-    switchProject(result.kind === "project" ? result.prefix : null);
+    openProject(result.kind === "project" ? result.prefix : null);
   }
 
   async function retry(): Promise<void> {
@@ -53,10 +61,8 @@
       <Btn type="button" disabled={retrying} onclick={retry}>Retry</Btn>
     </div>
   </div>
-{:else if project === null}
-  <EmptyProjects onProjectAdded={switchProject} />
+{:else if selection === null}
+  <EmptyProjects onProjectAdded={openProject} />
 {:else}
-  {#key project}
-    <App {project} onSwitchProject={switchProject} />
-  {/key}
+  <App {selection} onNoProjects={() => openProject(null)} />
 {/if}

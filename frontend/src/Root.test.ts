@@ -34,17 +34,29 @@ describe("Root", () => {
     window.history.replaceState(null, "", "/");
   });
 
-  it("remounts App against the new project's API when switching", async () => {
+  it("switches project in memory without remounting App", async () => {
     render(Root, { initial: { kind: "project", prefix: "alpha" } });
-    expect(await screen.findByText("mounted alpha")).toBeInTheDocument();
-    await waitFor(() => expect(requested).toContain("/api/projects/alpha/config"));
+    expect(await screen.findByText("current alpha")).toBeInTheDocument();
+    expect(localStorage.getItem("wt-last-project")).toBe("alpha");
 
     await fireEvent.click(screen.getByText("to beta"));
 
-    expect(await screen.findByText("mounted beta")).toBeInTheDocument();
-    await waitFor(() => expect(requested).toContain("/api/projects/beta/config"));
+    expect(await screen.findByText("current beta")).toBeInTheDocument();
+    expect(screen.getByText("mounted alpha")).toBeInTheDocument();
     expect(localStorage.getItem("wt-last-project")).toBe("beta");
     expect(window.location.pathname).toBe("/");
+  });
+
+  it("falls back to the empty state when the last project goes away", async () => {
+    window.history.replaceState(null, "", "/#alpha/feat");
+    render(Root, { initial: { kind: "project", prefix: "alpha" } });
+    await screen.findByText("current alpha");
+
+    await fireEvent.click(screen.getByText("no projects"));
+
+    expect(await screen.findByText("No projects yet")).toBeInTheDocument();
+    expect(window.location.hash).toBe("");
+    expect(localStorage.getItem("wt-last-project")).toBeNull();
   });
 
   it("shows the empty state and clears the hash when no project is registered", async () => {
@@ -71,6 +83,6 @@ describe("Root", () => {
 
     await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
-    expect(await screen.findByText("mounted beta")).toBeInTheDocument();
+    expect(await screen.findByText("current beta")).toBeInTheDocument();
   });
 });

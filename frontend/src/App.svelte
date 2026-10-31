@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, untrack, type Component } from "svelte";
+  import { onMount, type Component } from "svelte";
   import WorktreeList from "./lib/WorktreeList.svelte";
   import TopBar from "./lib/TopBar.svelte";
   import Terminal from "./lib/Terminal.svelte";
@@ -27,12 +27,10 @@
     CreateWorktreeRequest,
     DiffDialogProps,
     PrEntry,
-    LinearIssueAvailability,
     LinearIssue,
-    ToastInput,
-    ToastItem,
-    UiToastItem,
+    LinearIssuesResponse,
     WorktreeInfo,
+    WorktreeRef,
   } from "./lib/types";
   import {
     SSH_STORAGE_KEY,
@@ -40,16 +38,14 @@
     errorMessage,
     worktreeCreationPhaseLabel,
     loadSavedTheme,
-    loadSavedSelectedWorktree,
-    saveSelectedWorktree,
     resolveSelectedBranch,
     applyTheme,
     loadSavedSidebarWidth,
     saveSidebarWidth,
     loadUseWebChatUi,
     saveUseWebChatUi,
-    loadFavoriteWorktrees,
-    saveFavoriteWorktrees,
+    loadFavoriteWorktreeKeys,
+    saveFavoriteWorktreeKeys,
   } from "./lib/utils";
   import {
     buildWorktreeListRows,
@@ -62,42 +58,74 @@
   import { getTheme } from "./lib/themes";
   import type { ThemeKey } from "./lib/themes";
   import { setToastController } from "./lib/toast-context";
-  import {
-    createWorktreeTab,
-    deleteWorktreeTab,
-    fetchWorktrees,
-    postWorktreeToLinear,
-    projectApi,
-    refreshWorktreeAgentTerminal,
-    selectWorktreeTab,
-    setWorktreeLabel,
-    setWorktreeProfile,
-    subscribeNotifications,
-    dismissNotification,
-  } from "./lib/api";
+  import { projectApi, subscribeNotifications } from "./lib/api";
   import TabBar from "./lib/TabBar.svelte";
-  import { pickInitialBranch, readLocationHash, writeLocationHash } from "./lib/project-location";
+  import { branchesInProject, worktreeKey } from "./lib/worktree-ref";
+  import {
+    ACTIVE_CREATE_POLL_INTERVAL_MS,
+    DEFAULT_POLL_INTERVAL_MS,
+    WorktreesStore,
+  } from "./lib/worktrees-store.svelte";
+  import { neighborBranch, stepBranch, type WorktreeSelection } from "./lib/worktree-selection.svelte";
+  import { WorktreeActions } from "./lib/worktree-actions.svelte";
+  import { NotificationCenter } from "./lib/notifications.svelte";
+  import { ProjectCache } from "./lib/project-cache.svelte";
 
-  let { project, onSwitchProject }: { project: string; onSwitchProject: (prefix: string | null) => void } = $props();
+  let { selection, onNoProjects }: { selection: WorktreeSelection; onNoProjects: () => void } = $props();
 
-  function createDefaultConfig(): AppConfig {
-    return {
-      name: "",
-      profiles: [],
-      agents: [],
-      defaultProfileName: "",
-      defaultAgentId: "claude",
-      autoName: false,
-      linearCreateTicketOption: false,
-      startupEnvs: {},
-      linkedRepos: [],
-      linearAutoCreateWorktrees: false,
-      autoRemoveOnMerge: false,
-      projectDir: "",
-      mainBranch: "",
-      ide: "cursor",
-    };
-  }
+  const DEFAULT_CONFIG: AppConfig = {
+    name: "",
+    profiles: [],
+    agents: [],
+    defaultProfileName: "",
+    defaultAgentId: "claude",
+    autoName: false,
+    linearCreateTicketOption: false,
+    startupEnvs: {},
+    linkedRepos: [],
+    linearAutoCreateWorktrees: false,
+    autoRemoveOnMerge: false,
+    projectDir: "",
+    mainBranch: "",
+    ide: "cursor",
+  };
+  const LINEAR_THROTTLE_MS = 300_000;
+
+  const configs = new ProjectCache<AppConfig>((p) => projectApi(p).fetchConfig(), { maxAgeMs: Infinity });
+  const linear = new ProjectCache<LinearIssuesResponse>((p) => projectApi(p).fetchLinearIssues(), {
+    maxAgeMs: LINEAR_THROTTLE_MS,
+    onError: (_project, err) => console.warn("[linear]", err),
+  });
+  const store = new WorktreesStore(() => linear.ensure(selection.project));
+  const notifications = new NotificationCenter();
+  const showToast = notifications.show.bind(notifications);
+  const actions = new WorktreeActions({
+    store,
+    toast: showToast,
+    leave: selectNeighborOf,
+    onBranchesChanged: invalidateBranchCaches,
+  });
+
+  /** The current project: the one the sidebar lists (and its Linear panel). */
+  let project = $derived(selection.project);
+  /** Project of the selected worktree (the current one when none): the main
+   *  panel, its dialogs and the config they read all target it. */
+  let activeProject = $derived(selection.selected?.project ?? project);
+  let config = $derived(configs.get(activeProject) ?? DEFAULT_CONFIG);
+  let linearData = $derived(linear.get(project));
+  let linearIssues = $derived(linearData?.issues ?? []);
+  let linearAvailability = $derived(linearData?.availability ?? "disabled");
+  let worktrees = $derived(store.worktreesOf(project));
+  let worktreesError = $derived(store.errorOf(project));
+  let hasLoadedWorktrees = $derived(store.loaded && store.hasProject(project));
+  let selectedBranch = $derived(selection.branch);
+  let favoriteKeys = $state(loadFavoriteWorktreeKeys());
+  let favoriteBranches = $derived(branchesInProject(favoriteKeys, project));
+  let removingBranches = $derived(branchesInProject(store.removing.keys, project));
+  let openingBranches = $derived(branchesInProject(store.opening.keys, project));
+  let archivingBranches = $derived(branchesInProject(store.archiving.keys, project));
+  let postingLinearBranches = $derived(branchesInProject(store.postingLinear.keys, project));
+  let notifiedBranches = $derived(branchesInProject(notifications.unreadWorktrees, project));
 
   function worktreeSupportsChat(worktree: WorktreeInfo | undefined): boolean {
     return supportsWorktreeChat(config.agents, worktree);
@@ -107,25 +135,20 @@
     return supportsWorktreeTabs(config.agents, worktree);
   }
 
-  let config = $state<AppConfig>(createDefaultConfig());
-  let worktrees = $state<WorktreeInfo[]>([]);
-  let selectedBranch = $state<string | null>(
-    // Root remounts App per project, so the initial `project` is the only one.
-    untrack(() => pickInitialBranch(readLocationHash(), project, loadSavedSelectedWorktree(project))),
-  );
-  let hasLoadedWorktrees = $state(false);
-  let favoriteBranches = $state<Set<string>>(untrack(() => loadFavoriteWorktrees(project)));
-  let removeBranch = $state<string | null>(null);
-  let postToLinearBranch = $state<string | null>(null);
-  let postToLinkedConfirm = $state<{ branch: string; issueId: string } | null>(null);
-  let postingLinearBranches = $state<Set<string>>(new Set());
-  let labelBranch = $state<string | null>(null);
+  /** A branch of the current project as a ref. */
+  function refOf(branch: string): WorktreeRef {
+    return { project, branch };
+  }
+
+  let removeRef = $state<WorktreeRef | null>(null);
+  let postToLinearRef = $state<WorktreeRef | null>(null);
+  let postToLinkedConfirm = $state<{ ref: WorktreeRef; issueId: string } | null>(null);
+  let labelRef = $state<WorktreeRef | null>(null);
   let labelLoading = $state(false);
   let labelError = $state("");
-  let profileBranch = $state<string | null>(null);
+  let profileRef = $state<WorktreeRef | null>(null);
   let profileLoading = $state(false);
   let profileError = $state("");
-  let removingBranches = $state<Set<string>>(new Set());
   let showCreateDialog = $state(false);
   let showSettingsDialog = $state(false);
   let ciDetailsPr = $state<PrEntry | null>(null);
@@ -149,8 +172,7 @@
   let currentTheme = $state<ThemeKey>(loadSavedTheme());
   let useWebChatUi = $state(loadUseWebChatUi());
   let terminalTheme = $derived(getTheme(currentTheme).terminal);
-  let applyPollInterval: ((intervalMs: number) => void) | null = null;
-  let pendingCreateBranchHint = $state<string | null>(null);
+  let pendingCreate = $state<{ project: string; branchHint: string | null } | null>(null);
   let availableBranches = $state<AvailableBranch[]>([]);
   let availableBranchesLoading = $state(false);
   let availableBranchesError = $state<string | null>(null);
@@ -162,63 +184,29 @@
   let searchQuery = $state("");
   let worktreeSearchInput = $state<HTMLInputElement | null>(null);
   let showArchivedWorktrees = $state(false);
-  type BranchCacheKey = "local" | "remote";
-  let availableBranchCache: Partial<Record<BranchCacheKey, AvailableBranch[]>> = {};
-  let availableBranchRequests: Partial<Record<BranchCacheKey, Promise<AvailableBranch[]>>> = {};
-  let baseBranchCache: AvailableBranch[] | null = null;
-  let baseBranchRequest: Promise<AvailableBranch[]> | null = null;
+  // Branch lists are per project: keyed `<project>:<local|remote>` / `<project>`.
+  let availableBranchCache: Record<string, AvailableBranch[]> = {};
+  let availableBranchRequests: Record<string, Promise<AvailableBranch[]>> = {};
+  let baseBranchCache: Record<string, AvailableBranch[]> = {};
+  let baseBranchRequests: Record<string, Promise<AvailableBranch[]>> = {};
   let diffDialogLoad: Promise<void> | null = null;
 
-  // Linear integration
-  let linearIssues = $state<LinearIssue[]>([]);
-  let linearAvailability = $state<LinearIssueAvailability>("disabled");
   let assignIssue = $state<LinearIssue | null>(null);
   let detailIssue = $state<LinearIssue | null>(null);
-  let linearLastFetch = 0;
-  const LINEAR_THROTTLE_MS = 300_000;
-  const DEFAULT_POLL_INTERVAL_MS = 5000;
-  const ACTIVE_CREATE_POLL_INTERVAL_MS = 1000;
 
-  // Notifications
-  let notifications = $state<AppNotification[]>([]);
-  let uiToasts = $state<UiToastItem[]>([]);
-  let notificationHistory = $state<AppNotification[]>([]);
-  let unreadCount = $state(0);
-  const AUTO_DISMISS_MS = 4000;
-  const MAX_HISTORY = 10;
-  let nextToastId = 0;
-
-  let notifiedBranches = $state<Set<string>>(new Set());
-  let toasts = $derived([
-    ...notifications.map((notification): ToastItem => ({
-      id: `notification:${notification.id}`,
-      source: "notification",
-      notification,
-      tone: notification.type === "runtime_error"
-        ? "error"
-        : notification.type === "agent_stopped" || notification.type === "worktree_auto_removed"
-          ? "success"
-          : "info",
-      message: notification.message,
-      ...(notification.url ? { url: notification.url } : {}),
-      branch: notification.branch,
-    })),
-    ...uiToasts,
-  ]);
-
-  function getAvailableBranchCacheKey(includeRemote: boolean): BranchCacheKey {
-    return includeRemote ? "remote" : "local";
+  function getAvailableBranchCacheKey(targetProject: string, includeRemote: boolean): string {
+    return `${targetProject}:${includeRemote ? "remote" : "local"}`;
   }
 
-  function fetchAvailableBranchesCached(includeRemote: boolean): Promise<AvailableBranch[]> {
-    const key = getAvailableBranchCacheKey(includeRemote);
+  function fetchAvailableBranchesCached(targetProject: string, includeRemote: boolean): Promise<AvailableBranch[]> {
+    const key = getAvailableBranchCacheKey(targetProject, includeRemote);
     const cached = availableBranchCache[key];
     if (cached) return Promise.resolve(cached);
 
     const inFlight = availableBranchRequests[key];
     if (inFlight) return inFlight;
 
-    const request = projectApi(project).fetchAvailableBranches({ query: { includeRemote } })
+    const request = projectApi(targetProject).fetchAvailableBranches({ query: { includeRemote } })
       .then((data) => {
         availableBranchCache[key] = data.branches;
         return data.branches;
@@ -231,27 +219,30 @@
     return request;
   }
 
-  function fetchBaseBranchesCached(): Promise<AvailableBranch[]> {
-    if (baseBranchCache) return Promise.resolve(baseBranchCache);
-    if (baseBranchRequest) return baseBranchRequest;
+  function fetchBaseBranchesCached(targetProject: string): Promise<AvailableBranch[]> {
+    const cached = baseBranchCache[targetProject];
+    if (cached) return Promise.resolve(cached);
+    const inFlight = baseBranchRequests[targetProject];
+    if (inFlight) return inFlight;
 
-    baseBranchRequest = projectApi(project).fetchBaseBranches()
+    const request = projectApi(targetProject).fetchBaseBranches()
       .then((data) => {
-        baseBranchCache = data.branches;
+        baseBranchCache[targetProject] = data.branches;
         return data.branches;
       })
       .finally(() => {
-        baseBranchRequest = null;
+        delete baseBranchRequests[targetProject];
       });
 
-    return baseBranchRequest;
+    baseBranchRequests[targetProject] = request;
+    return request;
   }
 
   function invalidateBranchCaches(): void {
     availableBranchCache = {};
     availableBranchRequests = {};
-    baseBranchCache = null;
-    baseBranchRequest = null;
+    baseBranchCache = {};
+    baseBranchRequests = {};
     availableBranches = [];
     availableBranchesError = null;
     availableBranchesLoading = false;
@@ -261,31 +252,11 @@
   }
 
   function handleNotification(n: AppNotification): void {
-    notifications = [...notifications, n];
-    // Only suppress the unread dot when the user is actually looking at this branch
-    // (selected and tab visible); otherwise a finished run should still surface.
-    const viewingThisBranch = n.branch === selectedBranch && !document.hidden;
-    if (!viewingThisBranch) {
-      notifiedBranches = new Set([...notifiedBranches, n.branch]);
-    }
-    notificationHistory = [n, ...notificationHistory].slice(0, MAX_HISTORY);
-    unreadCount++;
-    // Auto-dismiss after timeout
-    setTimeout(() => {
-      notifications = notifications.filter((x) => x.id !== n.id);
-    }, AUTO_DISMISS_MS);
-    // Browser notification when tab is hidden
-    if (document.hidden && Notification.permission === "granted") {
-      new Notification(n.message, { body: n.url ?? n.branch, tag: `wm-${n.id}` });
-    }
-  }
-
-  function showToast(toast: ToastInput): void {
-    const id = `ui:${nextToastId++}`;
-    uiToasts = [...uiToasts, { id, source: "ui", ...toast }];
-    setTimeout(() => {
-      uiToasts = uiToasts.filter((item) => item.id !== id);
-    }, AUTO_DISMISS_MS);
+    // Only suppress the unread dot when the user is actually looking at this
+    // worktree (selected and tab visible); otherwise a finished run should still surface.
+    const selected = selection.selected;
+    const viewing = selected?.project === n.project && selected.branch === n.branch && !document.hidden;
+    notifications.receive(n, viewing);
   }
 
   function ensureDiffDialogLoaded(): Promise<void> {
@@ -316,41 +287,12 @@
     }
   }
 
-  // TODO(PR4b): key notifications by project + id; ids are only unique per project.
-  function handleInitialNotification(n: AppNotification): void {
-    if (notificationHistory.some((x) => x.id === n.id)) return;
-    notificationHistory = [n, ...notificationHistory].slice(0, MAX_HISTORY);
-  }
-
-  function handleDismissNotification(notification: AppNotification): void {
-    notifications = notifications.filter((n) => n.id !== notification.id);
-    dismissNotification(notification).catch(() => {});
-  }
-
-  function handleSseDismiss(id: number): void {
-    notifications = notifications.filter((n) => n.id !== id);
-  }
-
-  function handleDismissToast(id: string): void {
-    const toast = toasts.find((item) => item.id === id);
-    if (!toast) return;
-
-    if (toast.source === "notification") {
-      handleDismissNotification(toast.notification);
-      return;
-    }
-
-    uiToasts = uiToasts.filter((item) => item.id !== id);
-  }
-
   function handleSelectToast(id: string): void {
-    const toast = toasts.find((item) => item.id === id);
+    const toast = notifications.findToast(id);
     if (!toast || toast.source !== "notification") return;
 
-    handleDismissToast(id);
-    selectedBranch = toast.branch;
-    notifiedBranches = new Set([...notifiedBranches].filter((branch) => branch !== toast.branch));
-    if (isMobile) sidebarOpen = false;
+    notifications.dismissToast(id);
+    selectWorktree(toast.notification);
   }
 
   setToastController({
@@ -359,10 +301,6 @@
     success: (message, detail) => showToast({ tone: "success", message, ...(detail ? { detail } : {}) }),
     error: (message, detail) => showToast({ tone: "error", message, ...(detail ? { detail } : {}) }),
   });
-
-  function handleBellOpen(): void {
-    unreadCount = 0;
-  }
 
   // Sidebar resize
   const MIN_SIDEBAR_WIDTH = 140;
@@ -411,17 +349,12 @@
   let isMobile = $state(false);
   let sidebarOpen = $state(false);
   let activePane = $state(0);
-  let tabBusy = $state(false);
   let terminalRef:
     | {
         sendSelectPane: (pane: number) => void;
       }
     | undefined = $state();
 
-  let openingBranches = $state<Set<string>>(new Set());
-  let archivingBranches = $state<Set<string>>(new Set());
-  let refreshingAgentTerminalBranches = $state<Set<string>>(new Set());
-  let terminalSessionRevisions = $state<Record<string, number>>({});
   let trimmedWorktreeSearch = $derived(searchQuery.trim());
   let archivedWorktreeCount = $derived(worktrees.filter((w) => w.archived).length);
   let hiddenArchivedMatchCount = $derived(
@@ -438,9 +371,7 @@
   );
   let visibleWorktreeRows = $derived(buildWorktreeListRows(visibleWorktrees));
   let creatingWorktrees = $derived(worktrees.filter((w) => w.creating));
-  let backendCreatingCount = $derived(creatingWorktrees.length);
-  let activeCreateCount = $derived(Math.max(pendingCreateCount, backendCreatingCount));
-  let hasCreatingWorktrees = $derived(activeCreateCount > 0);
+  let activeCreateCount = $derived(Math.max(pendingCreateCount, creatingWorktrees.length));
   let selectableWorktrees = $derived(
     visibleWorktrees.filter((w) => !removingBranches.has(w.branch)),
   );
@@ -457,12 +388,8 @@
       ? worktrees.find((w) => w.branch === selectedBranch)
       : undefined,
   );
-  let labelWorktree = $derived(
-    labelBranch ? worktrees.find((w) => w.branch === labelBranch) : undefined,
-  );
-  let profileWorktree = $derived(
-    profileBranch ? worktrees.find((w) => w.branch === profileBranch) : undefined,
-  );
+  let labelWorktree = $derived(labelRef ? store.find(labelRef) : undefined);
+  let profileWorktree = $derived(profileRef ? store.find(profileRef) : undefined);
   let canConnect = $derived(!!selectedBranch && selectedWorktree?.mux === "✓" && !selectedWorktree?.creating);
   let showWebChat = $derived(useWebChatUi && canConnect && worktreeSupportsChat(selectedWorktree));
   // Tabs are only meaningful for the built-in terminal agents that have a forkable session.
@@ -470,13 +397,11 @@
   let isSelectedOpening = $derived(selectedBranch ? openingBranches.has(selectedBranch) : false);
   let isSelectedArchiving = $derived(selectedBranch ? archivingBranches.has(selectedBranch) : false);
   let isSelectedAgentTerminalRefreshing = $derived(
-    selectedBranch ? refreshingAgentTerminalBranches.has(selectedBranch) : false,
+    selectedBranch ? store.refreshingAgentTerminal.has(refOf(selectedBranch)) : false,
   );
-  let selectedTerminalKey = $derived(
-    selectedBranch ? `${selectedBranch}:${terminalSessionRevisions[selectedBranch] ?? 0}` : "",
-  );
+  let selectedTerminalKey = $derived(selectedBranch ? actions.terminalKey(refOf(selectedBranch)) : "");
   let pollIntervalMs = $derived(
-    hasCreatingWorktrees ? ACTIVE_CREATE_POLL_INTERVAL_MS : DEFAULT_POLL_INTERVAL_MS,
+    pendingCreateCount > 0 || store.hasCreating ? ACTIVE_CREATE_POLL_INTERVAL_MS : DEFAULT_POLL_INTERVAL_MS,
   );
   let showLinearPanel = $derived(linearAvailability !== "disabled");
   let worktreeListEmptyMessage = $derived(
@@ -497,54 +422,50 @@
       hasLoadedWorktrees,
     );
     if (nextSelectedBranch !== selectedBranch) {
-      selectedBranch = nextSelectedBranch;
+      selection.selectBranch(nextSelectedBranch);
     }
   });
 
   $effect(() => {
-    const branches = new Set(worktrees.map((worktree) => worktree.branch));
-    const nextEntries = Object.entries(terminalSessionRevisions).filter(([branch]) => branches.has(branch));
-    if (nextEntries.length !== Object.keys(terminalSessionRevisions).length) {
-      terminalSessionRevisions = Object.fromEntries(nextEntries);
-    }
+    const present = new Set(store.projects.flatMap((entry) => entry.worktrees.map(worktreeKey)));
+    actions.pruneTerminalRevisions(present);
   });
 
   $effect(() => {
-    if (pendingCreateCount === 0 || latestAutoSelectCreateId === -1) return;
-    const target = pendingCreateBranchHint
-      ? worktrees.find((w) => w.branch === pendingCreateBranchHint)
-      : creatingWorktrees.length === 1
-        ? creatingWorktrees[0]
+    if (pendingCreateCount === 0 || latestAutoSelectCreateId === -1 || !pendingCreate) return;
+    const { project: createProject, branchHint } = pendingCreate;
+    const candidates = store.worktreesOf(createProject);
+    const creating = candidates.filter((w) => w.creating);
+    const target = branchHint
+      ? candidates.find((w) => w.branch === branchHint)
+      : creating.length === 1
+        ? creating[0]
         : undefined;
     if (!target) return;
-    revealWorktreeInFilters(target.branch);
-    selectedBranch = target.branch;
-    if (isMobile) sidebarOpen = false;
+    selectWorktree(target);
   });
 
   $effect(() => {
-    applyPollInterval?.(pollIntervalMs);
+    store.setPollInterval(pollIntervalMs);
   });
 
   $effect(() => {
-    if (!hasLoadedWorktrees) return;
-    if (selectedWorktree) {
-      saveSelectedWorktree(project, selectedWorktree.branch);
-      return;
-    }
-    if (selectableWorktrees.length === 0) {
-      saveSelectedWorktree(project, null);
-    }
+    selection.persist(selectedWorktree, hasLoadedWorktrees, selectableWorktrees.length > 0);
   });
 
   $effect(() => {
-    writeLocationHash(project, selectedBranch);
+    configs.ensure(activeProject);
+  });
+
+  $effect(() => {
+    linear.ensure(project);
   });
 
   $effect(() => {
     if (!showCreateDialog) return;
 
-    const cached = availableBranchCache[getAvailableBranchCacheKey(includeRemoteBranches)];
+    const targetProject = project;
+    const cached = availableBranchCache[getAvailableBranchCacheKey(targetProject, includeRemoteBranches)];
     if (cached) {
       availableBranches = cached;
       availableBranchesLoading = false;
@@ -556,7 +477,7 @@
     availableBranchesLoading = true;
     availableBranchesError = null;
 
-    fetchAvailableBranchesCached(includeRemoteBranches)
+    fetchAvailableBranchesCached(targetProject, includeRemoteBranches)
       .then((branches) => {
         if (fetchId !== nextAvailableBranchFetchId) return;
         availableBranches = branches;
@@ -574,8 +495,10 @@
   $effect(() => {
     if (!showCreateDialog) return;
 
-    if (baseBranchCache) {
-      baseBranches = baseBranchCache;
+    const targetProject = project;
+    const cached = baseBranchCache[targetProject];
+    if (cached) {
+      baseBranches = cached;
       baseBranchesLoading = false;
       baseBranchesError = null;
       return;
@@ -586,7 +509,7 @@
     baseBranchesLoading = true;
     baseBranchesError = null;
 
-    fetchBaseBranchesCached()
+    fetchBaseBranchesCached(targetProject)
       .then((branches) => {
         if (fetchId !== nextBaseBranchFetchId) return;
         baseBranches = branches;
@@ -615,26 +538,6 @@
   });
   let showPaneBar = $derived(isMobile && canConnect && !showWebChat && paneBarPanes.length > 0);
 
-  function refreshLinear(): void {
-    const now = Date.now();
-    if (now - linearLastFetch < LINEAR_THROTTLE_MS) return;
-    linearLastFetch = now;
-    projectApi(project).fetchLinearIssues().then((data) => {
-      linearAvailability = data.availability;
-      linearIssues = data.issues;
-    }).catch((err: unknown) => console.warn("[linear]", err));
-  }
-
-  async function refresh() {
-    try {
-      worktrees = await fetchWorktrees(project);
-      hasLoadedWorktrees = true;
-    } catch (err) {
-      console.error("Failed to refresh:", err);
-    }
-    refreshLinear();
-  }
-
   function openCreateDialog(issue: LinearIssue | null = null): void {
     includeRemoteBranches = false;
     assignIssue = issue;
@@ -654,6 +557,7 @@
   }
 
   async function handleCreate(request: CreateWorktreeRequest) {
+    const targetProject = project;
     const requestId = nextCreateRequestId++;
     const shouldAutoSelectCreatedWorktree = selectedWorktree == null;
     const requestedAgentIds = request.agents && request.agents.length > 0
@@ -667,7 +571,10 @@
     }
     pendingCreateCount += expectedCreatedCount;
     if (shouldAutoSelectCreatedWorktree) {
-      pendingCreateBranchHint = expectedCreatedCount > 1 ? null : request.branch ?? null;
+      pendingCreate = {
+        project: targetProject,
+        branchHint: expectedCreatedCount > 1 ? null : request.branch ?? null,
+      };
     }
     // When the dialog was opened from a LinearPanel click, route the create
     // through the `fromLinear` seed so the backend injects the issue header
@@ -680,48 +587,40 @@
     lockedBaseBranch = null;
 
     try {
-      const createPromise = projectApi(project).createWorktree({ body: finalRequest });
-      void refresh();
+      const createPromise = projectApi(targetProject).createWorktree({ body: finalRequest });
+      void store.refresh();
       const result = await createPromise;
       if (shouldAutoSelectCreatedWorktree) {
-        pendingCreateBranchHint = result.primaryBranch;
+        pendingCreate = { project: targetProject, branchHint: result.primaryBranch };
       }
       invalidateBranchCaches();
-      await refresh();
+      await store.refresh();
       if (request.createLinearTicket) {
-        linearLastFetch = 0;
-        refreshLinear();
+        linear.invalidate(targetProject);
+        linear.ensure(targetProject);
       }
       if (shouldAutoSelectCreatedWorktree && requestId === latestAutoSelectCreateId) {
-        selectedBranch = result.primaryBranch;
-        if (isMobile) sidebarOpen = false;
+        selectWorktree({ project: targetProject, branch: result.primaryBranch });
       }
     } catch (err) {
       showToast({ tone: "error", message: `Failed to create: ${errorMessage(err)}` });
     } finally {
       pendingCreateCount = Math.max(0, pendingCreateCount - expectedCreatedCount);
       if (shouldAutoSelectCreatedWorktree && requestId === latestAutoSelectCreateId) {
-        pendingCreateBranchHint = null;
+        pendingCreate = null;
         latestAutoSelectCreateId = -1;
       }
     }
   }
 
-  function selectNeighborOf(branch: string) {
-    if (selectedBranch !== branch) return;
-    const orderedWorktrees = visibleWorktreeRows.map((row) => row.worktree);
-    const idx = orderedWorktrees.findIndex((w) => w.branch === branch);
-    const previous = orderedWorktrees[idx - 1];
-    const next = orderedWorktrees[idx + 1];
-    const neighbor = [previous, next].find((candidate) =>
-      candidate
-      && !removingBranches.has(candidate.branch)
-    );
-    selectedBranch = neighbor ? neighbor.branch : null;
+  function selectNeighborOf(ref: WorktreeRef): void {
+    if (ref.project !== project || selectedBranch !== ref.branch) return;
+    const ordered = visibleWorktreeRows.map((row) => row.worktree.branch);
+    selection.selectBranch(neighborBranch(ordered, ref.branch, removingBranches));
   }
 
-  function revealWorktreeInFilters(branch: string): void {
-    const worktree = worktrees.find((candidate) => candidate.branch === branch);
+  function revealWorktreeInFilters(ref: WorktreeRef): void {
+    const worktree = store.find(ref);
     if (!worktree) return;
     if (worktree.archived) {
       showArchivedWorktrees = true;
@@ -732,61 +631,59 @@
   }
 
   function toggleFavoriteWorktree(branch: string): void {
-    const next = new Set(favoriteBranches);
-    if (!next.delete(branch)) next.add(branch);
-    favoriteBranches = next;
-    saveFavoriteWorktrees(project, next);
+    const key = worktreeKey(refOf(branch));
+    const next = new Set(favoriteKeys);
+    if (!next.delete(key)) next.add(key);
+    favoriteKeys = next;
+    saveFavoriteWorktreeKeys(next);
   }
 
-  function handleSelectWorktree(branch: string): void {
-    revealWorktreeInFilters(branch);
-    selectedBranch = branch;
-    notifiedBranches = new Set([...notifiedBranches].filter((candidate) => candidate !== branch));
+  /** Select a worktree of any project (sidebar row, toast, bell): its project
+   *  becomes current, without remounting anything. */
+  function selectWorktree(ref: WorktreeRef): void {
+    const target = { project: ref.project, branch: ref.branch };
+    revealWorktreeInFilters(target);
+    selection.select(target);
+    notifications.markRead(target);
     if (isMobile) sidebarOpen = false;
   }
 
-  async function handleRemove() {
-    const branch = removeBranch;
-    if (!branch) return;
-    removeBranch = null;
-    selectNeighborOf(branch);
+  function handleSelectWorktree(branch: string): void {
+    selectWorktree(refOf(branch));
+  }
 
-    removingBranches = new Set([...removingBranches, branch]);
-    try {
-      await projectApi(project).removeWorktree({ params: { name: branch } });
-      invalidateBranchCaches();
-      await refresh();
-    } catch (err) {
-      showToast({ tone: "error", message: `Failed to remove: ${errorMessage(err)}` });
-    } finally {
-      removingBranches = new Set(
-        [...removingBranches].filter((b) => b !== branch),
-      );
+  function handleSwitchProject(next: string | null): void {
+    if (next === null) {
+      onNoProjects();
+      return;
     }
+    // A project the store hasn't seen yet (just added) loads in the background.
+    if (!store.hasProject(next)) void store.refresh();
+    selection.switchProject(next);
+  }
+
+  async function handleRemove(): Promise<void> {
+    const ref = removeRef;
+    if (!ref) return;
+    removeRef = null;
+    await actions.remove(ref);
   }
 
   function openLabelDialog(): void {
     if (!selectedWorktree) return;
-    labelBranch = selectedWorktree.branch;
+    labelRef = refOf(selectedWorktree.branch);
     labelError = "";
   }
 
-  function applyWorktreeLabel(branch: string, label: string | null): void {
-    worktrees = worktrees.map((worktree) =>
-      worktree.branch === branch ? { ...worktree, label } : worktree
-    );
-  }
-
   async function handleLabelChange(label: string | null): Promise<void> {
-    const branch = labelBranch;
-    if (!branch) return;
+    const ref = labelRef;
+    if (!ref) return;
 
     labelLoading = true;
     labelError = "";
     try {
-      const nextLabel = await setWorktreeLabel(project, branch, label);
-      applyWorktreeLabel(branch, nextLabel);
-      labelBranch = null;
+      await actions.setLabel(ref, label);
+      labelRef = null;
     } catch (err) {
       labelError = errorMessage(err);
     } finally {
@@ -795,32 +692,19 @@
   }
 
   function openProfileDialog(branch: string): void {
-    profileBranch = branch;
+    profileRef = refOf(branch);
     profileError = "";
   }
 
   async function handleProfileChange(profile: string): Promise<void> {
-    const branch = profileBranch;
-    if (!branch) return;
+    const ref = profileRef;
+    if (!ref) return;
 
     profileLoading = true;
     profileError = "";
     try {
-      const result = await setWorktreeProfile(project, branch, profile);
-      profileBranch = null;
-      await refresh();
-      if (result.restarted) {
-        terminalSessionRevisions = {
-          ...terminalSessionRevisions,
-          [branch]: (terminalSessionRevisions[branch] ?? 0) + 1,
-        };
-      }
-      showToast({
-        tone: "success",
-        message: result.restarted
-          ? `Switched ${branch} to the "${result.profile}" profile`
-          : `Switched ${branch} to the "${result.profile}" profile — applies on next open`,
-      });
+      await actions.setProfile(ref, profile);
+      profileRef = null;
     } catch (err) {
       profileError = errorMessage(err);
     } finally {
@@ -884,193 +768,51 @@
     }
   }
 
-  async function openSelectedWorktree(): Promise<void> {
-    const branch = selectedBranch;
-    if (!branch) return;
-    openingBranches = new Set([...openingBranches, branch]);
-    try {
-      await projectApi(project).openWorktree({ params: { name: branch }, body: {} });
-      await refresh();
-    } catch (err) {
-      showToast({ tone: "error", message: `Failed to open worktree: ${errorMessage(err)}` });
-    } finally {
-      openingBranches = new Set([...openingBranches].filter((x) => x !== branch));
-    }
-  }
-
-  async function toggleWorktreeArchived(branch: string): Promise<void> {
-    const worktree = worktrees.find((candidate) => candidate.branch === branch);
-    if (!worktree || worktree.creating) return;
-    const nextArchived = !worktree.archived;
-    const actionLabel = nextArchived ? "archive" : "restore";
-
-    archivingBranches = new Set([...archivingBranches, branch]);
-    try {
-      await projectApi(project).setWorktreeArchived({
-        params: { name: branch },
-        body: { archived: nextArchived },
-      });
-      await refresh();
-    } catch (err) {
-      alert(`Failed to ${actionLabel} worktree: ${errorMessage(err)}`);
-    } finally {
-      archivingBranches = new Set([...archivingBranches].filter((candidate) => candidate !== branch));
-    }
-  }
-
-  async function closeWorktree(branch: string): Promise<void> {
-    selectNeighborOf(branch);
-    try {
-      await projectApi(project).closeWorktree({ params: { name: branch } });
-      await refresh();
-    } catch (err) {
-      showToast({ tone: "error", message: `Failed to close worktree: ${errorMessage(err)}` });
-    }
+  function openSelectedWorktree(): void {
+    if (selectedBranch) void actions.open(refOf(selectedBranch));
   }
 
   function handlePostToLinear(branch: string): void {
-    if (postingLinearBranches.has(branch)) return;
-    const worktree = worktrees.find((w) => w.branch === branch);
+    const ref = refOf(branch);
+    if (store.postingLinear.has(ref)) return;
+    const worktree = store.find(ref);
     if (!worktree?.linearIssue) {
       // No linked issue → fall back to the create-new-issue dialog.
-      postToLinearBranch = branch;
+      postToLinearRef = ref;
       return;
     }
     // Linked worktree → confirm before posting; the endpoint is non-idempotent
     // and each call creates a fresh attachment + comment on the issue. Snapshot
     // the issue id now so a worktree refresh between click and confirm can't
     // render the dialog against missing state.
-    postToLinkedConfirm = { branch, issueId: worktree.linearIssue.identifier };
+    postToLinkedConfirm = { ref, issueId: worktree.linearIssue.identifier };
   }
 
-  async function confirmPostToLinkedIssue(): Promise<void> {
+  function confirmPostToLinkedIssue(): void {
     const snapshot = postToLinkedConfirm;
     if (!snapshot) return;
-    const { branch, issueId } = snapshot;
     postToLinkedConfirm = null;
-    postingLinearBranches = new Set([...postingLinearBranches, branch]);
-    try {
-      const response = await postWorktreeToLinear(project, branch, { kind: "issue", issueId });
-      showToast({ tone: "success", message: `Posted to Linear: ${response.issueUrl}` });
-    } catch (err) {
-      showToast({ tone: "error", message: `Failed to post to Linear: ${errorMessage(err)}` });
-    } finally {
-      postingLinearBranches = new Set(
-        [...postingLinearBranches].filter((b) => b !== branch),
-      );
-    }
-  }
-
-  async function handleRefreshAgentTerminal(branch: string): Promise<void> {
-    if (refreshingAgentTerminalBranches.has(branch)) return;
-    refreshingAgentTerminalBranches = new Set([...refreshingAgentTerminalBranches, branch]);
-    try {
-      await refreshWorktreeAgentTerminal(project, branch);
-      await refresh();
-      terminalSessionRevisions = {
-        ...terminalSessionRevisions,
-        [branch]: (terminalSessionRevisions[branch] ?? 0) + 1,
-      };
-      showToast({ tone: "success", message: "Agent terminal refreshed" });
-    } catch (err) {
-      showToast({ tone: "error", message: `Failed to refresh terminal: ${errorMessage(err)}` });
-    } finally {
-      refreshingAgentTerminalBranches = new Set(
-        [...refreshingAgentTerminalBranches].filter((candidate) => candidate !== branch),
-      );
-    }
-  }
-
-  async function handleCreateTab(): Promise<void> {
-    const branch = selectedBranch;
-    if (!branch || tabBusy) return;
-    tabBusy = true;
-    try {
-      await createWorktreeTab(project, branch);
-      await refresh();
-    } catch (err) {
-      showToast({ tone: "error", message: `Failed to create tab: ${errorMessage(err)}` });
-    } finally {
-      tabBusy = false;
-    }
-  }
-
-  async function handleSelectTab(tabId: string): Promise<void> {
-    const branch = selectedBranch;
-    if (!branch || tabBusy) return;
-    tabBusy = true;
-    try {
-      await selectWorktreeTab(project, branch, tabId);
-      await refresh();
-    } catch (err) {
-      showToast({ tone: "error", message: `Failed to switch tab: ${errorMessage(err)}` });
-    } finally {
-      tabBusy = false;
-    }
-  }
-
-  async function handleDeleteTab(tabId: string): Promise<void> {
-    const branch = selectedBranch;
-    if (!branch || tabBusy) return;
-    tabBusy = true;
-    try {
-      await deleteWorktreeTab(project, branch, tabId);
-      await refresh();
-    } catch (err) {
-      showToast({ tone: "error", message: `Failed to delete tab: ${errorMessage(err)}` });
-    } finally {
-      tabBusy = false;
-    }
-  }
-
-  async function handleArchiveToggle() {
-    const branch = selectedBranch;
-    if (!branch) return;
-    await toggleWorktreeArchived(branch);
-  }
-
-  async function handleClose() {
-    const branch = selectedBranch;
-    if (!branch) return;
-    await closeWorktree(branch);
-  }
-
-  function selectNeighborWorktree(direction: -1 | 1) {
-    const selectable = visibleWorktrees.filter(
-      (w) => !removingBranches.has(w.branch),
-    );
-    if (selectable.length === 0) return;
-    if (!selectedBranch) {
-      selectedBranch =
-        selectable[direction === 1 ? 0 : selectable.length - 1].branch;
-      return;
-    }
-    const idx = selectable.findIndex((w) => w.branch === selectedBranch);
-    const next = idx + direction;
-    if (next >= 0 && next < selectable.length) {
-      selectedBranch = selectable[next].branch;
-    }
+    void actions.postToLinkedIssue(snapshot.ref, snapshot.issueId);
   }
 
   function handleKeydown(e: KeyboardEvent) {
     // Ignore shortcuts when a dialog is open (let dialog handle its own keys)
-    if (showCreateDialog || removeBranch || pullMainConfirm || pullLinkedRepoAlias || postToLinkedConfirm) return;
+    if (showCreateDialog || removeRef || pullMainConfirm || pullLinkedRepoAlias || postToLinkedConfirm) return;
 
     const mod = e.metaKey || e.ctrlKey;
     if (!mod) return;
 
-    if (e.key === "ArrowUp") {
+    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
       e.preventDefault();
-      selectNeighborWorktree(-1);
-    } else if (e.key === "ArrowDown") {
-      e.preventDefault();
-      selectNeighborWorktree(1);
+      const branches = selectableWorktrees.map((w) => w.branch);
+      const next = stepBranch(branches, selectedBranch, e.key === "ArrowUp" ? -1 : 1);
+      if (next !== selectedBranch) selection.selectBranch(next);
     } else if (e.key === "k" || e.key === "K") {
       e.preventDefault();
       openCreateDialog();
     } else if (e.key === "d" || e.key === "D") {
       e.preventDefault();
-      if (selectedBranch) removeBranch = selectedBranch;
+      if (selectedBranch) removeRef = refOf(selectedBranch);
     } else if (e.key === "Enter") {
       if (selectedWorktree && selectedWorktree.mux !== "✓" && !selectedWorktree.creating && !isSelectedOpening) {
         e.preventDefault();
@@ -1086,67 +828,17 @@
 
   onMount(() => {
     applyTheme(currentTheme);
-    projectApi(project)
-      .fetchConfig()
-      .then((c) => {
-        config = c;
-      })
-      .catch(() => {});
-    refresh();
-    refreshLinear();
-    let intervalMs = pollIntervalMs;
-    let interval: ReturnType<typeof setInterval> | undefined;
+    const stopPolling = store.startPolling();
     window.addEventListener("keydown", handleKeydown);
-    let unsubNotifications = subscribeNotifications(project, handleNotification, handleSseDismiss, handleInitialNotification);
+    const unsubNotifications = subscribeNotifications(
+      handleNotification,
+      (dismissal) => notifications.removeDismissed(dismissal),
+      (n) => notifications.receiveInitial(n),
+    );
     // Request notification permission (no-op if already granted/denied)
     if (Notification.permission === "default") {
       Notification.requestPermission().catch(() => {});
     }
-
-    // Pause polling when tab is hidden or idle (no interaction for 60s).
-    let idleTimer: ReturnType<typeof setTimeout>;
-    let idle = false;
-
-    function startPolling(): void {
-      if (interval) clearInterval(interval);
-      if (document.hidden || idle) return;
-      interval = setInterval(refresh, intervalMs);
-    }
-
-    applyPollInterval = (nextIntervalMs: number): void => {
-      if (intervalMs === nextIntervalMs) return;
-      intervalMs = nextIntervalMs;
-      startPolling();
-    };
-    startPolling();
-
-    function resetIdleTimer(): void {
-      if (idle) {
-        idle = false;
-        refresh();
-        startPolling();
-      }
-      clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => {
-        idle = true;
-        if (interval) clearInterval(interval);
-      }, 60_000);
-    }
-
-    document.addEventListener("click", resetIdleTimer);
-    document.addEventListener("keydown", resetIdleTimer);
-    resetIdleTimer();
-
-    function onVisibilityChange(): void {
-      if (document.hidden) {
-        if (interval) clearInterval(interval);
-      } else {
-        resetIdleTimer();
-        refresh();
-        startPolling();
-      }
-    }
-    document.addEventListener("visibilitychange", onVisibilityChange);
 
     const mq = window.matchMedia("(max-width: 768px)");
     isMobile = mq.matches;
@@ -1157,13 +849,8 @@
     mq.addEventListener("change", onMqChange);
 
     return () => {
-      if (interval) clearInterval(interval);
-      applyPollInterval = null;
-      clearTimeout(idleTimer);
-      document.removeEventListener("click", resetIdleTimer);
-      document.removeEventListener("keydown", resetIdleTimer);
+      stopPolling();
       window.removeEventListener("keydown", handleKeydown);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
       mq.removeEventListener("change", onMqChange);
       unsubNotifications();
     };
@@ -1193,7 +880,7 @@
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-1 min-w-0">
             <h1 class="text-base font-semibold truncate">{config.name ?? "Dashboard"}</h1>
-            <ProjectSwitcher current={project} onSwitch={onSwitchProject} />
+            <ProjectSwitcher current={project} onSwitch={handleSwitchProject} />
           </div>
           <div class="flex items-center gap-2">
             <button
@@ -1254,6 +941,11 @@
           </div>
         </div>
       </div>
+      {#if worktreesError}
+        <p class="px-4 py-2 text-[11px] text-danger break-words" role="status">
+          Failed to load worktrees: {worktreesError}
+        </p>
+      {/if}
       <WorktreeList
         rows={visibleWorktreeRows}
         selected={selectedBranch}
@@ -1265,9 +957,9 @@
         favorites={favoriteBranches}
         emptyMessage={worktreeListEmptyMessage}
         onselect={handleSelectWorktree}
-        onclose={closeWorktree}
-        onarchive={toggleWorktreeArchived}
-        onremove={(b) => (removeBranch = b)}
+        onclose={(b) => void actions.close(refOf(b))}
+        onarchive={(b) => void actions.toggleArchived(refOf(b))}
+        onremove={(b) => (removeRef = refOf(b))}
         oneditprofile={openProfileDialog}
         oncreatesubworktree={openSubworktreeDialog}
         ontogglefavorite={toggleFavoriteWorktree}
@@ -1338,30 +1030,34 @@
       ide={config.ide}
       linkedRepos={config.linkedRepos ?? []}
       {isMobile}
-      {notificationHistory}
-      {unreadCount}
+      notificationHistory={notifications.history}
+      unreadCount={notifications.unreadCount}
       ontogglesidebar={() => (sidebarOpen = !sidebarOpen)}
-      onclose={handleClose}
-      onarchive={handleArchiveToggle}
+      onclose={() => {
+        if (selectedBranch) void actions.close(refOf(selectedBranch));
+      }}
+      onarchive={() => {
+        if (selectedBranch) void actions.toggleArchived(refOf(selectedBranch));
+      }}
       onremove={() => {
-        if (selectedBranch) removeBranch = selectedBranch;
+        if (selectedBranch) removeRef = refOf(selectedBranch);
       }}
       oneditlabel={openLabelDialog}
       onsettings={() => (showSettingsDialog = true)}
       ondirtyclick={openDiffDialog}
       onCiClick={(pr) => (ciDetailsPr = pr)}
       onReviewsClick={(pr) => (commentReviewPr = pr)}
-      onbellopen={handleBellOpen}
-      onnotificationselect={handleSelectWorktree}
+      onbellopen={() => notifications.markAllSeen()}
+      onnotificationselect={selectWorktree}
       archiving={isSelectedArchiving}
     />
 
     {#if showWebChat}
-      {#key selectedBranch}
+      {#key selectedTerminalKey}
         <MobileChatSurface
-          {project}
+          project={activeProject}
           worktree={selectedWorktree!}
-          onConversationMessageSent={() => void refresh()}
+          onConversationMessageSent={() => void store.refresh()}
         />
       {/key}
     {:else if canConnect}
@@ -1369,15 +1065,21 @@
         <TabBar
           tabs={selectedWorktree.tabs}
           activeTabId={selectedWorktree.activeTabId}
-          busy={tabBusy}
-          oncreate={handleCreateTab}
-          onselect={handleSelectTab}
-          ondelete={handleDeleteTab}
+          busy={actions.tabBusy}
+          oncreate={() => {
+            if (selectedBranch) void actions.createTab(refOf(selectedBranch));
+          }}
+          onselect={(tabId) => {
+            if (selectedBranch) void actions.selectTab(refOf(selectedBranch), tabId);
+          }}
+          ondelete={(tabId) => {
+            if (selectedBranch) void actions.deleteTab(refOf(selectedBranch), tabId);
+          }}
         />
       {/if}
       {#key selectedTerminalKey}
         <Terminal
-          {project}
+          project={activeProject}
           worktree={selectedBranch!}
           {isMobile}
           initialPane={isMobile ? activePane : undefined}
@@ -1385,7 +1087,7 @@
           agentTerminalStale={selectedWorktree?.agentTerminalStale ?? false}
           refreshingAgentTerminal={isSelectedAgentTerminalRefreshing}
           onrefreshagentterminal={() => {
-            if (selectedBranch) void handleRefreshAgentTerminal(selectedBranch);
+            if (selectedBranch) void actions.refreshAgentTerminal(refOf(selectedBranch));
           }}
           bind:this={terminalRef}
         />
@@ -1474,7 +1176,7 @@
   />
 {/if}
 
-{#if labelBranch && labelWorktree}
+{#if labelRef && labelWorktree}
   <WorktreeLabelDialog
     branch={labelWorktree.branch}
     initialLabel={labelWorktree.label}
@@ -1483,13 +1185,13 @@
     onconfirm={(label) => { void handleLabelChange(label); }}
     onclear={() => { void handleLabelChange(null); }}
     oncancel={() => {
-      labelBranch = null;
+      labelRef = null;
       labelError = "";
     }}
   />
 {/if}
 
-{#if profileBranch && profileWorktree}
+{#if profileRef && profileWorktree}
   <WorktreeProfileDialog
     branch={profileWorktree.branch}
     profiles={config.profiles}
@@ -1499,17 +1201,17 @@
     error={profileError}
     onconfirm={(profile) => { void handleProfileChange(profile); }}
     oncancel={() => {
-      profileBranch = null;
+      profileRef = null;
       profileError = "";
     }}
   />
 {/if}
 
-{#if removeBranch}
+{#if removeRef}
   <ConfirmDialog
-    message={`Remove worktree "${removeBranch}"? This action cannot be undone.`}
+    message={`Remove worktree "${removeRef.branch}"? This action cannot be undone.`}
     onconfirm={handleRemove}
-    oncancel={() => (removeBranch = null)}
+    oncancel={() => (removeRef = null)}
   />
 {/if}
 
@@ -1543,7 +1245,7 @@
 
 {#if showSettingsDialog}
   <SettingsDialog
-    {project}
+    project={activeProject}
     {currentTheme}
     {useWebChatUi}
     ide={config.ide}
@@ -1554,9 +1256,9 @@
       useWebChatUi = enabled;
       saveUseWebChatUi(enabled);
     }}
-    onlinearautocreatechange={(enabled) => { config.linearAutoCreateWorktrees = enabled; }}
-    onautoremovechange={(enabled) => { config.autoRemoveOnMerge = enabled; }}
-    onagentschange={(agents) => { config.agents = agents; }}
+    onlinearautocreatechange={(enabled) => configs.update(activeProject, (c) => ({ ...c, linearAutoCreateWorktrees: enabled }))}
+    onautoremovechange={(enabled) => configs.update(activeProject, (c) => ({ ...c, autoRemoveOnMerge: enabled }))}
+    onagentschange={(agents) => configs.update(activeProject, (c) => ({ ...c, agents }))}
     onsave={(host) => {
       sshHost = host;
       showSettingsDialog = false;
@@ -1567,7 +1269,7 @@
 
 {#if ciDetailsPr}
   <CiDetailsDialog
-    {project}
+    project={activeProject}
     pr={ciDetailsPr}
     branch={selectedWorktree?.branch ?? ""}
     onclose={() => (ciDetailsPr = null)}
@@ -1579,7 +1281,7 @@
 
 {#if commentReviewPr}
   <CommentReviewDialog
-    {project}
+    project={activeProject}
     pr={commentReviewPr}
     branch={selectedWorktree?.branch ?? ""}
     onclose={() => (commentReviewPr = null)}
@@ -1591,7 +1293,7 @@
 
 {#if showDiffDialog && selectedBranch && DiffDialogComponent}
   <DiffDialogComponent
-    {project}
+    project={activeProject}
     branch={selectedBranch}
     ideUrl={makeIdeUrl(selectedWorktree?.dir, sshHost, config.ide)}
     onclose={() => (showDiffDialog = false)}
@@ -1606,19 +1308,14 @@
   />
 {/if}
 
-{#if postToLinearBranch}
+{#if postToLinearRef}
+  {@const ref = postToLinearRef}
   <LinearPostDialog
-    branch={postToLinearBranch}
+    branch={ref.branch}
     onsubmit={async (target) => {
-      const branch = postToLinearBranch;
-      if (!branch) return;
-      const response = await postWorktreeToLinear(project, branch, target);
-      showToast({
-        tone: "success",
-        message: `Posted to Linear: ${response.issueUrl}`,
-      });
+      await actions.postToLinear(ref, target);
     }}
-    onclose={() => (postToLinearBranch = null)}
+    onclose={() => (postToLinearRef = null)}
   />
 {/if}
 
@@ -1627,13 +1324,13 @@
     message={`Post conversation to ${postToLinkedConfirm.issueId}? This creates a new attachment and comment on the issue.`}
     confirmLabel="Post"
     variant="accent"
-    onconfirm={() => { void confirmPostToLinkedIssue(); }}
+    onconfirm={confirmPostToLinkedIssue}
     oncancel={() => (postToLinkedConfirm = null)}
   />
 {/if}
 
 <ToastStack
-  {toasts}
-  ondismiss={handleDismissToast}
+  toasts={notifications.toasts}
+  ondismiss={(id) => notifications.dismissToast(id)}
   onselect={handleSelectToast}
 />

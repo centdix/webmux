@@ -1,16 +1,14 @@
 <script lang="ts">
-  import { onMount, untrack } from "svelte";
-  import { projectApi } from "../lib/api";
+  import { untrack } from "svelte";
+  import type { WorktreeSelection } from "../lib/worktree-selection.svelte";
 
-  let { project, onSwitchProject }: { project: string; onSwitchProject: (prefix: string | null) => void } = $props();
+  let { selection, onNoProjects }: { selection: WorktreeSelection; onNoProjects: () => void } = $props();
 
   // Captured once per instance: a remount is the only way this text changes.
-  const mountedFor = untrack(() => project);
-
-  onMount(() => {
-    void projectApi(project).fetchConfig().catch(() => {});
-  });
+  const mountedFor = untrack(() => selection.project);
 </script>
 
 <p>mounted {mountedFor}</p>
-<button type="button" onclick={() => onSwitchProject("beta")}>to beta</button>
+<p>current {selection.project}</p>
+<button type="button" onclick={() => selection.switchProject("beta")}>to beta</button>
+<button type="button" onclick={onNoProjects}>no projects</button>

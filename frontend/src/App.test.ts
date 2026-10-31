@@ -5,6 +5,7 @@ import type {
   AppConfig,
   AppNotification,
   LinearIssuesResponse,
+  ProjectWorktreeList,
   WorktreeInfo,
 } from "./lib/types";
 
@@ -98,6 +99,13 @@ vi.mock("@xterm/addon-web-links", () => ({
   WebLinksAddon: class MockWebLinksAddon {},
 }));
 
+// The dashboard polls every project at once; most tests only need one, so
+// `fetchWorktrees` stands in for that project's slice of the hub listing.
+const { fetchWorktrees, otherProjects } = vi.hoisted(() => ({
+  fetchWorktrees: vi.fn<() => Promise<WorktreeInfo[]>>(),
+  otherProjects: { list: [] as ProjectWorktreeList[] },
+}));
+
 vi.mock("./lib/api", () => {
   const client = {
     closeWorktree: vi.fn(),
@@ -120,7 +128,10 @@ vi.mock("./lib/api", () => {
     connectWorktreeConversationStream: vi.fn(),
     dismissNotification: vi.fn(),
     fetchWorktreeConversationHistory: vi.fn(),
-    fetchWorktrees: vi.fn(),
+    fetchAllProjectWorktrees: vi.fn(async (): Promise<ProjectWorktreeList[]> => [
+      { prefix: "webmux", name: "webmux", worktrees: await fetchWorktrees(), error: null },
+      ...otherProjects.list,
+    ]),
     interruptWorktreeConversation: vi.fn(),
     refreshWorktreeAgentTerminal: vi.fn(),
     sendWorktreeConversationMessage: vi.fn(),
@@ -142,7 +153,8 @@ import {
   attachWorktreeConversation,
   connectWorktreeConversationStream,
   dismissNotification,
-  fetchWorktrees,
+  fetchAllProjectWorktrees,
+  fetchProjects,
   postWorktreeToLinear,
   projectApi,
   refreshWorktreeAgentTerminal,
@@ -151,12 +163,13 @@ import {
   subscribeNotifications,
 } from "./lib/api";
 import { WEB_CHAT_UI_STORAGE_KEY } from "./lib/utils";
+import { WorktreeSelection } from "./lib/worktree-selection.svelte";
 
 const PROJECT = "webmux";
 const api = projectApi(PROJECT);
 
 function renderApp(): void {
-  render(App, { props: { project: PROJECT, onSwitchProject: vi.fn() } });
+  render(App, { props: { selection: new WorktreeSelection(PROJECT), onNoProjects: vi.fn() } });
 }
 
 interface Deferred<T> {
@@ -434,6 +447,8 @@ async function openCreateDialogWithBaseAndSubmit(branch: string, baseBranch: str
 describe("App create selection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    otherProjects.list = [];
+    vi.mocked(fetchProjects).mockResolvedValue([]);
     MockTerminal.instances = [];
     MockFitAddon.instances = [];
     MockWebSocket.instances = [];
@@ -526,6 +541,90 @@ describe("App create selection", () => {
     expect(await screen.findByTitle("feature/a")).toBeInTheDocument();
   });
 
+  it("switches the current project from the switcher without refetching, restoring its selection", async () => {
+    otherProjects.list = [{
+      prefix: "images",
+      name: "images",
+      worktrees: [createWorktree("feature/img", { project: "images" }), createWorktree("feature/saved", { project: "images" })],
+      error: null,
+    }];
+    localStorage.setItem("wt-last-selected-worktree:images", "feature/saved");
+    vi.mocked(fetchProjects).mockResolvedValue([
+      { prefix: PROJECT, name: PROJECT, path: "/repos/webmux", active: true },
+      { prefix: "images", name: "images", path: "/repos/images", active: false },
+    ]);
+    vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("feature/web")]);
+
+    renderApp();
+    await screen.findByTitle("feature/web");
+    const pollsBefore = vi.mocked(fetchAllProjectWorktrees).mock.calls.length;
+
+    await fireEvent.click(screen.getByTitle("Switch project"));
+    await fireEvent.click(await screen.findByRole("menuitem", { name: /^images/ }));
+
+    // Straight from the polled store: no empty list, no extra fetch.
+    expect(screen.getByRole("button", { name: /^feature\/img\b/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^feature\/web\b/i })).not.toBeInTheDocument();
+    expect(screen.getByTitle("feature/saved")).toBeInTheDocument();
+    expect(window.location.hash).toBe("#images/feature/saved");
+    expect(fetchAllProjectWorktrees).toHaveBeenCalledTimes(pollsBefore);
+    await waitFor(() => expect(projectApi).toHaveBeenCalledWith("images"));
+  });
+
+  it("selects a worktree of another project from its notification toast", async () => {
+    let onNotification: ((notification: AppNotification) => void) | undefined;
+    otherProjects.list = [{
+      prefix: "images",
+      name: "images",
+      worktrees: [createWorktree("main", { project: "images" }), createWorktree("feature/img", { project: "images" })],
+      error: null,
+    }];
+    vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("main"), createWorktree("feature/img")]);
+    vi.mocked(subscribeNotifications).mockImplementation((handleNotification) => {
+      onNotification = handleNotification;
+      return () => {};
+    });
+
+    renderApp();
+    await screen.findByTitle("main");
+    onNotification?.(createAppNotification({ id: 1, project: "images", branch: "feature/img", message: "Images done" }));
+    onNotification?.(createAppNotification({ id: 1, project: PROJECT, branch: "main", message: "Webmux done" }));
+
+    expect(await screen.findByText("Images done")).toBeInTheDocument();
+    expect(screen.getByText("Webmux done")).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Images done" }));
+
+    expect(await screen.findByTitle("feature/img")).toBeInTheDocument();
+    expect(window.location.hash).toBe("#images/feature/img");
+    expect(screen.queryByText("Images done")).not.toBeInTheDocument();
+    expect(screen.getByText("Webmux done")).toBeInTheDocument();
+    expect(dismissNotification).toHaveBeenCalledWith(expect.objectContaining({ project: "images", id: 1 }));
+  });
+
+  it("moves the selection when the selected worktree disappears from the poll", async () => {
+    vi.mocked(fetchWorktrees)
+      .mockResolvedValueOnce([createWorktree("main"), createWorktree("feature/gone")])
+      .mockResolvedValue([createWorktree("main")]);
+    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "feature/gone");
+
+    renderApp();
+    await screen.findByTitle("feature/gone");
+    await fireEvent.click(screen.getByRole("button", { name: "Open Session" }));
+
+    expect(await screen.findByTitle("main")).toBeInTheDocument();
+    expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("main");
+  });
+
+  it("shows a project's fetch error in the sidebar", async () => {
+    vi.mocked(fetchAllProjectWorktrees).mockResolvedValueOnce([
+      { prefix: PROJECT, name: PROJECT, worktrees: [], error: "git exploded" },
+    ]);
+
+    renderApp();
+
+    expect(await screen.findByText("Failed to load worktrees: git exploded")).toBeInTheDocument();
+  });
+
   it("keeps the current selection when a new worktree is created from an existing selection", async () => {
     const existingWorktree = createWorktree("main");
     const creatingWorktree = createWorktree("feature/new", {
@@ -609,7 +708,7 @@ describe("App create selection", () => {
     let onNotification: ((notification: AppNotification) => void) | undefined;
 
     vi.mocked(fetchWorktrees).mockResolvedValue([]);
-    vi.mocked(subscribeNotifications).mockImplementation((_project, handleNotification) => {
+    vi.mocked(subscribeNotifications).mockImplementation((handleNotification) => {
       onNotification = handleNotification;
       return () => {};
     });

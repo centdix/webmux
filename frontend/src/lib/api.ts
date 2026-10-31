@@ -23,6 +23,7 @@ import type {
   FileUploadResult,
   InitialProject,
   InstanceSummary,
+  NotificationDismissal,
   PostWorktreeToLinearResponse,
   PostWorktreeToLinearTarget,
   ProjectInitPhase,
@@ -123,11 +124,6 @@ export function postWorktreeToLinear(
     params: { name: branch },
     body: { target },
   });
-}
-
-export async function fetchWorktrees(project: string): Promise<WorktreeInfo[]> {
-  const response = await projectApi(project).fetchWorktrees();
-  return response.worktrees.map((worktree) => mapWorktree(worktree, project));
 }
 
 /** Every project's worktrees in one hub call, in registry order — the
@@ -343,34 +339,30 @@ export async function resolveInitialProject(): Promise<InitialProject> {
   return prefix ? { kind: "project", prefix } : { kind: "none" };
 }
 
-/** Subscribe to the hub's merged notification stream. Until the dashboard is
- *  multi-project, only `project`'s notifications are delivered. */
+/** Subscribe to the hub's merged notification stream: every project's
+ *  notifications and dismissals, each naming its project. */
 export function subscribeNotifications(
-  project: string,
   onNotification: (n: AppNotification) => void,
-  onDismiss: (id: number) => void,
+  onDismiss: (dismissal: NotificationDismissal) => void,
   onInitial?: (n: AppNotification) => void,
 ): () => void {
   const es = new EventSource(hubApiPaths.streamNotifications);
 
   es.addEventListener("initial", (e: MessageEvent) => {
     try {
-      const n = AppNotificationSchema.parse(JSON.parse(e.data));
-      if (n.project === project) onInitial?.(n);
+      onInitial?.(AppNotificationSchema.parse(JSON.parse(e.data)));
     } catch { /* ignore malformed SSE data */ }
   });
 
   es.addEventListener("notification", (e: MessageEvent) => {
     try {
-      const n = AppNotificationSchema.parse(JSON.parse(e.data));
-      if (n.project === project) onNotification(n);
+      onNotification(AppNotificationSchema.parse(JSON.parse(e.data)));
     } catch { /* ignore malformed SSE data */ }
   });
 
   es.addEventListener("dismiss", (e: MessageEvent) => {
     try {
-      const dismissal = NotificationDismissalSchema.parse(JSON.parse(e.data));
-      if (dismissal.project === project) onDismiss(dismissal.id);
+      onDismiss(NotificationDismissalSchema.parse(JSON.parse(e.data)));
     } catch { /* ignore malformed SSE data */ }
   });
 

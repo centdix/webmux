@@ -5,8 +5,9 @@ import {
   LAST_SELECTED_WORKTREE_STORAGE_KEY,
   WEB_CHAT_UI_STORAGE_KEY,
   FAVORITE_WORKTREES_STORAGE_KEY,
+  FAVORITE_WORKTREE_KEYS_STORAGE_KEY,
   ideLabelForUrl,
-  loadFavoriteWorktrees,
+  loadFavoriteWorktreeKeys,
   loadLastProject,
   loadSavedSelectedWorktree,
   loadUseWebChatUi,
@@ -14,7 +15,7 @@ import {
   resolveSelectedBranch,
   prBadgeClass,
   prStateTextClass,
-  saveFavoriteWorktrees,
+  saveFavoriteWorktreeKeys,
   saveLastProject,
   saveSelectedWorktree,
   saveUseWebChatUi,
@@ -94,21 +95,33 @@ describe("worktree selection persistence", () => {
     expect(loadLastProject()).toBeNull();
   });
 
-  it("stores favorite worktrees per project and clears them when empty", () => {
-    saveFavoriteWorktrees("proj-a", new Set(["feature/a"]));
+  it("stores favorites of every project by worktree key and clears them when empty", () => {
+    saveFavoriteWorktreeKeys(new Set(["proj-a:feature/a", "proj-b:feature/a"]));
 
-    expect(loadFavoriteWorktrees("proj-a")).toEqual(new Set(["feature/a"]));
-    expect(loadFavoriteWorktrees("proj-b")).toEqual(new Set());
+    expect(loadFavoriteWorktreeKeys()).toEqual(new Set(["proj-a:feature/a", "proj-b:feature/a"]));
 
-    saveFavoriteWorktrees("proj-a", new Set());
+    saveFavoriteWorktreeKeys(new Set());
 
+    expect(localStorage.getItem(FAVORITE_WORKTREE_KEYS_STORAGE_KEY)).toBeNull();
+  });
+
+  it("migrates the per-project favorites into worktree keys once", () => {
+    localStorage.setItem(FAVORITE_WORKTREE_KEYS_STORAGE_KEY, JSON.stringify(["proj-c:main"]));
+    localStorage.setItem(`${FAVORITE_WORKTREES_STORAGE_KEY}:proj-a`, JSON.stringify(["feature/a", "main"]));
+    localStorage.setItem(`${FAVORITE_WORKTREES_STORAGE_KEY}:proj-b`, JSON.stringify(["main"]));
+
+    const expected = new Set(["proj-c:main", "proj-a:feature/a", "proj-a:main", "proj-b:main"]);
+    expect(loadFavoriteWorktreeKeys()).toEqual(expected);
     expect(localStorage.getItem(`${FAVORITE_WORKTREES_STORAGE_KEY}:proj-a`)).toBeNull();
+    expect(localStorage.getItem(`${FAVORITE_WORKTREES_STORAGE_KEY}:proj-b`)).toBeNull();
+    expect(loadFavoriteWorktreeKeys()).toEqual(expected);
   });
 
   it("ignores malformed favorite worktrees data", () => {
-    localStorage.setItem(FAVORITE_WORKTREES_STORAGE_KEY, "not json");
+    localStorage.setItem(FAVORITE_WORKTREE_KEYS_STORAGE_KEY, "not json");
+    localStorage.setItem(`${FAVORITE_WORKTREES_STORAGE_KEY}:proj-a`, "{");
 
-    expect(loadFavoriteWorktrees("")).toEqual(new Set());
+    expect(loadFavoriteWorktreeKeys()).toEqual(new Set());
   });
 
   it("stores and clears the web chat UI preference", () => {
