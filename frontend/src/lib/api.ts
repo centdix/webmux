@@ -1,4 +1,10 @@
-import { AgentsUiConversationEventSchema, apiPaths, createApi } from "@webmux/api-contract";
+import {
+  AgentsUiConversationEventSchema,
+  createHubApi,
+  createProjectApi,
+  projectApiBasePath,
+  projectApiPaths,
+} from "@webmux/api-contract";
 import type {
   AgentDetails,
   AgentResponse,
@@ -28,14 +34,14 @@ import type {
 export const activePrefix: string = window.location.pathname.split("/")[1] ?? "";
 
 /** Base path for the active project's API + WebSocket calls. */
-export const apiBase: string = activePrefix ? `/${activePrefix}` : "";
+export const apiBase: string = projectApiBasePath(activePrefix);
 
 /** Per-project client — every worktree/agent/config call is scoped to the
  *  active project. */
-export const api = createApi(apiBase);
+export const api = createProjectApi(activePrefix);
 
 /** Hub client — project list/add/remove + the migration sensor are global (no prefix). */
-const hubApi = createApi("");
+const hubApi = createHubApi();
 
 function mapAgentStatus(status: string): string {
   switch (status) {
@@ -180,7 +186,7 @@ export function connectWorktreeConversationStream(
 ): () => void {
   const socket = new WebSocket(
     `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}${apiBase}${
-      withWorktreeName(apiPaths.streamAgentsWorktreeConversation, branch)
+      withWorktreeName(projectApiPaths.streamAgentsWorktreeConversation, branch)
     }`,
   );
   let closedByClient = false;
@@ -309,7 +315,7 @@ export function subscribeNotifications(
   onDismiss: (id: number) => void,
   onInitial?: (n: AppNotification) => void,
 ): () => void {
-  const es = new EventSource(`${apiBase}/api/notifications/stream`);
+  const es = new EventSource(`${apiBase}${projectApiPaths.streamNotifications}`);
 
   es.addEventListener("initial", (e: MessageEvent) => {
     try {
@@ -340,7 +346,7 @@ export async function uploadFiles(worktree: string, files: File[]): Promise<File
   for (const file of files) {
     form.append("files", file);
   }
-  const res = await fetch(`${apiBase}/api/worktrees/${encodeURIComponent(worktree)}/upload`, {
+  const res = await fetch(`${apiBase}${withWorktreeName(projectApiPaths.uploadWorktreeFiles, worktree)}`, {
     method: "POST",
     body: form,
   });

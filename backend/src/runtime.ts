@@ -1,3 +1,4 @@
+import { projectApiBasePath } from "@webmux/api-contract";
 import { loadConfig, projectRoot, type ProjectConfig } from "./adapters/config";
 import { loadControlToken } from "./adapters/control-token";
 import { BunDockerGateway } from "./adapters/docker";
@@ -33,17 +34,17 @@ export function createPortRegistrationService(): PortRegistrationService {
   return new PortRegistrationService({ registry: createPortRegistry(), portProbe: new BunPortProbe(), canBind });
 }
 
-/** Base URL agent hooks POST runtime events to. The server serves each project
- *  under `/${prefix}` (see server.ts buildServeRoutes), so the control URL must
- *  include the prefix to hit the project's `/api/runtime/events` route.
+/** Base URL agent hooks POST runtime events to: the project's mount point
+ *  (see server.ts buildServeRoutes); the lifecycle appends the runtime-events
+ *  route to it.
  *
- *  `undefined` prefix means control reporting is not configured (the CLI passes
- *  it when it can't resolve a prefix — no server running). We return undefined
- *  rather than an unprefixed URL so no control.env is written and the agent's
- *  hooks no-op cleanly instead of POSTing to an unrouted path. */
+ *  An `undefined` (or empty) prefix means control reporting is not configured
+ *  (the CLI passes it when it can't resolve a prefix — no server running). We
+ *  return undefined rather than an unscoped URL so no control.env is written and
+ *  the agent's hooks no-op cleanly instead of POSTing to an unrouted path. */
 export function buildControlBaseUrl(port: number, prefix: string | undefined): string | undefined {
-  if (prefix === undefined) return undefined;
-  return prefix ? `http://127.0.0.1:${port}/${prefix}` : `http://127.0.0.1:${port}`;
+  if (!prefix) return undefined;
+  return `http://127.0.0.1:${port}${projectApiBasePath(prefix)}`;
 }
 
 export interface WebmuxRuntime {

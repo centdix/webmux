@@ -7,7 +7,8 @@ import pkg from "../../package.json";
 import {
   AgentIdParamsSchema,
   AgentsSendMessageRequestSchema,
-  apiPaths,
+  hubApiPaths,
+  projectApiPaths,
   AvailableBranchesQuerySchema,
   CreateWorktreeRequestSchema,
   NotificationIdParamsSchema,
@@ -145,6 +146,7 @@ import type {
 } from "./domain/agents-ui";
 import type { OneshotMeta, ProjectSnapshot, WorktreeSnapshot } from "./domain/model";
 import { isValidBranchName, isValidWorktreeName } from "./domain/policies";
+import { mountProjectRoutes } from "./domain/project-routes";
 import { createPortRegistrationService, createWebmuxRuntime, type WebmuxRuntime } from "./runtime";
 import { createInstanceRegistry, type InstanceEntry } from "./adapters/instance-registry";
 import { createProjectsRegistry } from "./adapters/projects-registry";
@@ -209,8 +211,8 @@ interface WsHandlers {
 
 /** Everything a single project exposes: its (unprefixed) route map, WebSocket
  *  handlers, and the light background-loop controls. Built by `createProjectApp`
- *  and bound to exactly one `WebmuxRuntime`. The global server prefixes each
- *  route key with `/${prefix}` and dispatches WS by `ws.data.prefix`. */
+ *  and bound to exactly one `WebmuxRuntime`. The global server mounts each
+ *  route key under `/api/projects/${prefix}` and dispatches WS by `ws.data.prefix`. */
 interface ProjectApp {
   prefix: string;
   routes: ProjectRoutes;
@@ -1960,14 +1962,14 @@ function parseAgentIdParam(params: Record<string, string>):
 // --- Server ---
 
   const routes: ProjectRoutes = {
-    [apiPaths.streamAgentsWorktreeConversation]: (req, server) => {
+    [projectApiPaths.streamAgentsWorktreeConversation]: (req, server) => {
       const branch = decodeURIComponent(req.params.name);
       return server.upgrade(req, { data: { kind: "agents", prefix: instancePrefix, branch, conversationId: null, unsubscribe: null } })
         ? undefined
         : new Response("WebSocket upgrade failed", { status: 400 });
     },
 
-    "/ws/:worktree": (req, server) => {
+    [projectApiPaths.streamTerminal]: (req, server) => {
       const branch = decodeURIComponent(req.params.worktree);
       return server.upgrade(req, {
         data: { kind: "terminal", prefix: instancePrefix, branch, worktreeId: null, attachId: null, attached: false },
@@ -1976,32 +1978,32 @@ function parseAgentIdParam(params: Record<string, string>):
         : new Response("WebSocket upgrade failed", { status: 400 });
     },
 
-    [apiPaths.fetchConfig]: {
+    [projectApiPaths.fetchConfig]: {
       GET: () => jsonResponse(getFrontendConfig()),
     },
 
-    [apiPaths.fetchAvailableBranches]: {
+    [projectApiPaths.fetchAvailableBranches]: {
       GET: (req) => catching("GET /api/branches", () => apiListBranches(req)),
     },
 
-    [apiPaths.fetchBaseBranches]: {
+    [projectApiPaths.fetchBaseBranches]: {
       GET: () => catching("GET /api/base-branches", () => apiListBaseBranches()),
     },
 
-    [apiPaths.fetchProject]: {
+    [projectApiPaths.fetchProject]: {
       GET: () => catching("GET /api/project", () => apiGetProject()),
     },
 
-    [apiPaths.fetchAgents]: {
+    [projectApiPaths.fetchAgents]: {
       GET: () => catching("GET /api/agents", () => apiListAgents()),
       POST: (req) => catching("POST /api/agents", () => apiCreateAgent(req)),
     },
 
-    [apiPaths.validateAgent]: {
+    [projectApiPaths.validateAgent]: {
       POST: (req) => catching("POST /api/agents/validate", () => apiValidateAgent(req)),
     },
 
-    [apiPaths.updateAgent]: {
+    [projectApiPaths.updateAgent]: {
       PUT: (req) => {
         const parsed = parseAgentIdParam(req.params);
         if (!parsed.ok) return parsed.response;
@@ -2014,58 +2016,58 @@ function parseAgentIdParam(params: Record<string, string>):
       },
     },
 
-    [apiPaths.attachAgentsWorktreeConversation]: {
+    [projectApiPaths.attachAgentsWorktreeConversation]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`POST ${apiPaths.attachAgentsWorktreeConversation}`, () => apiAttachAgentsWorktree(name));
+        return catching(`POST ${projectApiPaths.attachAgentsWorktreeConversation}`, () => apiAttachAgentsWorktree(name));
       },
     },
 
-    [apiPaths.fetchAgentsWorktreeConversationHistory]: {
+    [projectApiPaths.fetchAgentsWorktreeConversationHistory]: {
       GET: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`GET ${apiPaths.fetchAgentsWorktreeConversationHistory}`, () => apiGetAgentsWorktreeHistory(name));
+        return catching(`GET ${projectApiPaths.fetchAgentsWorktreeConversationHistory}`, () => apiGetAgentsWorktreeHistory(name));
       },
     },
 
-    [apiPaths.sendAgentsWorktreeConversationMessage]: {
+    [projectApiPaths.sendAgentsWorktreeConversationMessage]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
         return catching(
-          `POST ${apiPaths.sendAgentsWorktreeConversationMessage}`,
+          `POST ${projectApiPaths.sendAgentsWorktreeConversationMessage}`,
           () => apiSendAgentsWorktreeMessage(name, req),
         );
       },
     },
 
-    [apiPaths.interruptAgentsWorktreeConversation]: {
+    [projectApiPaths.interruptAgentsWorktreeConversation]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
         return catching(
-          `POST ${apiPaths.interruptAgentsWorktreeConversation}`,
+          `POST ${projectApiPaths.interruptAgentsWorktreeConversation}`,
           () => apiInterruptAgentsWorktree(name),
         );
       },
     },
 
-    "/api/runtime/events": {
+    [projectApiPaths.postRuntimeEvent]: {
       POST: (req) => catching("POST /api/runtime/events", () => apiRuntimeEvent(req)),
     },
 
-    [apiPaths.fetchWorktrees]: {
+    [projectApiPaths.fetchWorktrees]: {
       GET: () => catching("GET /api/worktrees", () => apiGetWorktrees()),
       POST: (req) => catching("POST /api/worktrees", () => apiCreateWorktree(req)),
     },
 
-    [apiPaths.removeWorktree]: {
+    [projectApiPaths.removeWorktree]: {
       DELETE: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
@@ -2074,7 +2076,7 @@ function parseAgentIdParam(params: Record<string, string>):
       },
     },
 
-    [apiPaths.openWorktree]: {
+    [projectApiPaths.openWorktree]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
@@ -2083,7 +2085,7 @@ function parseAgentIdParam(params: Record<string, string>):
       },
     },
 
-    "/api/worktrees/:name/terminal-launch": {
+    "/worktrees/:name/terminal-launch": {
       GET: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
@@ -2092,7 +2094,7 @@ function parseAgentIdParam(params: Record<string, string>):
       },
     },
 
-    [apiPaths.closeWorktree]: {
+    [projectApiPaths.closeWorktree]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
@@ -2101,7 +2103,7 @@ function parseAgentIdParam(params: Record<string, string>):
       },
     },
 
-    [apiPaths.refreshWorktreeAgentTerminal]: {
+    [projectApiPaths.refreshWorktreeAgentTerminal]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
@@ -2110,7 +2112,7 @@ function parseAgentIdParam(params: Record<string, string>):
       },
     },
 
-    [apiPaths.setWorktreeArchived]: {
+    [projectApiPaths.setWorktreeArchived]: {
       PUT: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
@@ -2119,7 +2121,7 @@ function parseAgentIdParam(params: Record<string, string>):
       },
     },
 
-    [apiPaths.postWorktreeToLinear]: {
+    [projectApiPaths.postWorktreeToLinear]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
@@ -2128,7 +2130,7 @@ function parseAgentIdParam(params: Record<string, string>):
       },
     },
 
-    [apiPaths.syncWorktreePrs]: {
+    [projectApiPaths.syncWorktreePrs]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
@@ -2137,7 +2139,7 @@ function parseAgentIdParam(params: Record<string, string>):
       },
     },
 
-    [apiPaths.setWorktreeLabel]: {
+    [projectApiPaths.setWorktreeLabel]: {
       PUT: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
@@ -2146,7 +2148,7 @@ function parseAgentIdParam(params: Record<string, string>):
       },
     },
 
-    [apiPaths.setWorktreeProfile]: {
+    [projectApiPaths.setWorktreeProfile]: {
       PUT: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
@@ -2155,7 +2157,7 @@ function parseAgentIdParam(params: Record<string, string>):
       },
     },
 
-    [apiPaths.sendWorktreePrompt]: {
+    [projectApiPaths.sendWorktreePrompt]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
@@ -2164,7 +2166,7 @@ function parseAgentIdParam(params: Record<string, string>):
       },
     },
 
-    "/api/worktrees/:name/upload": {
+    [projectApiPaths.uploadWorktreeFiles]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
@@ -2173,7 +2175,7 @@ function parseAgentIdParam(params: Record<string, string>):
       },
     },
 
-    [apiPaths.createWorktreeTab]: {
+    [projectApiPaths.createWorktreeTab]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
@@ -2182,7 +2184,7 @@ function parseAgentIdParam(params: Record<string, string>):
       },
     },
 
-    [apiPaths.selectWorktreeTab]: {
+    [projectApiPaths.selectWorktreeTab]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
@@ -2192,7 +2194,7 @@ function parseAgentIdParam(params: Record<string, string>):
       },
     },
 
-    [apiPaths.deleteWorktreeTab]: {
+    [projectApiPaths.deleteWorktreeTab]: {
       DELETE: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
@@ -2202,7 +2204,7 @@ function parseAgentIdParam(params: Record<string, string>):
       },
     },
 
-    [apiPaths.worktreePorts]: {
+    [projectApiPaths.worktreePorts]: {
       GET: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
@@ -2217,7 +2219,7 @@ function parseAgentIdParam(params: Record<string, string>):
       },
     },
 
-    [apiPaths.deleteWorktreePort]: {
+    [projectApiPaths.deleteWorktreePort]: {
       DELETE: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
@@ -2227,7 +2229,7 @@ function parseAgentIdParam(params: Record<string, string>):
       },
     },
 
-    [apiPaths.mergeWorktree]: {
+    [projectApiPaths.mergeWorktree]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
@@ -2236,7 +2238,7 @@ function parseAgentIdParam(params: Record<string, string>):
       },
     },
 
-    [apiPaths.fetchWorktreeDiff]: {
+    [projectApiPaths.fetchWorktreeDiff]: {
       GET: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
@@ -2245,27 +2247,27 @@ function parseAgentIdParam(params: Record<string, string>):
       },
     },
 
-    [apiPaths.fetchLinearIssues]: {
+    [projectApiPaths.fetchLinearIssues]: {
       GET: () => catching("GET /api/linear/issues", () => apiGetLinearIssues()),
     },
 
-    [apiPaths.fetchAutoNameConfig]: {
+    [projectApiPaths.fetchAutoNameConfig]: {
       GET: () => catching("GET /api/project/auto-name", async () => apiGetAutoNameConfig()),
     },
 
-    [apiPaths.setLinearAutoCreate]: {
+    [projectApiPaths.setLinearAutoCreate]: {
       PUT: (req) => catching("PUT /api/linear/auto-create", () => apiSetLinearAutoCreate(req)),
     },
 
-    [apiPaths.setAutoRemoveOnMerge]: {
+    [projectApiPaths.setAutoRemoveOnMerge]: {
       PUT: (req) => catching("PUT /api/github/auto-remove-on-merge", () => apiSetAutoRemoveOnMerge(req)),
     },
 
-    [apiPaths.pullMain]: {
+    [projectApiPaths.pullMain]: {
       POST: (req) => catching("POST /api/pull-main", () => apiPullMain(req)),
     },
 
-    [apiPaths.fetchCiLogs]: {
+    [projectApiPaths.fetchCiLogs]: {
       GET: (req) => {
         const parsed = parseRunIdParam(req.params);
         if (!parsed.ok) return parsed.response;
@@ -2273,11 +2275,11 @@ function parseAgentIdParam(params: Record<string, string>):
       },
     },
 
-    "/api/notifications/stream": {
+    [projectApiPaths.streamNotifications]: {
       GET: () => runtimeNotifications.stream(),
     },
 
-    [apiPaths.dismissNotification]: {
+    [projectApiPaths.dismissNotification]: {
       POST: (req) => {
         const parsed = parseNotificationIdParam(req.params);
         if (!parsed.ok) return parsed.response;
@@ -2474,7 +2476,7 @@ function actualPort(server: Server<WsData>, requested: number): number {
 
 // ── Global multi-project server ─────────────────────────────────────────────
 // One process, one port. Every known project gets its own runtime + app; the
-// shared HTTP server prefixes each project's routes with `/${prefix}` and the
+// shared HTTP server mounts each project's routes under `/api/projects/${prefix}` and the
 // shared WebSocket handler dispatches by `ws.data.prefix`. Every project is
 // served in this one process; an unknown prefix just falls through to the SPA.
 
@@ -2690,34 +2692,32 @@ function apiListInstances(): Response {
 }
 
 /** Build the full route map: global hub endpoints plus every project's routes
- *  re-keyed under its `/${prefix}` segment. Rebuilt (via `server.reload`) on
+ *  re-keyed under `/api/projects/${prefix}`. Rebuilt (via `server.reload`) on
  *  every add/remove so newly known projects are served immediately. */
 function buildServeRoutes(): ProjectRoutes {
   const routes: ProjectRoutes = {
-    [apiPaths.fetchProjects]: {
+    [hubApiPaths.fetchProjects]: {
       GET: () => apiListProjects(),
       POST: (req) => catchingRoute("POST /api/projects", () => apiAddProject(req)),
     },
-    [apiPaths.projectInits]: {
+    [hubApiPaths.projectInits]: {
       GET: () => apiListProjectInits(),
     },
-    [apiPaths.fetchAllProjectWorktrees]: {
+    [hubApiPaths.fetchAllProjectWorktrees]: {
       GET: () => catchingRoute("GET /api/projects/worktrees", () => apiListAllProjectWorktrees()),
     },
-    [apiPaths.migrateProjects]: {
+    [hubApiPaths.migrateProjects]: {
       POST: (req) => catchingRoute("POST /api/projects/migrate", () => apiMigrateProjects(req)),
     },
-    [apiPaths.removeProject]: {
+    [hubApiPaths.removeProject]: {
       DELETE: (req) => catchingRoute("DELETE /api/projects/:prefix", () => apiRemoveProject(decodeURIComponent(req.params.prefix))),
     },
-    [apiPaths.fetchInstances]: {
+    [hubApiPaths.fetchInstances]: {
       GET: () => apiListInstances(),
     },
   };
   for (const app of apps.values()) {
-    for (const [pattern, entry] of Object.entries(app.routes)) {
-      routes[`/${app.prefix}${pattern}`] = entry;
-    }
+    Object.assign(routes, mountProjectRoutes(app.prefix, app.routes));
   }
   return routes;
 }

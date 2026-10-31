@@ -329,7 +329,7 @@ function makeLifecycleService(
   sessionDiscovery: SessionDiscoveryGateway = { listSessionIds: async () => [] },
   // `null` explicitly configures no control reporting (passing `undefined` would
   // fall back to the default below).
-  controlBaseUrl: string | null = "http://127.0.0.1:5111",
+  controlBaseUrl: string | null = "http://127.0.0.1:5111/api/projects/webmux",
   portRegistrations: LifecycleServiceDependencies["portRegistrations"] = { releaseWorktree: () => {} },
 ): LifecycleService {
   const reconciliation = new ReconciliationService({
@@ -423,7 +423,7 @@ describe("LifecycleService", () => {
     });
     expect(runtimeEnvText).toContain("WEBMUX_WORKTREE_PATH=");
     expect(runtimeEnvText).toContain("CUSTOM_TOKEN=abc123");
-    expect(controlEnvText).toContain("WEBMUX_CONTROL_URL=http://127.0.0.1:5111/api/runtime/events");
+    expect(controlEnvText).toContain("WEBMUX_CONTROL_URL=http://127.0.0.1:5111/api/projects/webmux/runtime/events");
     expect(hooks.calls).toEqual([
       expect.objectContaining({
         name: "postCreate",
@@ -1628,7 +1628,7 @@ describe("LifecycleService", () => {
     const gitDir = new BunGitGateway().resolveWorktreeGitDir(worktreePath);
     expect((await readWorktreeMeta(gitDir))?.runtime).toBe("host");
     const controlEnvText = await Bun.file(getWorktreeStoragePaths(gitDir).controlEnvPath).text();
-    expect(controlEnvText).toContain("WEBMUX_CONTROL_URL=http://127.0.0.1:5111/api/runtime/events");
+    expect(controlEnvText).toContain("WEBMUX_CONTROL_URL=http://127.0.0.1:5111/api/projects/webmux/runtime/events");
   });
 
   it("leaves the session untouched when the profile is unchanged", async () => {
@@ -1702,7 +1702,7 @@ describe("LifecycleService", () => {
       },
     ]);
 
-    expect(controlEnvText).toContain("WEBMUX_CONTROL_URL=http://127.0.0.1:5111/api/runtime/events");
+    expect(controlEnvText).toContain("WEBMUX_CONTROL_URL=http://127.0.0.1:5111/api/projects/webmux/runtime/events");
 
     const state = runtime.getWorktreeByBranch("feature-sandbox");
     expect(state?.agent.runtime).toBe("docker");
@@ -1786,8 +1786,8 @@ describe("LifecycleService", () => {
     const gitDir = new BunGitGateway().resolveWorktreeGitDir(worktreePath);
     const paths = getWorktreeStoragePaths(gitDir);
     const staleControlEnvText = (await Bun.file(paths.controlEnvPath).text()).replace(
-      "http://127.0.0.1:5111/api/runtime/events",
-      "http://host.docker.internal:5111/api/runtime/events",
+      "http://127.0.0.1:5111/api/projects/webmux/runtime/events",
+      "http://host.docker.internal:5111/api/projects/webmux/runtime/events",
     );
     await Bun.write(paths.controlEnvPath, staleControlEnvText);
 
@@ -1796,7 +1796,7 @@ describe("LifecycleService", () => {
 
     const refreshedControlEnvText = await Bun.file(paths.controlEnvPath).text();
 
-    expect(refreshedControlEnvText).toContain("WEBMUX_CONTROL_URL=http://127.0.0.1:5111/api/runtime/events");
+    expect(refreshedControlEnvText).toContain("WEBMUX_CONTROL_URL=http://127.0.0.1:5111/api/projects/webmux/runtime/events");
   });
 
   it("reports backend creation phases in order until the worktree is ready", async () => {

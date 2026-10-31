@@ -1,10 +1,13 @@
-import { initClient, type InitClientArgs } from "@ts-rest/core";
-import { apiContract } from "./contract";
+import { initClient, type AppRouter, type InitClientArgs } from "@ts-rest/core";
+import { hubContract, projectApiBasePath, projectContract } from "./contract";
 
-export type ApiClientOptions = Omit<InitClientArgs, "baseUrl">;
+export interface ApiClientOptions extends Omit<InitClientArgs, "baseUrl"> {
+  /** Server origin (e.g. `http://localhost:5111`). Empty → same-origin relative URLs. */
+  origin?: string;
+}
 
-export function createApiClient(baseUrl: string, options: ApiClientOptions = {}) {
-  return initClient(apiContract, {
+function createClient<TContract extends AppRouter>(contract: TContract, baseUrl: string, options: Omit<InitClientArgs, "baseUrl">) {
+  return initClient(contract, {
     baseUrl,
     throwOnUnknownStatus: true,
     baseHeaders: {},
@@ -102,6 +105,15 @@ function wrapClient<TClient extends Record<string, unknown>>(client: TClient): U
   ) as UnwrappedClient<TClient>;
 }
 
-export function createApi(baseUrl: string, options: ApiClientOptions = {}): UnwrappedClient<ReturnType<typeof createApiClient>> {
-  return wrapClient(createApiClient(baseUrl, options));
+export type HubApi = UnwrappedClient<ReturnType<typeof createClient<typeof hubContract>>>;
+export type ProjectApi = UnwrappedClient<ReturnType<typeof createClient<typeof projectContract>>>;
+
+/** Client for the global hub routes (project registry, instances). */
+export function createHubApi({ origin = "", ...options }: ApiClientOptions = {}): HubApi {
+  return wrapClient(createClient(hubContract, origin, options));
+}
+
+/** Client for one project's routes, mounted under `projectApiBasePath(project)`. */
+export function createProjectApi(project: string, { origin = "", ...options }: ApiClientOptions = {}): ProjectApi {
+  return wrapClient(createClient(projectContract, `${origin}${projectApiBasePath(project)}`, options));
 }

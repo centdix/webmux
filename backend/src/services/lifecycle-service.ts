@@ -1,3 +1,4 @@
+import { projectApiPaths } from "@webmux/api-contract";
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -1268,7 +1269,7 @@ export class LifecycleService {
    *  so a loopback base URL reaches the server from inside them too. */
   private controlUrl(): string | undefined {
     if (!this.deps.controlBaseUrl) return undefined;
-    return `${trimTrailingSlashes(this.deps.controlBaseUrl)}/api/runtime/events`;
+    return `${trimTrailingSlashes(this.deps.controlBaseUrl)}${projectApiPaths.postRuntimeEvent}`;
   }
 
   /** Control URL + token, paired so they're always both set or both absent

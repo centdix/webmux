@@ -59,47 +59,8 @@ import {
 
 const c = initContract();
 
-export const apiPaths = {
-  fetchConfig: "/api/config",
-  fetchAvailableBranches: "/api/branches",
-  fetchBaseBranches: "/api/base-branches",
-  fetchProject: "/api/project",
-  fetchAgents: "/api/agents",
-  createAgent: "/api/agents",
-  updateAgent: "/api/agents/:id",
-  deleteAgent: "/api/agents/:id",
-  validateAgent: "/api/agents/validate",
-  attachAgentsWorktreeConversation: "/api/agents/worktrees/:name/attach",
-  fetchAgentsWorktreeConversationHistory: "/api/agents/worktrees/:name/history",
-  sendAgentsWorktreeConversationMessage: "/api/agents/worktrees/:name/messages",
-  interruptAgentsWorktreeConversation: "/api/agents/worktrees/:name/interrupt",
-  streamAgentsWorktreeConversation: "/ws/agents/worktrees/:name",
-  fetchWorktrees: "/api/worktrees",
-  createWorktree: "/api/worktrees",
-  removeWorktree: "/api/worktrees/:name",
-  openWorktree: "/api/worktrees/:name/open",
-  closeWorktree: "/api/worktrees/:name/close",
-  refreshWorktreeAgentTerminal: "/api/worktrees/:name/agent-terminal/refresh",
-  setWorktreeArchived: "/api/worktrees/:name/archive",
-  syncWorktreePrs: "/api/worktrees/:name/sync-prs",
-  postWorktreeToLinear: "/api/worktrees/:name/linear/post",
-  setWorktreeLabel: "/api/worktrees/:name/label",
-  setWorktreeProfile: "/api/worktrees/:name/profile",
-  sendWorktreePrompt: "/api/worktrees/:name/send",
-  createWorktreeTab: "/api/worktrees/:name/tabs",
-  selectWorktreeTab: "/api/worktrees/:name/tabs/:tabId/select",
-  deleteWorktreeTab: "/api/worktrees/:name/tabs/:tabId",
-  worktreePorts: "/api/worktrees/:name/ports",
-  deleteWorktreePort: "/api/worktrees/:name/ports/:label",
-  mergeWorktree: "/api/worktrees/:name/merge",
-  fetchWorktreeDiff: "/api/worktrees/:name/diff",
-  fetchLinearIssues: "/api/linear/issues",
-  fetchAutoNameConfig: "/api/project/auto-name",
-  setLinearAutoCreate: "/api/linear/auto-create",
-  setAutoRemoveOnMerge: "/api/github/auto-remove-on-merge",
-  pullMain: "/api/pull-main",
-  fetchCiLogs: "/api/ci-logs/:runId",
-  dismissNotification: "/api/notifications/:id/dismiss",
+/** Hub routes: absolute paths, global to the server (no project scope). */
+export const hubApiPaths = {
   fetchInstances: "/api/instances",
   fetchProjects: "/api/projects",
   addProject: "/api/projects",
@@ -107,6 +68,62 @@ export const apiPaths = {
   fetchAllProjectWorktrees: "/api/projects/worktrees",
   migrateProjects: "/api/projects/migrate",
   removeProject: "/api/projects/:prefix",
+} as const;
+
+/** Mount point of one project's routes on the shared server. */
+export const PROJECT_API_ROOT = "/api/projects";
+
+/** Base path of one project's routes: every `projectApiPaths` entry is relative to it. */
+export function projectApiBasePath(project: string): string {
+  return `${PROJECT_API_ROOT}/${encodeURIComponent(project)}`;
+}
+
+/** Project routes: paths relative to `projectApiBasePath(project)`. */
+export const projectApiPaths = {
+  fetchConfig: "/config",
+  fetchAvailableBranches: "/branches",
+  fetchBaseBranches: "/base-branches",
+  fetchProject: "/project",
+  fetchAgents: "/agents",
+  createAgent: "/agents",
+  updateAgent: "/agents/:id",
+  deleteAgent: "/agents/:id",
+  validateAgent: "/agents/validate",
+  attachAgentsWorktreeConversation: "/agents/worktrees/:name/attach",
+  fetchAgentsWorktreeConversationHistory: "/agents/worktrees/:name/history",
+  sendAgentsWorktreeConversationMessage: "/agents/worktrees/:name/messages",
+  interruptAgentsWorktreeConversation: "/agents/worktrees/:name/interrupt",
+  streamAgentsWorktreeConversation: "/ws/agents/worktrees/:name",
+  fetchWorktrees: "/worktrees",
+  createWorktree: "/worktrees",
+  removeWorktree: "/worktrees/:name",
+  openWorktree: "/worktrees/:name/open",
+  closeWorktree: "/worktrees/:name/close",
+  refreshWorktreeAgentTerminal: "/worktrees/:name/agent-terminal/refresh",
+  setWorktreeArchived: "/worktrees/:name/archive",
+  syncWorktreePrs: "/worktrees/:name/sync-prs",
+  postWorktreeToLinear: "/worktrees/:name/linear/post",
+  setWorktreeLabel: "/worktrees/:name/label",
+  setWorktreeProfile: "/worktrees/:name/profile",
+  sendWorktreePrompt: "/worktrees/:name/send",
+  createWorktreeTab: "/worktrees/:name/tabs",
+  selectWorktreeTab: "/worktrees/:name/tabs/:tabId/select",
+  deleteWorktreeTab: "/worktrees/:name/tabs/:tabId",
+  worktreePorts: "/worktrees/:name/ports",
+  deleteWorktreePort: "/worktrees/:name/ports/:label",
+  mergeWorktree: "/worktrees/:name/merge",
+  fetchWorktreeDiff: "/worktrees/:name/diff",
+  fetchLinearIssues: "/linear/issues",
+  fetchAutoNameConfig: "/project/auto-name",
+  setLinearAutoCreate: "/linear/auto-create",
+  setAutoRemoveOnMerge: "/github/auto-remove-on-merge",
+  pullMain: "/pull-main",
+  fetchCiLogs: "/ci-logs/:runId",
+  dismissNotification: "/notifications/:id/dismiss",
+  streamTerminal: "/ws/:worktree",
+  uploadWorktreeFiles: "/worktrees/:name/upload",
+  streamNotifications: "/notifications/stream",
+  postRuntimeEvent: "/runtime/events",
 } as const;
 
 const commonErrorResponses = {
@@ -118,17 +135,17 @@ const commonErrorResponses = {
   503: ErrorResponseSchema,
 } as const;
 
-export const apiContract = c.router({
+export const projectContract = c.router({
   fetchConfig: {
     method: "GET",
-    path: apiPaths.fetchConfig,
+    path: projectApiPaths.fetchConfig,
     responses: {
       200: AppConfigSchema,
     },
   },
   fetchAvailableBranches: {
     method: "GET",
-    path: apiPaths.fetchAvailableBranches,
+    path: projectApiPaths.fetchAvailableBranches,
     query: AvailableBranchesQuerySchema,
     responses: {
       200: BranchListResponseSchema,
@@ -138,7 +155,7 @@ export const apiContract = c.router({
   },
   fetchBaseBranches: {
     method: "GET",
-    path: apiPaths.fetchBaseBranches,
+    path: projectApiPaths.fetchBaseBranches,
     responses: {
       200: BranchListResponseSchema,
       500: ErrorResponseSchema,
@@ -146,7 +163,7 @@ export const apiContract = c.router({
   },
   fetchProject: {
     method: "GET",
-    path: apiPaths.fetchProject,
+    path: projectApiPaths.fetchProject,
     responses: {
       200: ProjectSnapshotSchema,
       500: ErrorResponseSchema,
@@ -155,7 +172,7 @@ export const apiContract = c.router({
   },
   fetchAgents: {
     method: "GET",
-    path: apiPaths.fetchAgents,
+    path: projectApiPaths.fetchAgents,
     responses: {
       200: AgentListResponseSchema,
       500: ErrorResponseSchema,
@@ -163,7 +180,7 @@ export const apiContract = c.router({
   },
   createAgent: {
     method: "POST",
-    path: apiPaths.createAgent,
+    path: projectApiPaths.createAgent,
     body: UpsertCustomAgentRequestSchema,
     responses: {
       200: AgentResponseSchema,
@@ -174,7 +191,7 @@ export const apiContract = c.router({
   },
   updateAgent: {
     method: "PUT",
-    path: apiPaths.updateAgent,
+    path: projectApiPaths.updateAgent,
     pathParams: AgentIdParamsSchema,
     body: UpsertCustomAgentRequestSchema,
     responses: {
@@ -187,7 +204,7 @@ export const apiContract = c.router({
   },
   deleteAgent: {
     method: "DELETE",
-    path: apiPaths.deleteAgent,
+    path: projectApiPaths.deleteAgent,
     pathParams: AgentIdParamsSchema,
     body: c.noBody(),
     responses: {
@@ -199,7 +216,7 @@ export const apiContract = c.router({
   },
   validateAgent: {
     method: "POST",
-    path: apiPaths.validateAgent,
+    path: projectApiPaths.validateAgent,
     body: UpsertCustomAgentRequestSchema,
     responses: {
       200: ValidateCustomAgentResponseSchema,
@@ -209,7 +226,7 @@ export const apiContract = c.router({
   },
   attachAgentsWorktreeConversation: {
     method: "POST",
-    path: apiPaths.attachAgentsWorktreeConversation,
+    path: projectApiPaths.attachAgentsWorktreeConversation,
     pathParams: WorktreeNameParamsSchema,
     body: c.noBody(),
     responses: {
@@ -219,7 +236,7 @@ export const apiContract = c.router({
   },
   fetchAgentsWorktreeConversationHistory: {
     method: "GET",
-    path: apiPaths.fetchAgentsWorktreeConversationHistory,
+    path: projectApiPaths.fetchAgentsWorktreeConversationHistory,
     pathParams: WorktreeNameParamsSchema,
     responses: {
       200: AgentsUiWorktreeConversationResponseSchema,
@@ -228,7 +245,7 @@ export const apiContract = c.router({
   },
   sendAgentsWorktreeConversationMessage: {
     method: "POST",
-    path: apiPaths.sendAgentsWorktreeConversationMessage,
+    path: projectApiPaths.sendAgentsWorktreeConversationMessage,
     pathParams: WorktreeNameParamsSchema,
     body: AgentsSendMessageRequestSchema,
     responses: {
@@ -238,7 +255,7 @@ export const apiContract = c.router({
   },
   interruptAgentsWorktreeConversation: {
     method: "POST",
-    path: apiPaths.interruptAgentsWorktreeConversation,
+    path: projectApiPaths.interruptAgentsWorktreeConversation,
     pathParams: WorktreeNameParamsSchema,
     body: c.noBody(),
     responses: {
@@ -248,7 +265,7 @@ export const apiContract = c.router({
   },
   fetchWorktrees: {
     method: "GET",
-    path: apiPaths.fetchWorktrees,
+    path: projectApiPaths.fetchWorktrees,
     responses: {
       200: WorktreeListResponseSchema,
       500: ErrorResponseSchema,
@@ -257,7 +274,7 @@ export const apiContract = c.router({
   },
   createWorktree: {
     method: "POST",
-    path: apiPaths.createWorktree,
+    path: projectApiPaths.createWorktree,
     body: CreateWorktreeRequestSchema,
     responses: {
       201: CreateWorktreeResponseSchema,
@@ -266,7 +283,7 @@ export const apiContract = c.router({
   },
   removeWorktree: {
     method: "DELETE",
-    path: apiPaths.removeWorktree,
+    path: projectApiPaths.removeWorktree,
     pathParams: WorktreeNameParamsSchema,
     responses: {
       200: OkResponseSchema,
@@ -275,7 +292,7 @@ export const apiContract = c.router({
   },
   openWorktree: {
     method: "POST",
-    path: apiPaths.openWorktree,
+    path: projectApiPaths.openWorktree,
     pathParams: WorktreeNameParamsSchema,
     body: OpenWorktreeRequestSchema,
     responses: {
@@ -285,7 +302,7 @@ export const apiContract = c.router({
   },
   closeWorktree: {
     method: "POST",
-    path: apiPaths.closeWorktree,
+    path: projectApiPaths.closeWorktree,
     pathParams: WorktreeNameParamsSchema,
     body: c.noBody(),
     responses: {
@@ -295,7 +312,7 @@ export const apiContract = c.router({
   },
   refreshWorktreeAgentTerminal: {
     method: "POST",
-    path: apiPaths.refreshWorktreeAgentTerminal,
+    path: projectApiPaths.refreshWorktreeAgentTerminal,
     pathParams: WorktreeNameParamsSchema,
     body: c.noBody(),
     responses: {
@@ -305,7 +322,7 @@ export const apiContract = c.router({
   },
   setWorktreeArchived: {
     method: "PUT",
-    path: apiPaths.setWorktreeArchived,
+    path: projectApiPaths.setWorktreeArchived,
     pathParams: WorktreeNameParamsSchema,
     body: SetWorktreeArchivedRequestSchema,
     responses: {
@@ -315,7 +332,7 @@ export const apiContract = c.router({
   },
   postWorktreeToLinear: {
     method: "POST",
-    path: apiPaths.postWorktreeToLinear,
+    path: projectApiPaths.postWorktreeToLinear,
     pathParams: WorktreeNameParamsSchema,
     body: PostWorktreeToLinearRequestSchema,
     responses: {
@@ -325,7 +342,7 @@ export const apiContract = c.router({
   },
   syncWorktreePrs: {
     method: "POST",
-    path: apiPaths.syncWorktreePrs,
+    path: projectApiPaths.syncWorktreePrs,
     pathParams: WorktreeNameParamsSchema,
     body: c.noBody(),
     responses: {
@@ -335,7 +352,7 @@ export const apiContract = c.router({
   },
   setWorktreeLabel: {
     method: "PUT",
-    path: apiPaths.setWorktreeLabel,
+    path: projectApiPaths.setWorktreeLabel,
     pathParams: WorktreeNameParamsSchema,
     body: SetWorktreeLabelRequestSchema,
     responses: {
@@ -345,7 +362,7 @@ export const apiContract = c.router({
   },
   setWorktreeProfile: {
     method: "PUT",
-    path: apiPaths.setWorktreeProfile,
+    path: projectApiPaths.setWorktreeProfile,
     pathParams: WorktreeNameParamsSchema,
     body: SetWorktreeProfileRequestSchema,
     responses: {
@@ -355,7 +372,7 @@ export const apiContract = c.router({
   },
   sendWorktreePrompt: {
     method: "POST",
-    path: apiPaths.sendWorktreePrompt,
+    path: projectApiPaths.sendWorktreePrompt,
     pathParams: WorktreeNameParamsSchema,
     body: SendWorktreePromptRequestSchema,
     responses: {
@@ -365,7 +382,7 @@ export const apiContract = c.router({
   },
   createWorktreeTab: {
     method: "POST",
-    path: apiPaths.createWorktreeTab,
+    path: projectApiPaths.createWorktreeTab,
     pathParams: WorktreeNameParamsSchema,
     body: c.noBody(),
     responses: {
@@ -375,7 +392,7 @@ export const apiContract = c.router({
   },
   selectWorktreeTab: {
     method: "POST",
-    path: apiPaths.selectWorktreeTab,
+    path: projectApiPaths.selectWorktreeTab,
     pathParams: WorktreeTabParamsSchema,
     body: c.noBody(),
     responses: {
@@ -385,7 +402,7 @@ export const apiContract = c.router({
   },
   deleteWorktreeTab: {
     method: "DELETE",
-    path: apiPaths.deleteWorktreeTab,
+    path: projectApiPaths.deleteWorktreeTab,
     pathParams: WorktreeTabParamsSchema,
     responses: {
       200: OkResponseSchema,
@@ -394,7 +411,7 @@ export const apiContract = c.router({
   },
   registerWorktreePort: {
     method: "POST",
-    path: apiPaths.worktreePorts,
+    path: projectApiPaths.worktreePorts,
     pathParams: WorktreeNameParamsSchema,
     body: RegisterWorktreePortRequestSchema,
     responses: {
@@ -404,7 +421,7 @@ export const apiContract = c.router({
   },
   fetchWorktreePorts: {
     method: "GET",
-    path: apiPaths.worktreePorts,
+    path: projectApiPaths.worktreePorts,
     pathParams: WorktreeNameParamsSchema,
     responses: {
       200: WorktreePortListResponseSchema,
@@ -413,7 +430,7 @@ export const apiContract = c.router({
   },
   deleteWorktreePort: {
     method: "DELETE",
-    path: apiPaths.deleteWorktreePort,
+    path: projectApiPaths.deleteWorktreePort,
     pathParams: WorktreePortParamsSchema,
     responses: {
       200: OkResponseSchema,
@@ -422,7 +439,7 @@ export const apiContract = c.router({
   },
   mergeWorktree: {
     method: "POST",
-    path: apiPaths.mergeWorktree,
+    path: projectApiPaths.mergeWorktree,
     pathParams: WorktreeNameParamsSchema,
     body: c.noBody(),
     responses: {
@@ -432,7 +449,7 @@ export const apiContract = c.router({
   },
   fetchWorktreeDiff: {
     method: "GET",
-    path: apiPaths.fetchWorktreeDiff,
+    path: projectApiPaths.fetchWorktreeDiff,
     pathParams: WorktreeNameParamsSchema,
     responses: {
       200: WorktreeDiffResponseSchema,
@@ -441,7 +458,7 @@ export const apiContract = c.router({
   },
   fetchLinearIssues: {
     method: "GET",
-    path: apiPaths.fetchLinearIssues,
+    path: projectApiPaths.fetchLinearIssues,
     responses: {
       200: LinearIssuesResponseSchema,
       500: ErrorResponseSchema,
@@ -450,7 +467,7 @@ export const apiContract = c.router({
   },
   fetchAutoNameConfig: {
     method: "GET",
-    path: apiPaths.fetchAutoNameConfig,
+    path: projectApiPaths.fetchAutoNameConfig,
     responses: {
       200: AutoNameConfigResponseSchema,
       500: ErrorResponseSchema,
@@ -458,7 +475,7 @@ export const apiContract = c.router({
   },
   setLinearAutoCreate: {
     method: "PUT",
-    path: apiPaths.setLinearAutoCreate,
+    path: projectApiPaths.setLinearAutoCreate,
     body: ToggleEnabledRequestSchema,
     responses: {
       200: EnabledResponseSchema,
@@ -467,7 +484,7 @@ export const apiContract = c.router({
   },
   setAutoRemoveOnMerge: {
     method: "PUT",
-    path: apiPaths.setAutoRemoveOnMerge,
+    path: projectApiPaths.setAutoRemoveOnMerge,
     body: ToggleEnabledRequestSchema,
     responses: {
       200: EnabledResponseSchema,
@@ -476,7 +493,7 @@ export const apiContract = c.router({
   },
   pullMain: {
     method: "POST",
-    path: apiPaths.pullMain,
+    path: projectApiPaths.pullMain,
     body: PullMainRequestSchema,
     responses: {
       200: PullMainResponseSchema,
@@ -485,7 +502,7 @@ export const apiContract = c.router({
   },
   fetchCiLogs: {
     method: "GET",
-    path: apiPaths.fetchCiLogs,
+    path: projectApiPaths.fetchCiLogs,
     pathParams: RunIdParamsSchema,
     responses: {
       200: CiLogsResponseSchema,
@@ -494,7 +511,7 @@ export const apiContract = c.router({
   },
   dismissNotification: {
     method: "POST",
-    path: apiPaths.dismissNotification,
+    path: projectApiPaths.dismissNotification,
     pathParams: NotificationIdParamsSchema,
     body: c.noBody(),
     responses: {
@@ -503,9 +520,14 @@ export const apiContract = c.router({
       404: ErrorResponseSchema,
     },
   },
+}, {
+  strictStatusCodes: true,
+});
+
+export const hubContract = c.router({
   fetchInstances: {
     method: "GET",
-    path: apiPaths.fetchInstances,
+    path: hubApiPaths.fetchInstances,
     responses: {
       200: InstancesResponseSchema,
       500: ErrorResponseSchema,
@@ -513,7 +535,7 @@ export const apiContract = c.router({
   },
   fetchProjects: {
     method: "GET",
-    path: apiPaths.fetchProjects,
+    path: hubApiPaths.fetchProjects,
     responses: {
       200: ProjectsResponseSchema,
       500: ErrorResponseSchema,
@@ -521,7 +543,7 @@ export const apiContract = c.router({
   },
   addProject: {
     method: "POST",
-    path: apiPaths.addProject,
+    path: hubApiPaths.addProject,
     body: AddProjectRequestSchema,
     responses: {
       200: AddProjectResponseSchema,
@@ -531,7 +553,7 @@ export const apiContract = c.router({
   },
   fetchAllProjectWorktrees: {
     method: "GET",
-    path: apiPaths.fetchAllProjectWorktrees,
+    path: hubApiPaths.fetchAllProjectWorktrees,
     responses: {
       200: AllProjectWorktreesResponseSchema,
       500: ErrorResponseSchema,
@@ -539,7 +561,7 @@ export const apiContract = c.router({
   },
   projectInits: {
     method: "GET",
-    path: apiPaths.projectInits,
+    path: hubApiPaths.projectInits,
     responses: {
       200: ProjectInitsResponseSchema,
       500: ErrorResponseSchema,
@@ -547,7 +569,7 @@ export const apiContract = c.router({
   },
   migrateProjects: {
     method: "POST",
-    path: apiPaths.migrateProjects,
+    path: hubApiPaths.migrateProjects,
     body: MigrateProjectsRequestSchema,
     responses: {
       200: MigrateProjectsResponseSchema,
@@ -557,7 +579,7 @@ export const apiContract = c.router({
   },
   removeProject: {
     method: "DELETE",
-    path: apiPaths.removeProject,
+    path: hubApiPaths.removeProject,
     pathParams: ProjectPrefixParamsSchema,
     body: c.noBody(),
     responses: {

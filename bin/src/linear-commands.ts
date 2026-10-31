@@ -1,5 +1,5 @@
-import { createApi, parseLinearTarget, type PostWorktreeToLinearTarget } from "@webmux/api-contract";
-import { CommandUsageError, formatServerError, resolveProjectBaseUrl } from "./shared";
+import { createProjectApi, parseLinearTarget, type PostWorktreeToLinearTarget } from "@webmux/api-contract";
+import { CommandUsageError, formatServerError, resolveServedProjectPrefix, serverOrigin } from "./shared";
 
 export interface ParsedLinearPostCommand {
   branch: string;
@@ -127,7 +127,7 @@ export async function runLinearCommand(args: string[], port: number): Promise<nu
   }
 
   try {
-    const api = createApi(await resolveProjectBaseUrl(port));
+    const api = createProjectApi(await resolveServedProjectPrefix(port), { origin: serverOrigin(port) });
     const response = await api.postWorktreeToLinear({
       params: { name: parsed.post.branch },
       body: { target: parsed.post.target },

@@ -4,8 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  * `apiBase` is derived from `window.location.pathname` at module load, so each
  * case sets the URL and re-imports `api.ts` fresh. Regression guard for the
  * notifications SSE + file-upload calls, which must be scoped under the active
- * project's `/<prefix>` like every other request — otherwise they fall through
- * to the hub and get `index.html` back instead of the real endpoint.
+ * project's `/api/projects/<prefix>` like every other request — otherwise they
+ * fall through to the SPA and get `index.html` back instead of the real endpoint.
  */
 async function loadApiAt(pathname: string): Promise<typeof import("./api")> {
   window.history.replaceState({}, "", pathname);
@@ -20,8 +20,7 @@ afterEach(() => {
 
 describe("project-prefixed network calls", () => {
   it("derives apiBase from the first path segment", async () => {
-    expect((await loadApiAt("/myproject/")).apiBase).toBe("/myproject");
-    expect((await loadApiAt("/")).apiBase).toBe("");
+    expect((await loadApiAt("/myproject/")).apiBase).toBe("/api/projects/myproject");
   });
 
   it("subscribeNotifications opens the SSE stream under the active prefix", async () => {
@@ -41,7 +40,24 @@ describe("project-prefixed network calls", () => {
       () => {},
     );
 
-    expect(urls).toEqual(["/myproject/api/notifications/stream"]);
+    expect(urls).toEqual(["/api/projects/myproject/notifications/stream"]);
+  });
+
+  it("connectWorktreeConversationStream opens the agents socket under the active prefix", async () => {
+    const urls: string[] = [];
+    class MockWebSocket {
+      constructor(url: string) {
+        urls.push(url);
+      }
+      addEventListener(): void {}
+      close(): void {}
+    }
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    const api = await loadApiAt("/myproject/");
+    api.connectWorktreeConversationStream("feat/x", { onEvent: () => {}, onError: () => {} });
+
+    expect(urls).toEqual([`ws://${window.location.host}/api/projects/myproject/ws/agents/worktrees/feat%2Fx`]);
   });
 
   it("uploadFiles posts under the active prefix", async () => {
@@ -56,7 +72,7 @@ describe("project-prefixed network calls", () => {
     await api.uploadFiles("feat/x", [new File(["a"], "a.txt")]);
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/myproject/api/worktrees/feat%2Fx/upload",
+      "/api/projects/myproject/worktrees/feat%2Fx/upload",
       expect.objectContaining({ method: "POST" }),
     );
   });
