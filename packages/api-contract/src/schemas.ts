@@ -334,11 +334,19 @@ export const WorktreeCreationStateSchema = z.object({
 
 export const AppNotificationSchema = z.object({
   id: z.number(),
+  /** Prefix of the project that emitted it; ids are only unique per project. */
+  project: z.string(),
   branch: z.string(),
   type: z.enum(["agent_stopped", "pr_opened", "runtime_error", "worktree_auto_removed"]),
   message: z.string(),
   url: z.string().optional(),
   timestamp: z.number(),
+});
+
+/** Payload of a `dismiss` event on the hub notification stream. */
+export const NotificationDismissalSchema = z.object({
+  project: z.string(),
+  id: z.number(),
 });
 
 export const WorktreeTabSchema = z.object({
@@ -775,6 +783,7 @@ export type LinearIssuesResponse = z.infer<typeof LinearIssuesResponseSchema>;
 export type AutoNameConfigResponse = z.infer<typeof AutoNameConfigResponseSchema>;
 export type WorktreeCreationState = z.infer<typeof WorktreeCreationStateSchema>;
 export type AppNotification = z.infer<typeof AppNotificationSchema>;
+export type NotificationDismissal = z.infer<typeof NotificationDismissalSchema>;
 export type ProjectWorktreeSnapshot = z.infer<typeof ProjectWorktreeSnapshotSchema>;
 export type WorktreeTab = z.infer<typeof WorktreeTabSchema>;
 export type WorktreeTabParams = z.infer<typeof WorktreeTabParamsSchema>;

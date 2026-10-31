@@ -68,6 +68,7 @@ export const hubApiPaths = {
   fetchAllProjectWorktrees: "/api/projects/worktrees",
   migrateProjects: "/api/projects/migrate",
   removeProject: "/api/projects/:prefix",
+  streamNotifications: "/api/notifications/stream",
 } as const;
 
 /** Mount point of one project's routes on the shared server. */
@@ -123,7 +124,6 @@ export const projectApiPaths = {
   dismissNotification: "/notifications/:id/dismiss",
   streamTerminal: "/ws/:worktree",
   uploadWorktreeFiles: "/worktrees/:name/upload",
-  streamNotifications: "/notifications/stream",
   postRuntimeEvent: "/runtime/events",
 } as const;
 

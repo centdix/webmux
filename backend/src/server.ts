@@ -74,6 +74,7 @@ import {
 import { isRecord, isStringArray } from "./lib/type-guards";
 import { parseJsonBody, parseParams, parseQuery } from "./api-validation";
 import { hasRecentDashboardActivity, touchDashboardActivity } from "./services/dashboard-activity";
+import { NotificationHub } from "./services/notification-hub-service";
 import { buildArchivedWorktreePathSet, normalizeArchivePath } from "./services/archive-service";
 import { resolveAgentChatSupport, resolveAgentTerminalSubmitDelayMs } from "./services/agent-chat-service";
 import { validateCustomAgentInput } from "./services/agent-validation-service";
@@ -2280,10 +2281,6 @@ function parseAgentIdParam(params: Record<string, string>):
       },
     },
 
-    [projectApiPaths.streamNotifications]: {
-      GET: () => runtimeNotifications.stream(),
-    },
-
     [projectApiPaths.dismissNotification]: {
       POST: (req) => {
         const parsed = parseNotificationIdParam(req.params);
@@ -2493,6 +2490,8 @@ const instanceRegistry = createInstanceRegistry();
 // Tracks on-add project setups (scaffold config → analyze with Claude → ready)
 // so the UI + CLI can show progress. Hub-level: one per machine, keyed by repo.
 const projectInitTracker = new ProjectInitTracker();
+// Merged notification stream of every served project (`GET /api/notifications/stream`).
+const notificationHub = new NotificationHub();
 let manager: ProjectManager;
 let server: Server<WsData>;
 let BOUND_PORT = 0;
@@ -2720,6 +2719,9 @@ function buildServeRoutes(): ProjectRoutes {
     [hubApiPaths.fetchInstances]: {
       GET: () => apiListInstances(),
     },
+    [hubApiPaths.streamNotifications]: {
+      GET: () => notificationHub.stream(),
+    },
   };
   return assembleServeRoutes(hubRoutes, apps.values());
 }
@@ -2858,11 +2860,13 @@ manager = new ProjectManager({
   createLoops: (project): ProjectLoopController => {
     const app = createProjectApp(project.runtime, project.prefix);
     apps.set(project.prefix, app);
+    notificationHub.addSource(project.runtime.runtimeNotifications);
     return {
       startLight: (): void => app.startLight(),
       stopLight: (): void => {
         app.stopLight();
         apps.delete(project.prefix);
+        notificationHub.removeSource(project.prefix);
       },
       startHeavy: (): void => {},
       stopHeavy: (): void => {},

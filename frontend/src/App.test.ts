@@ -102,7 +102,6 @@ vi.mock("./lib/api", () => ({
   api: {
     closeWorktree: vi.fn(),
     createWorktree: vi.fn(),
-    dismissNotification: vi.fn(),
     fetchAvailableBranches: vi.fn(),
     fetchBaseBranches: vi.fn(),
     fetchCiLogs: vi.fn(),
@@ -117,6 +116,7 @@ vi.mock("./lib/api", () => ({
   },
   attachWorktreeConversation: vi.fn(),
   connectWorktreeConversationStream: vi.fn(),
+  dismissNotification: vi.fn(),
   fetchWorktreeConversationHistory: vi.fn(),
   fetchWorktrees: vi.fn(),
   interruptWorktreeConversation: vi.fn(),
@@ -140,6 +140,7 @@ import {
   api,
   attachWorktreeConversation,
   connectWorktreeConversationStream,
+  dismissNotification,
   fetchWorktrees,
   postWorktreeToLinear,
   refreshWorktreeAgentTerminal,
@@ -314,6 +315,7 @@ function createAppNotification(
 ): AppNotification {
   return {
     id: 1,
+    project: "webmux",
     branch: "feature/toast",
     type: "runtime_error",
     message: "Notification text",
@@ -446,7 +448,7 @@ describe("App create selection", () => {
     vi.mocked(api.removeWorktree).mockResolvedValue({ ok: true });
     vi.mocked(api.setWorktreeArchived).mockResolvedValue({ ok: true, archived: true });
     vi.mocked(api.pullMain).mockResolvedValue({ status: "updated" });
-    vi.mocked(api.dismissNotification).mockResolvedValue({ ok: true });
+    vi.mocked(dismissNotification).mockResolvedValue(undefined);
     vi.mocked(api.fetchCiLogs).mockResolvedValue({ logs: "" });
     vi.mocked(api.sendWorktreePrompt).mockResolvedValue({ ok: true });
     vi.mocked(connectWorktreeConversationStream).mockReturnValue(() => {});
@@ -568,7 +570,7 @@ describe("App create selection", () => {
     expect(dismissButton).toBeDefined();
     await fireEvent.click(dismissButton!);
 
-    expect(api.dismissNotification).toHaveBeenCalledWith({ params: { id: 42 } });
+    expect(dismissNotification).toHaveBeenCalledWith(expect.objectContaining({ project: "webmux", id: 42 }));
   });
 
   it("shows a success toast when pulling main succeeds", async () => {

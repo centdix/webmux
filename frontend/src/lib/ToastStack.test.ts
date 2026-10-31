@@ -28,6 +28,7 @@ function createNotification(
 ): AppNotification {
   return {
     id: 1,
+    project: "webmux",
     branch: "feature/toast-sizing",
     type: "runtime_error",
     message: "Notification text",

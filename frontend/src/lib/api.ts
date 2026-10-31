@@ -1,7 +1,10 @@
 import {
   AgentsUiConversationEventSchema,
+  AppNotificationSchema,
+  NotificationDismissalSchema,
   createHubApi,
   createProjectApi,
+  hubApiPaths,
   projectApiBasePath,
   projectApiPaths,
 } from "@webmux/api-contract";
@@ -316,35 +319,42 @@ export async function ensureProjectPrefix(): Promise<ProjectBootstrap> {
   return "redirecting";
 }
 
+/** Subscribe to the hub's merged notification stream. Until the dashboard is
+ *  multi-project, only the active project's notifications are delivered. */
 export function subscribeNotifications(
   onNotification: (n: AppNotification) => void,
   onDismiss: (id: number) => void,
   onInitial?: (n: AppNotification) => void,
 ): () => void {
-  const es = new EventSource(`${apiBase}${projectApiPaths.streamNotifications}`);
+  const es = new EventSource(hubApiPaths.streamNotifications);
 
   es.addEventListener("initial", (e: MessageEvent) => {
     try {
-      const n = JSON.parse(e.data as string) as AppNotification;
-      onInitial?.(n);
+      const n = AppNotificationSchema.parse(JSON.parse(e.data));
+      if (n.project === activePrefix) onInitial?.(n);
     } catch { /* ignore malformed SSE data */ }
   });
 
   es.addEventListener("notification", (e: MessageEvent) => {
     try {
-      const n = JSON.parse(e.data as string) as AppNotification;
-      onNotification(n);
+      const n = AppNotificationSchema.parse(JSON.parse(e.data));
+      if (n.project === activePrefix) onNotification(n);
     } catch { /* ignore malformed SSE data */ }
   });
 
   es.addEventListener("dismiss", (e: MessageEvent) => {
     try {
-      const { id } = JSON.parse(e.data as string) as { id: number };
-      onDismiss(id);
+      const { project, id } = NotificationDismissalSchema.parse(JSON.parse(e.data));
+      if (project === activePrefix) onDismiss(id);
     } catch { /* ignore malformed SSE data */ }
   });
 
   return () => es.close();
+}
+
+/** Dismiss on the project that emitted the notification (ids are per project). */
+export async function dismissNotification(notification: AppNotification): Promise<void> {
+  await createProjectApi(notification.project).dismissNotification({ params: { id: notification.id } });
 }
 
 export async function uploadFiles(worktree: string, files: File[]): Promise<FileUploadResult> {

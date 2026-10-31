@@ -74,6 +74,7 @@
     setWorktreeLabel,
     setWorktreeProfile,
     subscribeNotifications,
+    dismissNotification,
   } from "./lib/api";
   import TabBar from "./lib/TabBar.svelte";
 
@@ -316,8 +317,9 @@
   }
 
   function handleDismissNotification(id: number): void {
+    const notification = notifications.find((n) => n.id === id);
     notifications = notifications.filter((n) => n.id !== id);
-    api.dismissNotification({ params: { id } }).catch(() => {});
+    if (notification) dismissNotification(notification).catch(() => {});
   }
 
   function handleSseDismiss(id: number): void {

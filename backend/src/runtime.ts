@@ -81,7 +81,7 @@ export function createWebmuxRuntime(options: WebmuxRuntimeOptions): WebmuxRuntim
   const autoName = new AutoNameService();
   const projectRuntime = new ProjectRuntime();
   const worktreeCreationTracker = new WorktreeCreationTracker();
-  const runtimeNotifications = new RuntimeNotificationService();
+  const runtimeNotifications = new RuntimeNotificationService(options.prefix ?? "");
   const reconciliationService = new ReconciliationService({
     git,
     tmux,

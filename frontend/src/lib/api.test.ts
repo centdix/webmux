@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AppNotification } from "./types";
 
 /**
  * `apiBase` is derived from `window.location.pathname` at module load, so each
@@ -21,26 +22,6 @@ afterEach(() => {
 describe("project-prefixed network calls", () => {
   it("derives apiBase from the first path segment", async () => {
     expect((await loadApiAt("/myproject/")).apiBase).toBe("/api/projects/myproject");
-  });
-
-  it("subscribeNotifications opens the SSE stream under the active prefix", async () => {
-    const urls: string[] = [];
-    class MockEventSource {
-      constructor(url: string) {
-        urls.push(url);
-      }
-      addEventListener(): void {}
-      close(): void {}
-    }
-    vi.stubGlobal("EventSource", MockEventSource);
-
-    const api = await loadApiAt("/myproject/");
-    api.subscribeNotifications(
-      () => {},
-      () => {},
-    );
-
-    expect(urls).toEqual(["/api/projects/myproject/notifications/stream"]);
   });
 
   it("connectWorktreeConversationStream opens the agents socket under the active prefix", async () => {
@@ -154,5 +135,76 @@ describe("setUpProject", () => {
 
     const api = await loadApiAt("/x/");
     await expect(api.setUpProject("/repo/z", () => {})).rejects.toThrow("not a git repo");
+  });
+});
+
+describe("notifications", () => {
+  type Listener = (e: MessageEvent) => void;
+
+  function stubEventSource(): { urls: string[]; emit: (event: string, data: unknown) => void } {
+    const urls: string[] = [];
+    const listeners = new Map<string, Listener>();
+    class MockEventSource {
+      constructor(url: string) {
+        urls.push(url);
+      }
+      addEventListener(event: string, listener: Listener): void {
+        listeners.set(event, listener);
+      }
+      close(): void {}
+    }
+    vi.stubGlobal("EventSource", MockEventSource);
+    return {
+      urls,
+      emit: (event, data) => listeners.get(event)?.(new MessageEvent(event, { data: JSON.stringify(data) })),
+    };
+  }
+
+  function notification(project: string, id: number): AppNotification {
+    return { id, project, branch: "main", type: "agent_stopped", message: "Agent stopped on main", timestamp: 1 };
+  }
+
+  it("subscribeNotifications opens the hub stream", async () => {
+    const source = stubEventSource();
+    const api = await loadApiAt("/myproject/");
+    api.subscribeNotifications(() => {}, () => {});
+
+    expect(source.urls).toEqual(["/api/notifications/stream"]);
+  });
+
+  it("subscribeNotifications only delivers the active project's events", async () => {
+    const source = stubEventSource();
+    const api = await loadApiAt("/myproject/");
+    const initial: AppNotification[] = [];
+    const live: AppNotification[] = [];
+    const dismissed: number[] = [];
+    api.subscribeNotifications((n) => live.push(n), (id) => dismissed.push(id), (n) => initial.push(n));
+
+    source.emit("initial", notification("other", 1));
+    source.emit("initial", notification("myproject", 2));
+    source.emit("notification", notification("other", 3));
+    source.emit("notification", notification("myproject", 4));
+    source.emit("dismiss", { project: "other", id: 4 });
+    source.emit("dismiss", { project: "myproject", id: 2 });
+
+    expect(initial.map((n) => n.id)).toEqual([2]);
+    expect(live.map((n) => n.id)).toEqual([4]);
+    expect(dismissed).toEqual([2]);
+  });
+
+  it("dismissNotification posts to the notification's own project", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const api = await loadApiAt("/myproject/");
+    await api.dismissNotification(notification("other", 7));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/projects/other/notifications/7/dismiss",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 });
