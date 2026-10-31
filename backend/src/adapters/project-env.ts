@@ -5,11 +5,13 @@
  *  server inherits webmux's env from whatever process first starts it) they leak
  *  into every session and pane of every project. WEBMUX_PROJECT_ENV_KEYS itself
  *  is stripped too — it only holds key *names*, not values, but there is no
- *  reason to let a webmux-internal marker reach the global env either. */
+ *  reason to let a webmux-internal marker reach the global env either. PORT is
+ *  always stripped: it is webmux's own server port, and leaking it would make
+ *  every dev server started without `webmux port` try to bind it. */
 export function leakedProjectEnvKeys(): Set<string> {
   const raw = Bun.env.WEBMUX_PROJECT_ENV_KEYS;
-  if (!raw) return new Set();
-  const keys = new Set<string>(["WEBMUX_PROJECT_ENV_KEYS"]);
+  if (!raw) return new Set(["PORT"]);
+  const keys = new Set<string>(["PORT", "WEBMUX_PROJECT_ENV_KEYS"]);
   for (const key of raw.split(",").map((entry) => entry.trim()).filter(Boolean)) {
     keys.add(key);
   }

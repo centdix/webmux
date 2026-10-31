@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { log } from "../lib/log";
+import { stripProjectEnv } from "./project-env";
 
 export interface RunLifecycleHookInput {
   command: string;
@@ -58,7 +59,7 @@ export class BunLifecycleHookRunner implements LifecycleHookRunner {
     const proc = Bun.spawn(cmd, {
       cwd: input.cwd,
       env: {
-        ...Bun.env,
+        ...stripProjectEnv(Bun.env),
         ...input.env,
       },
       stdout: "pipe",
