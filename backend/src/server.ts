@@ -159,6 +159,7 @@ const portRegistrationService = new PortRegistrationService({
   portProbe: new BunPortProbe(),
   canBind,
 });
+portRegistrationService.restartTtls();
 const STATIC_DIR = Bun.env.WEBMUX_STATIC_DIR || "";
 /** Strict check: is `dir` itself inside a git work tree? Unlike
  *  git.resolveRepoRoot it never scans child directories, so a non-repo path is
@@ -1781,14 +1782,14 @@ async function resolveWorktreeId(name: string): Promise<string | null> {
 async function apiRegisterWorktreePort(name: string, req: Request): Promise<Response> {
   const parsed = await parseJsonBody(req, RegisterWorktreePortRequestSchema);
   if (!parsed.ok) return parsed.response;
-  const { label, port } = parsed.data;
+  const { label, port, keep } = parsed.data;
   if (!isValidPortLabel(label)) return errorResponse(`Invalid port label: ${label}`, 400);
   const worktreeId = await resolveWorktreeId(name);
   if (!worktreeId) return errorResponse(`Worktree not found: ${name}`, 404);
 
-  const result = portRegistrationService.register({ projectDir: PROJECT_DIR, worktreeId, label }, port);
+  const result = portRegistrationService.register({ projectDir: PROJECT_DIR, worktreeId, label }, { port, keep });
   if (!result.ok) return errorResponse(result.error, result.reason === "conflict" ? 409 : 503);
-  log.info(`[worktree:port] name=${name} label=${label} port=${result.data.port}`);
+  log.info(`[worktree:port] name=${name} label=${label} port=${result.data.port} keep=${result.data.keep}`);
   return jsonResponse(result.data);
 }
 

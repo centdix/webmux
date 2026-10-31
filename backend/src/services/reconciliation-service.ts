@@ -19,7 +19,7 @@ import { mapWithConcurrency } from "../lib/async";
 import type { RegisteredPort } from "./port-registration-service";
 import { ProjectRuntime } from "./project-runtime";
 
-function makeUnmanagedWorktreeId(path: string): string {
+export function makeUnmanagedWorktreeId(path: string): string {
   return `unmanaged:${resolve(path)}`;
 }
 
@@ -74,7 +74,8 @@ async function buildServiceStates(
     name: entry.label,
     port: entry.port,
     running: await deps.portProbe.isListening(entry.port),
-    url: `http://localhost:${entry.port}`,
+    // No server-side URL: the dashboard links to its own hostname, which also works remotely.
+    url: null,
   })));
   return [...configured, ...registeredStates.filter((service) => service.running)];
 }

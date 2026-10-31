@@ -6,6 +6,7 @@ import {
   pickFreePort,
   PORT_RANGE_END,
   PORT_RANGE_START,
+  releaseWorktreeRegistrations,
   sameRegistrationKey,
   type PortRegistration,
   type PortRegistrationKey,
@@ -14,6 +15,14 @@ import {
 export interface RegisteredPort {
   label: string;
   port: number;
+  keep: boolean;
+}
+
+export interface RegisterPortOptions {
+  /** Pin this port instead of picking a free one. */
+  port?: number;
+  /** Exempt the registration from TTL expiry. Never cleared by a later register. */
+  keep?: boolean;
 }
 
 export interface RegisteredPortStatus extends RegisteredPort {
@@ -38,20 +47,29 @@ export class PortRegistrationService {
 
   constructor(private readonly deps: PortRegistrationServiceDependencies) {
     this.now = deps.now ?? Date.now;
-    // Restart grace: while webmux was down nothing bumped these, so restart every
-    // TTL from now instead of wiping registrations whose servers are still up.
+  }
+
+  /** Restart grace, for the server at startup: while webmux was down nothing bumped
+   *  these, so restart every TTL from now instead of wiping registrations whose
+   *  servers are still up. */
+  restartTtls(): void {
     const startedAt = this.now();
-    const entries = deps.registry.list();
+    const entries = this.deps.registry.list();
     if (entries.length > 0) {
-      deps.registry.replaceAll(entries.map((entry) => ({ ...entry, lastSeenRunningAt: startedAt })));
+      this.deps.registry.replaceAll(entries.map((entry) => ({ ...entry, lastSeenRunningAt: startedAt })));
     }
   }
 
-  register(key: PortRegistrationKey, requestedPort?: number): RegisterPortResult {
+  register(key: PortRegistrationKey, options: RegisterPortOptions = {}): RegisterPortResult {
+    const requestedPort = options.port;
     const entries = this.deps.registry.list();
     const existing = entries.find((entry) => sameRegistrationKey(entry, key));
+    const keep = existing?.keep === true || options.keep === true;
     if (existing && (requestedPort === undefined || requestedPort === existing.port)) {
-      return { ok: true, data: { label: existing.label, port: existing.port } };
+      if (keep !== existing.keep) {
+        this.deps.registry.replaceAll(entries.map((entry) => entry === existing ? { ...entry, keep } : entry));
+      }
+      return { ok: true, data: { label: existing.label, port: existing.port, keep } };
     }
 
     const others = entries.filter((entry) => !sameRegistrationKey(entry, key));
@@ -76,9 +94,9 @@ export class PortRegistrationService {
     }
 
     const now = this.now();
-    const registration: PortRegistration = { ...key, port, registeredAt: now, lastSeenRunningAt: now };
+    const registration: PortRegistration = { ...key, port, registeredAt: now, lastSeenRunningAt: now, keep };
     this.deps.registry.replaceAll([...others, registration]);
-    return { ok: true, data: { label: key.label, port } };
+    return { ok: true, data: { label: key.label, port, keep } };
   }
 
   unregister(key: PortRegistrationKey): boolean {
@@ -89,10 +107,17 @@ export class PortRegistrationService {
     return true;
   }
 
+  /** Release every registration of a removed worktree, kept ones included. */
+  releaseWorktree(projectDir: string, worktreeId: string): void {
+    const entries = this.deps.registry.list();
+    const next = releaseWorktreeRegistrations(entries, projectDir, worktreeId);
+    if (next.length !== entries.length) this.deps.registry.replaceAll(next);
+  }
+
   list(projectDir: string, worktreeId: string): RegisteredPort[] {
     return this.deps.registry.list()
       .filter((entry) => entry.projectDir === projectDir && entry.worktreeId === worktreeId)
-      .map((entry) => ({ label: entry.label, port: entry.port }));
+      .map((entry) => ({ label: entry.label, port: entry.port, keep: entry.keep }));
   }
 
   async listWithStatus(projectDir: string, worktreeId: string): Promise<RegisteredPortStatus[]> {

@@ -44,7 +44,7 @@ import {
   buildManagedShellCommand,
 } from "./agent-service";
 import { getAgentDefinition, type AgentDefinition } from "./agent-registry";
-import type { ReconciliationService } from "./reconciliation-service";
+import { makeUnmanagedWorktreeId, type ReconciliationService } from "./reconciliation-service";
 import { buildTmuxPaneSystemPrompt, ensureSessionLayout, isWorktreeOpen, planSessionLayout } from "./session-service";
 import { ArchiveStateService } from "./archive-state-service";
 import {
@@ -168,6 +168,8 @@ export interface LifecycleServiceDependencies {
   sessionDiscovery: SessionDiscoveryGateway;
   docker: DockerGateway;
   reconciliation: ReconciliationService;
+  /** Agent-registered ports (`webmux port`); a removed worktree releases all of its own. */
+  portRegistrations: { releaseWorktree(projectDir: string, worktreeId: string): void };
   hooks: LifecycleHookRunner;
   autoName: AutoNameGenerator;
   onCreateProgress?: (progress: CreateWorktreeProgress) => void | Promise<void>;
@@ -1342,6 +1344,10 @@ export class LifecycleService {
       this.deps.git,
     );
     await this.updateWorktreeArchivedState(resolved.entry.path, false);
+    this.deps.portRegistrations.releaseWorktree(
+      resolve(this.deps.projectRoot),
+      resolved.meta?.worktreeId ?? makeUnmanagedWorktreeId(resolved.entry.path),
+    );
 
     await this.deps.reconciliation.reconcile(this.deps.projectRoot, { force: true });
   }

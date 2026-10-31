@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { ProjectConfig } from "../domain/config";
 import { BunGitGateway, type GitGateway } from "../adapters/git";
 import type { LifecycleHookRunner, RunLifecycleHookInput } from "../adapters/hooks";
@@ -28,7 +28,10 @@ import {
   LifecycleError,
   LifecycleService,
   type CreateWorktreeProgress,
+  type LifecycleServiceDependencies,
 } from "../services/lifecycle-service";
+import { PortRegistrationService } from "../services/port-registration-service";
+import type { PortRegistration } from "../domain/port-registrations";
 
 function run(args: string[], cwd: string): string {
   const result = Bun.spawnSync(args, {
@@ -336,6 +339,7 @@ function makeLifecycleService(
   // `null` explicitly configures no control reporting (passing `undefined` would
   // fall back to the default below).
   controlBaseUrl: string | null = "http://127.0.0.1:5111",
+  portRegistrations: LifecycleServiceDependencies["portRegistrations"] = { releaseWorktree: () => {} },
 ): LifecycleService {
   const reconciliation = new ReconciliationService({
     config,
@@ -356,6 +360,7 @@ function makeLifecycleService(
     sessionDiscovery,
     docker,
     reconciliation,
+    portRegistrations,
     hooks,
     autoName,
     onCreateProgress: createCallbacks.onProgress,
@@ -1975,6 +1980,44 @@ describe("LifecycleService", () => {
     expect(hooks.calls.filter((call) => call.name === "preRemove")).toHaveLength(1);
     expect(new BunGitGateway().listWorktrees(repoRoot).some((entry) => entry.path === worktreePath)).toBe(false);
     expect(run(["git", "branch", "--list", "feature-dirty"], repoRoot)).toBe("");
+  });
+
+  it("releases every port the removed worktree registered, kept ones included", async () => {
+    const repoRoot = await initRepo();
+    const runtime = new ProjectRuntime();
+    const tmux = new FakeTmuxGateway();
+    let entries: PortRegistration[] = [];
+    const portRegistrations = new PortRegistrationService({
+      registry: { list: () => entries, replaceAll: (next) => { entries = next; } },
+      portProbe: new FakePortProbe(),
+      canBind: () => true,
+    });
+    const lifecycle = makeLifecycleService(
+      repoRoot,
+      tmux,
+      runtime,
+      new FakeDockerGateway(),
+      new FakeHookRunner(),
+      TEST_CONFIG,
+      new BunGitGateway(),
+      new FakeAutoNameService(),
+      {},
+      { listSessionIds: async () => [] },
+      "http://127.0.0.1:5111",
+      portRegistrations,
+    );
+
+    const removed = await lifecycle.createWorktree({ branch: "feature-ports-remove" });
+    const kept = await lifecycle.createWorktree({ branch: "feature-ports-kept" });
+    const projectDir = resolve(repoRoot);
+    portRegistrations.register({ projectDir, worktreeId: removed.worktreeId, label: "web" }, { keep: true });
+    portRegistrations.register({ projectDir, worktreeId: removed.worktreeId, label: "api" });
+    portRegistrations.register({ projectDir, worktreeId: kept.worktreeId, label: "web" });
+
+    await lifecycle.removeWorktree("feature-ports-remove");
+
+    expect(portRegistrations.list(projectDir, removed.worktreeId)).toEqual([]);
+    expect(portRegistrations.list(projectDir, kept.worktreeId)).toEqual([{ label: "web", port: 4102, keep: false }]);
   });
 
   it("force removes a worktree that is ahead of its upstream", async () => {

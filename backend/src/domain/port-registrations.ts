@@ -1,7 +1,8 @@
 /** A port an agent registered for a worktree with `webmux port <label>`, persisted
  *  in `~/.webmux/ports.json`. It lives only as long as something keeps listening on
  *  it: `lastSeenRunningAt` starts at registration time and is bumped by every sweep
- *  that finds the port listening; entries idle past the TTL are dropped. */
+ *  that finds the port listening; entries idle past the TTL are dropped unless
+ *  `keep` is set. Every entry is released when its worktree is removed. */
 export interface PortRegistration {
   projectDir: string;
   worktreeId: string;
@@ -9,6 +10,7 @@ export interface PortRegistration {
   port: number;
   registeredAt: number;
   lastSeenRunningAt: number;
+  keep: boolean;
 }
 
 export interface PortRegistrationKey {
@@ -28,7 +30,7 @@ export function isValidPortLabel(label: string): boolean {
   return PORT_LABEL_PATTERN.test(label) && !RESERVED_PORT_LABELS.has(label);
 }
 
-export function isPortRegistration(value: unknown): value is PortRegistration {
+function hasRegistrationFields(value: unknown): value is Omit<PortRegistration, "keep"> & { keep?: unknown } {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
   return typeof v.projectDir === "string"
@@ -38,6 +40,12 @@ export function isPortRegistration(value: unknown): value is PortRegistration {
     && Number.isInteger(v.port)
     && typeof v.registeredAt === "number"
     && typeof v.lastSeenRunningAt === "number";
+}
+
+/** Validate a persisted entry. Entries written before `keep` existed load as not kept. */
+export function parsePortRegistration(value: unknown): PortRegistration | null {
+  if (!hasRegistrationFields(value)) return null;
+  return { ...value, keep: value.keep === true };
 }
 
 export function sameRegistrationKey(entry: PortRegistrationKey, key: PortRegistrationKey): boolean {
@@ -73,5 +81,13 @@ export function expireRegistrations(
   now: number,
   ttlMs: number = PORT_REGISTRATION_TTL_MS,
 ): PortRegistration[] {
-  return entries.filter((entry) => now - entry.lastSeenRunningAt <= ttlMs);
+  return entries.filter((entry) => entry.keep || now - entry.lastSeenRunningAt <= ttlMs);
+}
+
+export function releaseWorktreeRegistrations(
+  entries: PortRegistration[],
+  projectDir: string,
+  worktreeId: string,
+): PortRegistration[] {
+  return entries.filter((entry) => entry.projectDir !== projectDir || entry.worktreeId !== worktreeId);
 }
