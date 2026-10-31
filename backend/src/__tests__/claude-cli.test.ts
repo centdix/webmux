@@ -1,5 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { buildClaudeSessionFromText, encodeClaudeProjectDir, parseClaudeStreamLine } from "../adapters/claude-cli";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildClaudeSessionFromText, ClaudeCliClient, encodeClaudeProjectDir, parseClaudeStreamLine } from "../adapters/claude-cli";
 
 describe("claude-cli adapter", () => {
   it("encodes Claude project directories from cwd", () => {
@@ -304,5 +307,34 @@ describe("claude-cli adapter", () => {
         createdAt: "2026-04-14T15:00:03.000Z",
       },
     ]);
+  });
+
+  it("reports a failing claude run through onError without an unhandled rejection", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "webmux-fake-claude-"));
+    writeFileSync(join(binDir, "claude"), "#!/bin/sh\ncat >/dev/null\necho 'not logged in' >&2\nexit 1\n");
+    chmodSync(join(binDir, "claude"), 0o755);
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${binDir}:${originalPath}`;
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const errors: string[] = [];
+      const handle = new ClaudeCliClient().sendMessage(
+        { cwd: binDir, prompt: "hello" },
+        { onError: (message) => errors.push(message) },
+      );
+      await handle.completion;
+      await Bun.sleep(10);
+
+      expect(errors).toEqual(["not logged in"]);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      process.env.PATH = originalPath;
+      rmSync(binDir, { recursive: true, force: true });
+    }
   });
 });

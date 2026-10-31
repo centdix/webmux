@@ -593,6 +593,9 @@ export class ClaudeCliClient implements ClaudeCliGateway {
       sessionIdResolve = resolve;
       sessionIdReject = reject;
     });
+    // Failures also reach callbacks.onError; without a handler, a rejection nobody
+    // awaits is unhandled and kills the server process.
+    sessionId.catch(() => {});
 
     const resolveSessionId = (value: string): void => {
       if (resolvedSessionId === value) return;
