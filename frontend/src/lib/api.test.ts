@@ -68,7 +68,7 @@ describe("project-prefixed network calls", () => {
   });
 
   it("terminalStreamUrl targets the terminal socket under the active prefix", async () => {
-    const api = await loadApiAt("/myproject/");
+    const api = await loadApiFor("myproject");
 
     expect(api.terminalStreamUrl("feat/x")).toBe(`ws://${window.location.host}/api/projects/myproject/ws/feat%2Fx`);
   });
