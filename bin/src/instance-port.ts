@@ -47,7 +47,9 @@ export function resolveLiveServerPort(opts: {
   cwd: string;
   registryDir?: string;
 }): ResolvedPort {
-  const instances = createInstanceRegistry(opts.registryDir).listLive();
+  const instances = createInstanceRegistry(opts.registryDir, {
+    checkPids: Bun.env.WEBMUX_SKIP_INSTANCE_PID_CHECK !== "1",
+  }).listLive();
   const gitRoot = getGitRoot();
   const candidateDirs = [opts.cwd, gitRoot].filter(
     (dir): dir is string => typeof dir === "string" && dir.length > 0,

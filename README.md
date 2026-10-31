@@ -35,7 +35,9 @@ Track dev server ports across worktrees. webmux polls configured services and sh
 ### Docker Sandbox Mode
 
 
-Run agents in isolated Docker containers for untrusted or experimental work. webmux manages the container lifecycle, port forwarding, and volume mounts automatically.
+Run agents in isolated Docker containers for untrusted or experimental work. webmux manages the container lifecycle and volume mounts automatically.
+
+Containers use host networking (`--network host`): a dev server in the container listens directly on the host, and the `webmux` CLI is mounted into the container so agents can run `webmux port <label>` there too. On macOS this needs Docker Desktop 4.34 or later with *Settings → Resources → Network → Enable host networking* turned on (signed in; not compatible with Enhanced Container Isolation), or OrbStack, which supports it natively. webmux can't detect the setting, so it logs a reminder when it launches a container on macOS.
 
 ### Linear Integration
 
@@ -206,7 +208,7 @@ lifecycleHooks:
 
 </details>
 
-For fresh agents using a host profile, webmux automatically includes capture commands for configured command and shell panes in the agent system prompt. Profile `systemPrompt` values only need to contain project-specific guidance.
+For fresh agents using a host profile, webmux automatically includes capture commands for configured command and shell panes in the agent system prompt. Every fresh agent — host or Docker, plus chat-mode Claude in the dashboard — is also told to get server ports from `webmux port <label>`. Custom agents receive this combined system prompt through `${SYSTEM_PROMPT}` in their start command, so reference that placeholder to pass it on. Profile `systemPrompt` values only need to contain project-specific guidance.
 
 <details>
 <summary><strong>.webmux.yaml full schema</strong></summary>

@@ -11,6 +11,7 @@ import {
   isWorktreeOpen,
   planSessionLayout,
 } from "../services/session-service";
+import { buildPortRegistrationSystemPrompt } from "../services/port-prompt";
 
 class FakeTmuxGateway implements TmuxGateway {
   calls: string[] = [];
@@ -155,13 +156,19 @@ describe("buildTmuxPaneSystemPrompt", () => {
   });
 });
 
-describe("buildTmuxPaneSystemPrompt port registration", () => {
+describe("buildPortRegistrationSystemPrompt", () => {
   it("tells the agent to get server ports from webmux", () => {
-    const prompt = buildTmuxPaneSystemPrompt([{ id: "agent", kind: "agent", focus: true }]);
+    const prompt = buildPortRegistrationSystemPrompt();
 
     expect(prompt).toContain("`PORT=$(webmux port web) bun run dev`");
     expect(prompt).toContain("`webmux port web --port 5173`");
     expect(prompt).toContain("`webmux port rm <label>`");
+  });
+
+  it("is kept out of the tmux pane instructions", () => {
+    const prompt = buildTmuxPaneSystemPrompt([{ id: "agent", kind: "agent", focus: true }]);
+
+    expect(prompt).not.toContain("webmux port");
   });
 });
 

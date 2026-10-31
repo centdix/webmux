@@ -4,8 +4,10 @@
  * Runs sandbox containers directly for managed docker worktrees.
  */
 
-import { stat } from "node:fs/promises";
-import { type DockerProfileConfig, type ServiceConfig } from "./config";
+import { chmod, mkdir, stat } from "node:fs/promises";
+import { join } from "node:path";
+import { type DockerProfileConfig } from "./config";
+import { webmuxRuntimeStateDir } from "./webmux-paths";
 import { log } from "../lib/log";
 
 const DOCKER_RUN_TIMEOUT_MS = 60_000;
@@ -36,12 +38,6 @@ function containerName(branch: string): string {
   return `wm-${sanitiseBranchForName(branch)}-${Date.now()}`;
 }
 
-/** Return true if s is a valid port number string (integer 1–65535). */
-function isValidPort(s: string): boolean {
-  const n = Number(s);
-  return Number.isInteger(n) && n >= 1 && n <= 65535;
-}
-
 /** Return true if s is a valid environment variable key. */
 function isValidEnvKey(s: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(s);
@@ -52,8 +48,25 @@ export interface LaunchContainerOpts {
   wtDir: string;
   mainRepoDir: string;
   sandboxConfig: DockerProfileConfig;
-  services: ServiceConfig[];
   runtimeEnv: Record<string, string>;
+}
+
+/** Host paths that make the running webmux's own CLI usable inside a container. */
+export interface WebmuxCliMounts {
+  /** The running webmux's JS bundle (`bin/webmux.js`). */
+  entryPath: string;
+  /** Shell wrapper that runs the bundle with `bun`; mounted onto the container `PATH`. */
+  wrapperPath: string;
+  /** Live-instance registry dir (`~/.webmux/instances`), so the CLI finds the server. */
+  instancesDir: string;
+}
+
+const CONTAINER_CLI_ENTRY = "/opt/webmux/webmux.js";
+
+/** Host PIDs in the instance registry mean nothing in the container's PID
+ *  namespace, so the in-container CLI skips the registry's liveness check. */
+export function buildWebmuxCliWrapper(): string {
+  return `#!/bin/sh\nWEBMUX_SKIP_INSTANCE_PID_CHECK=1 exec bun ${CONTAINER_CLI_ENTRY} "$@"\n`;
 }
 
 export interface DockerGateway {
@@ -82,6 +95,8 @@ export class BunDockerGateway implements DockerGateway {
  *                        which credential mounts to include.
  * @param home          - Resolved home directory (e.g. Bun.env.HOME ?? "/root").
  * @param name          - Pre-generated container name.
+ * @param webmuxCli     - Host paths for the in-container `webmux` CLI, or null
+ *                        when the running webmux has no JS bundle to mount.
  */
 export function buildDockerRunArgs(
   opts: LaunchContainerOpts,
@@ -91,33 +106,21 @@ export function buildDockerRunArgs(
   sshAuthSock: string | undefined,
   hostUid: number,
   hostGid: number,
+  webmuxCli: WebmuxCliMounts | null,
 ): string[] {
-  const { wtDir, mainRepoDir, sandboxConfig, services, runtimeEnv } = opts;
+  const { wtDir, mainRepoDir, sandboxConfig, runtimeEnv } = opts;
 
   const args: string[] = [
     "docker", "run", "-d",
     "--name", name,
     "-w", wtDir,
-    "--add-host", "host.docker.internal:host-gateway",
+    // Share the host network: dev servers bind host ports directly, and the
+    // webmux server is reachable on localhost (CLI and control URL).
+    "--network", "host",
     // Run as the host user so files created in mounted dirs (.git, worktree)
     // are owned by the right UID/GID instead of root.
     "--user", `${hostUid}:${hostGid}`,
   ];
-
-  // Publish service ports bound to loopback only to avoid exposing dev services
-  // on external interfaces. Skip invalid or duplicate port values.
-  const seenPorts = new Set<string>();
-  for (const svc of services) {
-    const port = runtimeEnv[svc.portEnv];
-    if (!port) continue;
-    if (!isValidPort(port)) {
-      log.warn(`[docker] skipping invalid port for ${svc.portEnv}: ${JSON.stringify(port)}`);
-      continue;
-    }
-    if (seenPorts.has(port)) continue;
-    seenPorts.add(port);
-    args.push("-p", `127.0.0.1:${port}:${port}`);
-  }
 
   // Core env vars — defined first so passthrough cannot override them.
   const reservedKeys = new Set([
@@ -170,6 +173,13 @@ export function buildDockerRunArgs(
   args.push("-v", `${home}/.claude:/root/.claude`);
   args.push("-v", `${home}/.claude.json:/root/.claude.json`);
   args.push("-v", `${home}/.codex:/root/.codex`);
+
+  // The running webmux's CLI, so agents can call `webmux port` in the container.
+  if (webmuxCli) {
+    args.push("-v", `${webmuxCli.entryPath}:${CONTAINER_CLI_ENTRY}:ro`);
+    args.push("-v", `${webmuxCli.wrapperPath}:/usr/local/bin/webmux:ro`);
+    args.push("-v", `${webmuxCli.instancesDir}:/root/.webmux/instances:ro`);
+  }
 
   // Compute which guest paths are already covered by configured mounts so
   // credential mounts for the same path can be skipped (explicit mounts win).
@@ -272,8 +282,12 @@ export async function launchContainer(opts: LaunchContainerOpts): Promise<string
     if (await pathExists(p)) existingPaths.add(p);
   }));
 
-  const args = buildDockerRunArgs(opts, existingPaths, home, name, sshAuthSock, process.getuid!(), process.getgid!());
+  const webmuxCli = await prepareWebmuxCliMounts();
+  const args = buildDockerRunArgs(opts, existingPaths, home, name, sshAuthSock, process.getuid!(), process.getgid!(), webmuxCli);
 
+  if (process.platform === "darwin") {
+    log.warn("[docker] sandbox containers use host networking; on macOS enable it in Docker Desktop >= 4.34 (Settings > Resources > Network > Enable host networking) or use OrbStack");
+  }
   log.info(`[docker] launching container: ${name}`);
   const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
 
@@ -304,6 +318,26 @@ export async function launchContainer(opts: LaunchContainerOpts): Promise<string
   log.info(`[docker] container ${name} ready (id=${containerId.trim().slice(0, 12)})`);
 
   return name;
+}
+
+/** Resolve the host paths for the in-container `webmux` CLI and write its
+ *  wrapper script. `WEBMUX_CLI_ENTRY` is set by `webmux serve` to its own JS
+ *  bundle; it is absent when the backend runs from source (dev mode). */
+async function prepareWebmuxCliMounts(): Promise<WebmuxCliMounts | null> {
+  const entryPath = Bun.env.WEBMUX_CLI_ENTRY;
+  if (!entryPath || !(await pathExists(entryPath))) {
+    log.debug("[docker] WEBMUX_CLI_ENTRY not set; the webmux CLI will not be available in the container");
+    return null;
+  }
+  const stateDir = webmuxRuntimeStateDir();
+  const instancesDir = join(stateDir, "instances");
+  const wrapperDir = join(stateDir, "docker");
+  const wrapperPath = join(wrapperDir, "webmux");
+  await mkdir(instancesDir, { recursive: true });
+  await mkdir(wrapperDir, { recursive: true });
+  await Bun.write(wrapperPath, buildWebmuxCliWrapper());
+  await chmod(wrapperPath, 0o755);
+  return { entryPath, wrapperPath, instancesDir };
 }
 
 /**

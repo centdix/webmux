@@ -169,7 +169,6 @@ class FakeDockerGateway implements DockerGateway {
     this.launched.push({
       ...opts,
       runtimeEnv: { ...opts.runtimeEnv },
-      services: opts.services.map((service) => ({ ...service })),
     });
     return `wm-${opts.branch}-container`;
   }
@@ -640,6 +639,7 @@ describe("LifecycleService", () => {
     expect(agentCommand).toContain("`shell` (shell)");
     expect(agentCommand).toContain("tmux capture-pane");
     expect(agentCommand).toContain("tmux split-window");
+    expect(agentCommand).toContain("PORT=$(webmux port web) bun run dev");
   });
 
   it("appends the oneshot system prompt to fresh launches when source is oneshot", async () => {
@@ -1715,7 +1715,7 @@ describe("LifecycleService", () => {
       },
     ]);
 
-    expect(controlEnvText).toContain("WEBMUX_CONTROL_URL=http://host.docker.internal:5111/api/runtime/events");
+    expect(controlEnvText).toContain("WEBMUX_CONTROL_URL=http://127.0.0.1:5111/api/runtime/events");
 
     const state = runtime.getWorktreeByBranch("feature-sandbox");
     expect(state?.agent.runtime).toBe("docker");
@@ -1780,9 +1780,10 @@ describe("LifecycleService", () => {
 
     expect(agentCommand).not.toContain("webmux-managed tmux window");
     expect(agentCommand).not.toContain("tmux capture-pane");
+    expect(agentCommand).toContain("PORT=$(webmux port web) bun run dev");
   });
 
-  it("refreshes docker control env with a host-reachable callback when reopening", async () => {
+  it("refreshes docker control env with the loopback callback when reopening", async () => {
     const repoRoot = await initRepo();
     const runtime = new ProjectRuntime();
     const tmux = new FakeTmuxGateway();
@@ -1798,8 +1799,8 @@ describe("LifecycleService", () => {
     const gitDir = new BunGitGateway().resolveWorktreeGitDir(worktreePath);
     const paths = getWorktreeStoragePaths(gitDir);
     const staleControlEnvText = (await Bun.file(paths.controlEnvPath).text()).replace(
-      "http://host.docker.internal:5111/api/runtime/events",
       "http://127.0.0.1:5111/api/runtime/events",
+      "http://host.docker.internal:5111/api/runtime/events",
     );
     await Bun.write(paths.controlEnvPath, staleControlEnvText);
 
@@ -1808,7 +1809,7 @@ describe("LifecycleService", () => {
 
     const refreshedControlEnvText = await Bun.file(paths.controlEnvPath).text();
 
-    expect(refreshedControlEnvText).toContain("WEBMUX_CONTROL_URL=http://host.docker.internal:5111/api/runtime/events");
+    expect(refreshedControlEnvText).toContain("WEBMUX_CONTROL_URL=http://127.0.0.1:5111/api/runtime/events");
   });
 
   it("reports backend creation phases in order until the worktree is ready", async () => {

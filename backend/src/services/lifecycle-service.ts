@@ -46,6 +46,7 @@ import {
 import { getAgentDefinition, type AgentDefinition } from "./agent-registry";
 import { makeUnmanagedWorktreeId, type ReconciliationService } from "./reconciliation-service";
 import { buildTmuxPaneSystemPrompt, ensureSessionLayout, isWorktreeOpen, planSessionLayout } from "./session-service";
+import { buildPortRegistrationSystemPrompt } from "./port-prompt";
 import { ArchiveStateService } from "./archive-state-service";
 import {
   createManagedWorktree,
@@ -57,7 +58,6 @@ import {
 import { log } from "../lib/log";
 import { generateFallbackBranchName } from "../lib/branch-name";
 
-const DOCKER_CONTROL_HOST = "host.docker.internal";
 const MAX_WORKTREE_LABEL_LENGTH = 80;
 
 function toErrorMessage(error: unknown): string {
@@ -81,27 +81,6 @@ function normalizeWorktreeLabel(label: string | null): string | null {
   return trimmed;
 }
 
-function isLoopbackHostname(hostname: string): boolean {
-  return hostname === "127.0.0.1"
-    || hostname === "localhost"
-    || hostname === "::1"
-    || hostname === "[::1]";
-}
-
-function buildRuntimeControlBaseUrl(controlBaseUrl: string, runtime: RuntimeKind): string {
-  const trimmed = trimTrailingSlashes(controlBaseUrl);
-  if (runtime !== "docker") return trimmed;
-
-  try {
-    const url = new URL(trimmed);
-    if (isLoopbackHostname(url.hostname)) {
-      url.hostname = DOCKER_CONTROL_HOST;
-    }
-    return trimTrailingSlashes(url.toString());
-  } catch {
-    return trimmed;
-  }
-}
 
 function resolveCodexResumeConversationId(
   meta: WorktreeMeta,
@@ -1028,7 +1007,7 @@ export class LifecycleService {
       allocatedPorts: await this.allocatePorts(),
       runtimeEnvExtras: { WEBMUX_WORKTREE_PATH: resolved.entry.path },
       dotenvValues,
-      ...(await this.controlEnvFields(profile.runtime)),
+      ...(await this.controlEnvFields()),
     });
   }
 
@@ -1057,7 +1036,7 @@ export class LifecycleService {
     }, dotenvValues);
     await writeRuntimeEnv(input.gitDir, runtimeEnv);
 
-    const controlUrl = this.controlUrl(input.meta.runtime);
+    const controlUrl = this.controlUrl();
     let controlEnv: ControlEnvMap | null = null;
     if (controlUrl) {
       controlEnv = buildControlEnvMap({
@@ -1130,7 +1109,6 @@ export class LifecycleService {
         wtDir: input.worktreePath,
         mainRepoDir: this.deps.projectRoot,
         sandboxConfig: dockerProfile,
-        services: this.deps.config.services,
         runtimeEnv: input.initialized.runtimeEnv,
       });
       ensureSessionLayout(this.deps.tmux, this.buildSessionLayout({
@@ -1188,7 +1166,8 @@ export class LifecycleService {
     const tmuxPanePrompt = input.launchMode === "fresh" && input.profile.runtime === "host"
       ? buildTmuxPaneSystemPrompt(input.profile.panes)
       : undefined;
-    const systemPromptParts = [baseSystemPrompt, tmuxPanePrompt, oneshotPrompt]
+    const portPrompt = input.launchMode === "fresh" ? buildPortRegistrationSystemPrompt() : undefined;
+    const systemPromptParts = [baseSystemPrompt, tmuxPanePrompt, portPrompt, oneshotPrompt]
       .filter((part): part is string => part !== undefined && part.length > 0);
     const systemPrompt = systemPromptParts.length > 0
       ? systemPromptParts.join("\n\n")
@@ -1302,16 +1281,18 @@ export class LifecycleService {
     }
   }
 
-  private controlUrl(runtime: RuntimeKind): string | undefined {
+  /** Same URL for host and docker runtimes: containers share the host network,
+   *  so a loopback base URL reaches the server from inside them too. */
+  private controlUrl(): string | undefined {
     if (!this.deps.controlBaseUrl) return undefined;
-    return `${buildRuntimeControlBaseUrl(this.deps.controlBaseUrl, runtime)}/api/runtime/events`;
+    return `${trimTrailingSlashes(this.deps.controlBaseUrl)}/api/runtime/events`;
   }
 
   /** Control URL + token, paired so they're always both set or both absent
    *  (initializeManagedWorktree rejects one without the other). Empty when
    *  control reporting isn't configured. */
-  private async controlEnvFields(runtime: RuntimeKind): Promise<{ controlUrl?: string; controlToken?: string }> {
-    const controlUrl = this.controlUrl(runtime);
+  private async controlEnvFields(): Promise<{ controlUrl?: string; controlToken?: string }> {
+    const controlUrl = this.controlUrl();
     if (!controlUrl) return {};
     return { controlUrl, controlToken: await this.deps.getControlToken() };
   }
@@ -1453,7 +1434,7 @@ export class LifecycleService {
           startupEnvValues: await this.buildStartupEnvValues(input.envOverrides),
           allocatedPorts: await this.allocatePorts(),
           runtimeEnvExtras: { WEBMUX_WORKTREE_PATH: worktreePath },
-          ...(await this.controlEnvFields(profile.runtime)),
+          ...(await this.controlEnvFields()),
           deleteBranchOnRollback,
           source,
           ...(input.oneshot ? { oneshot: input.oneshot } : {}),

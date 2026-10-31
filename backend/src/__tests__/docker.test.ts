@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { buildDockerRunArgs, type LaunchContainerOpts } from "../adapters/docker";
+import {
+  buildDockerRunArgs,
+  buildWebmuxCliWrapper,
+  type LaunchContainerOpts,
+  type WebmuxCliMounts,
+} from "../adapters/docker";
 import type { DockerProfileConfig } from "../adapters/config";
 
 const HOME = "/home/testuser";
@@ -23,7 +28,6 @@ function makeOpts(overrides: Partial<LaunchContainerOpts> = {}): LaunchContainer
     wtDir: "/repos/my-branch",
     mainRepoDir: "/repos/main",
     sandboxConfig: makeDockerProfile(),
-    services: [],
     runtimeEnv: {},
     ...overrides,
   };
@@ -34,8 +38,9 @@ function build(
   opts: LaunchContainerOpts,
   existingPaths = new Set<string>(),
   sshAuthSock?: string,
+  webmuxCli: WebmuxCliMounts | null = null,
 ): string[] {
-  return buildDockerRunArgs(opts, existingPaths, HOME, "wm-test-123", sshAuthSock, UID, GID);
+  return buildDockerRunArgs(opts, existingPaths, HOME, "wm-test-123", sshAuthSock, UID, GID, webmuxCli);
 }
 
 /** Pull all -v flag values out of an args array. */
@@ -200,35 +205,54 @@ describe("buildDockerRunArgs — extraMounts override credential mounts", () => 
 });
 
 // ---------------------------------------------------------------------------
-// Port handling
+// Networking
 // ---------------------------------------------------------------------------
 
-describe("buildDockerRunArgs — ports", () => {
-  it("binds valid ports to loopback only", () => {
-    const args = build(makeOpts({
-      services: [{ name: "web", portEnv: "PORT" }],
-      runtimeEnv: { PORT: "3000" },
-    }));
-    expect(ports(args)).toContain("127.0.0.1:3000:3000");
+describe("buildDockerRunArgs — networking", () => {
+  it("runs the container on the host network", () => {
+    const args = build(makeOpts());
+    const idx = args.indexOf("--network");
+    expect(idx).toBeGreaterThan(-1);
+    expect(args[idx + 1]).toBe("host");
   });
 
-  it("skips ports with non-numeric values", () => {
-    const args = build(makeOpts({
-      services: [{ name: "web", portEnv: "PORT" }],
-      runtimeEnv: { PORT: "auto" },
-    }));
+  it("publishes no ports, even when the runtime env carries port values", () => {
+    const args = build(makeOpts({ runtimeEnv: { PORT: "3000", FRONTEND_PORT: "3001" } }));
     expect(ports(args)).toHaveLength(0);
   });
 
-  it("deduplicates ports that appear more than once", () => {
-    const args = build(makeOpts({
-      services: [
-        { name: "web", portEnv: "PORT" },
-        { name: "api", portEnv: "API_PORT" },
-      ],
-      runtimeEnv: { PORT: "3000", API_PORT: "3000" },
-    }));
-    expect(ports(args).filter(p => p.startsWith("127.0.0.1:3000"))).toHaveLength(1);
+  it("does not add a host.docker.internal mapping", () => {
+    expect(build(makeOpts())).not.toContain("--add-host");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// In-container webmux CLI
+// ---------------------------------------------------------------------------
+
+describe("buildDockerRunArgs — webmux CLI", () => {
+  const CLI: WebmuxCliMounts = {
+    entryPath: "/opt/pkg/webmux/bin/webmux.js",
+    wrapperPath: `${HOME}/.webmux/docker/webmux`,
+    instancesDir: `${HOME}/.webmux/instances`,
+  };
+
+  it("mounts the CLI bundle, the PATH wrapper and the instance registry read-only", () => {
+    const m = mounts(build(makeOpts(), new Set(), undefined, CLI));
+    expect(m).toContain("/opt/pkg/webmux/bin/webmux.js:/opt/webmux/webmux.js:ro");
+    expect(m).toContain(`${HOME}/.webmux/docker/webmux:/usr/local/bin/webmux:ro`);
+    expect(m).toContain(`${HOME}/.webmux/instances:/root/.webmux/instances:ro`);
+  });
+
+  it("adds no CLI mounts when there is no bundle to mount", () => {
+    const m = mounts(build(makeOpts()));
+    expect(m.some((v) => v.includes("/opt/webmux/") || v.includes("/usr/local/bin/webmux") || v.includes(".webmux/instances"))).toBe(false);
+  });
+
+  it("wrapper runs the mounted bundle with bun and skips host PID checks", () => {
+    const wrapper = buildWebmuxCliWrapper();
+    expect(wrapper.startsWith("#!/bin/sh\n")).toBe(true);
+    expect(wrapper).toContain('WEBMUX_SKIP_INSTANCE_PID_CHECK=1 exec bun /opt/webmux/webmux.js "$@"');
   });
 });
 

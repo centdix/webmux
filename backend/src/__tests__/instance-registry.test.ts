@@ -61,6 +61,14 @@ describe("instance-registry", () => {
     expect(remaining).toEqual([live]);
   });
 
+  it("keeps entries with unknown PIDs when checkPids is false", async () => {
+    const { dir, registry } = await freshRegistry();
+    const foreign = makeEntry({ port: 5112, pid: 1 << 30 });
+    registry.register(foreign);
+
+    expect(createInstanceRegistry(dir, { checkPids: false }).listLive()).toEqual([foreign]);
+  });
+
   it("ignores malformed json files", async () => {
     const { dir, registry } = await freshRegistry();
     registry.register(makeEntry({ port: 5111 }));
