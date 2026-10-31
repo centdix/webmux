@@ -247,6 +247,7 @@ function createWorktree(
   overrides: Partial<WorktreeInfo> = {},
 ): WorktreeInfo {
   return {
+    project: PROJECT,
     branch,
     label: null,
     archived: false,

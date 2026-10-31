@@ -45,6 +45,7 @@ export type {
   LinearIssuesResponse,
   LinkedLinearIssue,
   LinkedRepoInfo,
+  NotificationDismissal,
   OneshotConfig,
   PostWorktreeToLinearRequest,
   PostWorktreeToLinearResponse,
@@ -105,8 +106,13 @@ export interface DiffDialogProps {
   onclose: () => void;
 }
 
-export interface WorktreeInfo {
+/** Identity of a worktree across projects: branch names are only unique per project. */
+export interface WorktreeRef {
+  project: string;
   branch: string;
+}
+
+export interface WorktreeInfo extends WorktreeRef {
   label: string | null;
   baseBranch?: string;
   archived: boolean;
@@ -132,6 +138,14 @@ export interface WorktreeInfo {
   oneshot: OneshotConfig | null;
   tabs: WorktreeTab[];
   activeTabId: string | null;
+}
+
+/** One project's worktrees from the hub listing; `error` is that project's fetch failure. */
+export interface ProjectWorktreeList {
+  prefix: string;
+  name: string;
+  worktrees: WorktreeInfo[];
+  error: string | null;
 }
 
 export interface WorktreeListRow {

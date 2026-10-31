@@ -8,6 +8,7 @@ function createWorktree(
   overrides: Partial<WorktreeInfo> = {},
 ): WorktreeInfo {
   return {
+    project: "webmux",
     branch,
     label: null,
     archived: false,

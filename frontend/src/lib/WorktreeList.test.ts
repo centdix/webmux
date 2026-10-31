@@ -5,6 +5,7 @@ import type { WorktreeInfo, WorktreeListRow } from "./types";
 
 function createWorktree(branch: string): WorktreeInfo {
   return {
+    project: "webmux",
     branch,
     label: null,
     archived: false,

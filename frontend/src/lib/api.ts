@@ -28,6 +28,7 @@ import type {
   ProjectInitPhase,
   ProjectInitState,
   ProjectSummary,
+  ProjectWorktreeList,
   ProjectWorktreeSnapshot,
   UpsertCustomAgentRequest,
   ValidateCustomAgentResponse,
@@ -68,8 +69,9 @@ function mapAgentStatus(status: string): string {
   }
 }
 
-function mapWorktree(snapshot: ProjectWorktreeSnapshot): WorktreeInfo {
+function mapWorktree(snapshot: ProjectWorktreeSnapshot, project: string): WorktreeInfo {
   return {
+    project,
     branch: snapshot.branch,
     label: snapshot.label,
     ...(snapshot.baseBranch ? { baseBranch: snapshot.baseBranch } : {}),
@@ -125,7 +127,19 @@ export function postWorktreeToLinear(
 
 export async function fetchWorktrees(project: string): Promise<WorktreeInfo[]> {
   const response = await projectApi(project).fetchWorktrees();
-  return response.worktrees.map((worktree) => mapWorktree(worktree));
+  return response.worktrees.map((worktree) => mapWorktree(worktree, project));
+}
+
+/** Every project's worktrees in one hub call, in registry order — the
+ *  dashboard's single worktree poll. */
+export async function fetchAllProjectWorktrees(): Promise<ProjectWorktreeList[]> {
+  const response = await hubApi.fetchAllProjectWorktrees();
+  return response.projects.map((project) => ({
+    prefix: project.prefix,
+    name: project.name,
+    worktrees: project.worktrees.map((worktree) => mapWorktree(worktree, project.prefix)),
+    error: project.error,
+  }));
 }
 
 export async function setWorktreeLabel(project: string, branch: string, label: string | null): Promise<string | null> {
