@@ -640,6 +640,7 @@ describe("LifecycleService", () => {
     expect(agentCommand).toContain("`shell` (shell)");
     expect(agentCommand).toContain("tmux capture-pane");
     expect(agentCommand).toContain("tmux split-window");
+    expect(agentCommand).toContain("PORT=$(webmux port web) bun run dev");
   });
 
   it("appends the oneshot system prompt to fresh launches when source is oneshot", async () => {
@@ -1780,6 +1781,7 @@ describe("LifecycleService", () => {
 
     expect(agentCommand).not.toContain("webmux-managed tmux window");
     expect(agentCommand).not.toContain("tmux capture-pane");
+    expect(agentCommand).toContain("PORT=$(webmux port web) bun run dev");
   });
 
   it("refreshes docker control env with a host-reachable callback when reopening", async () => {

@@ -1,11 +1,12 @@
 import { buildRuntimeEnvMap, loadDotenvLocal } from "../adapters/fs";
 import type { ProfileConfig } from "../domain/config";
 import type { WorktreeMeta } from "../domain/model";
+import { buildPortRegistrationSystemPrompt } from "./port-prompt";
 
 export interface ClaudeStreamingLaunchContext {
   env: Record<string, string>;
   permissionMode: "bypassPermissions" | null;
-  systemPrompt: string | null;
+  systemPrompt: string;
 }
 
 export async function buildClaudeStreamingLaunchContext(input: {
@@ -23,6 +24,8 @@ export async function buildClaudeStreamingLaunchContext(input: {
       WEBMUX_WORKTREE_PATH: input.worktreePath,
     }, dotenvValues),
     permissionMode: input.profile.yolo === true ? "bypassPermissions" : null,
-    systemPrompt: input.profile.systemPrompt ?? null,
+    systemPrompt: [input.profile.systemPrompt, buildPortRegistrationSystemPrompt()]
+      .filter((part): part is string => part !== undefined && part.length > 0)
+      .join("\n\n"),
   };
 }
