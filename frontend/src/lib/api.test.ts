@@ -2,26 +2,32 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppNotification } from "./types";
 
 /**
- * `apiBase` is derived from `window.location.pathname` at module load, so each
- * case sets the URL and re-imports `api.ts` fresh. Regression guard for the
- * notifications SSE + file-upload calls, which must be scoped under the active
- * project's `/api/projects/<prefix>` like every other request — otherwise they
- * fall through to the SPA and get `index.html` back instead of the real endpoint.
+ * The active project lives in module state set by `setActiveProject`, so each
+ * case re-imports `api.ts` fresh. Regression guard for the notifications SSE +
+ * file-upload calls, which must be scoped under the active project's
+ * `/api/projects/<prefix>` like every other request.
  */
-async function loadApiAt(pathname: string): Promise<typeof import("./api")> {
-  window.history.replaceState({}, "", pathname);
+async function loadApiFor(project: string): Promise<typeof import("./api")> {
   vi.resetModules();
-  return import("./api");
+  const api = await import("./api");
+  api.setActiveProject(project);
+  return api;
 }
 
 afterEach(() => {
   vi.resetModules();
   vi.unstubAllGlobals();
+  localStorage.clear();
+  window.history.replaceState(null, "", "/");
 });
 
 describe("project-prefixed network calls", () => {
-  it("derives apiBase from the first path segment", async () => {
-    expect((await loadApiAt("/myproject/")).apiBase).toBe("/api/projects/myproject");
+  it("derives apiBase from the active project, without touching the URL", async () => {
+    const api = await loadApiFor("myproject");
+
+    expect(api.activePrefix).toBe("myproject");
+    expect(api.apiBase).toBe("/api/projects/myproject");
+    expect(window.location.pathname).toBe("/");
   });
 
   it("connectWorktreeConversationStream opens the agents socket under the active prefix", async () => {
@@ -35,7 +41,7 @@ describe("project-prefixed network calls", () => {
     }
     vi.stubGlobal("WebSocket", MockWebSocket);
 
-    const api = await loadApiAt("/myproject/");
+    const api = await loadApiFor("myproject");
     api.connectWorktreeConversationStream("feat/x", { onEvent: () => {}, onError: () => {} });
 
     expect(urls).toEqual([`ws://${window.location.host}/api/projects/myproject/ws/agents/worktrees/feat%2Fx`]);
@@ -55,7 +61,7 @@ describe("project-prefixed network calls", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const api = await loadApiAt("/myproject/");
+    const api = await loadApiFor("myproject");
     await api.uploadFiles("feat/x", [new File(["a"], "a.txt")]);
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -88,7 +94,7 @@ describe("setUpProject", () => {
       }),
     ));
 
-    const api = await loadApiAt("/y/");
+    const api = await loadApiFor("y");
     const phases: string[] = [];
     const result = await api.setUpProject("/repo/y", (phase) => phases.push(phase));
 
@@ -112,7 +118,7 @@ describe("setUpProject", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const api = await loadApiAt("/x/");
+    const api = await loadApiFor("x");
     const phases: string[] = [];
     const result = await api.setUpProject("/repo/x", (phase) => phases.push(phase));
 
@@ -133,7 +139,7 @@ describe("setUpProject", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const api = await loadApiAt("/x/");
+    const api = await loadApiFor("x");
     await expect(api.setUpProject("/repo/z", () => {})).rejects.toThrow("not a git repo");
   });
 });
@@ -166,7 +172,7 @@ describe("notifications", () => {
 
   it("subscribeNotifications opens the hub stream", async () => {
     const source = stubEventSource();
-    const api = await loadApiAt("/myproject/");
+    const api = await loadApiFor("myproject");
     api.subscribeNotifications(() => {}, () => {});
 
     expect(source.urls).toEqual(["/api/notifications/stream"]);
@@ -174,7 +180,7 @@ describe("notifications", () => {
 
   it("subscribeNotifications only delivers the active project's events", async () => {
     const source = stubEventSource();
-    const api = await loadApiAt("/myproject/");
+    const api = await loadApiFor("myproject");
     const initial: AppNotification[] = [];
     const live: AppNotification[] = [];
     const dismissed: number[] = [];
@@ -199,12 +205,47 @@ describe("notifications", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const api = await loadApiAt("/myproject/");
+    const api = await loadApiFor("myproject");
     await api.dismissNotification(notification("other", 7));
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/projects/other/notifications/7/dismiss",
       expect.objectContaining({ method: "POST" }),
     );
+  });
+});
+
+describe("resolveInitialProject", () => {
+  function stubProjects(prefixes: string[]): void {
+    const projects = prefixes.map((prefix) => ({ prefix, name: prefix, path: `/repos/${prefix}`, active: false }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ projects }), { headers: { "content-type": "application/json" } })),
+    );
+  }
+
+  async function resolve(): Promise<string | null> {
+    vi.resetModules();
+    return (await import("./api")).resolveInitialProject();
+  }
+
+  it("prefers the hash project, then the last project, then the first one", async () => {
+    stubProjects(["alpha", "beta", "gamma"]);
+    localStorage.setItem("wt-last-project", "beta");
+
+    window.history.replaceState(null, "", "/#gamma/feat/x");
+    expect(await resolve()).toBe("gamma");
+
+    window.history.replaceState(null, "", "/");
+    expect(await resolve()).toBe("beta");
+
+    localStorage.clear();
+    expect(await resolve()).toBe("alpha");
+  });
+
+  it("returns null when no project is registered", async () => {
+    stubProjects([]);
+
+    expect(await resolve()).toBeNull();
   });
 });

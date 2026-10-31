@@ -77,6 +77,9 @@
     dismissNotification,
   } from "./lib/api";
   import TabBar from "./lib/TabBar.svelte";
+  import { pickInitialBranch, readLocationHash, writeLocationHash } from "./lib/project-location";
+
+  let { onSwitchProject }: { onSwitchProject: (prefix: string | null) => void } = $props();
 
   function createDefaultConfig(): AppConfig {
     return {
@@ -107,7 +110,9 @@
 
   let config = $state<AppConfig>(createDefaultConfig());
   let worktrees = $state<WorktreeInfo[]>([]);
-  let selectedBranch = $state<string | null>(loadSavedSelectedWorktree());
+  let selectedBranch = $state<string | null>(
+    pickInitialBranch(readLocationHash(), activePrefix, loadSavedSelectedWorktree(activePrefix)),
+  );
   let hasLoadedWorktrees = $state(false);
   let favoriteBranches = $state<Set<string>>(loadFavoriteWorktrees(activePrefix));
   let removeBranch = $state<string | null>(null);
@@ -524,12 +529,16 @@
   $effect(() => {
     if (!hasLoadedWorktrees) return;
     if (selectedWorktree) {
-      saveSelectedWorktree(selectedWorktree.branch);
+      saveSelectedWorktree(activePrefix, selectedWorktree.branch);
       return;
     }
     if (selectableWorktrees.length === 0) {
-      saveSelectedWorktree(null);
+      saveSelectedWorktree(activePrefix, null);
     }
+  });
+
+  $effect(() => {
+    writeLocationHash(activePrefix, selectedBranch);
   });
 
   $effect(() => {
@@ -1184,7 +1193,7 @@
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-1 min-w-0">
             <h1 class="text-base font-semibold truncate">{config.name ?? "Dashboard"}</h1>
-            <ProjectSwitcher current={activePrefix} />
+            <ProjectSwitcher current={activePrefix} onSwitch={onSwitchProject} />
           </div>
           <div class="flex items-center gap-2">
             <button

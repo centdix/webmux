@@ -4,7 +4,7 @@
   import { projectInitPhaseLabel } from "./utils";
   import type { ProjectInitPhase, ProjectSummary } from "./types";
 
-  let { current }: { current: string } = $props();
+  let { current, onSwitch }: { current: string; onSwitch: (prefix: string | null) => void } = $props();
 
   let projects = $state<ProjectSummary[]>([]);
   let open = $state(false);
@@ -20,12 +20,18 @@
     void load();
   });
 
-  async function load(): Promise<void> {
+  async function load(): Promise<ProjectSummary[]> {
     try {
       projects = await fetchProjects();
     } catch {
       projects = [];
     }
+    return projects;
+  }
+
+  function switchTo(prefix: string | null): void {
+    open = false;
+    if (prefix !== current) onSwitch(prefix);
   }
 
   function positionMenu(): void {
@@ -71,9 +77,11 @@
     addPhase = null;
     try {
       const { prefix } = await setUpProject(path, (next) => (addPhase = next));
-      window.location.assign(`/${prefix}/`);
+      addPath = "";
+      switchTo(prefix);
     } catch (error) {
       addError = error instanceof Error ? error.message : String(error);
+    } finally {
       busy = false;
       addPhase = null;
     }
@@ -93,7 +101,10 @@
     busy = true;
     try {
       await removeProject(prefix);
-      await load();
+      const remaining = await load();
+      // The dashboard can't stay on a removed project: move to another one,
+      // or to the empty state when none is left.
+      if (prefix === current) switchTo(remaining[0]?.prefix ?? null);
     } catch {
       // ignore — list reload will reflect actual state
     }
@@ -129,7 +140,12 @@
     </div>
     {#each projects as project (project.prefix)}
       <div class="flex items-stretch border-t border-edge first:border-t-0 hover:bg-hover">
-        <a href={`/${project.prefix}/`} class="block flex-1 min-w-0 px-3 py-2 text-[12px]" role="menuitem">
+        <button
+          type="button"
+          class="block flex-1 min-w-0 px-3 py-2 text-[12px] text-left"
+          role="menuitem"
+          onclick={() => switchTo(project.prefix)}
+        >
           <div class="text-primary font-medium truncate">
             {project.name}
             {#if project.prefix === current}
@@ -137,18 +153,16 @@
             {/if}
           </div>
           <div class="text-muted text-[11px] truncate">{project.path}</div>
-        </a>
-        {#if project.prefix !== current}
-          <button
-            type="button"
-            class="shrink-0 px-2 text-muted hover:text-primary"
-            title="Remove project"
-            disabled={busy}
-            onclick={(event) => handleRemove(event, project.prefix)}
-          >
-            ×
-          </button>
-        {/if}
+        </button>
+        <button
+          type="button"
+          class="shrink-0 px-2 text-muted hover:text-primary"
+          title="Remove project"
+          disabled={busy}
+          onclick={(event) => handleRemove(event, project.prefix)}
+        >
+          ×
+        </button>
       </div>
     {/each}
 

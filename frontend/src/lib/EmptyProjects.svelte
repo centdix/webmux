@@ -4,6 +4,8 @@
   import { applyTheme, loadSavedTheme, projectInitPhaseLabel } from "./utils";
   import type { ProjectInitPhase } from "./types";
 
+  let { onProjectAdded }: { onProjectAdded: (prefix: string) => void } = $props();
+
   let path = $state("");
   let error = $state<string | null>(null);
   let busy = $state(false);
@@ -21,7 +23,7 @@
     phase = null;
     try {
       const { prefix } = await setUpProject(target, (next) => (phase = next));
-      window.location.assign(`/${prefix}/`);
+      onProjectAdded(prefix);
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
       busy = false;

@@ -8,6 +8,7 @@ export const LAST_SELECTED_WORKTREE_STORAGE_KEY = "wt-last-selected-worktree";
 export const SIDEBAR_WIDTH_STORAGE_KEY = "wt-sidebar-width";
 export const WEB_CHAT_UI_STORAGE_KEY = "wt-use-web-chat-ui";
 export const FAVORITE_WORKTREES_STORAGE_KEY = "wt-favorite-worktrees";
+export const LAST_PROJECT_STORAGE_KEY = "wt-last-project";
 const DEFAULT_SIDEBAR_WIDTH = 220;
 
 export function prLabel(pr: Pick<PrEntry, "repo" | "number">): string {
@@ -98,25 +99,41 @@ export function loadSavedTheme(): ThemeKey {
   return "github-dark";
 }
 
-export function loadSavedSelectedWorktree(): string | null {
-  const stored = localStorage.getItem(LAST_SELECTED_WORKTREE_STORAGE_KEY)?.trim();
+function projectStorageKey(baseKey: string, projectPrefix: string): string {
+  return projectPrefix ? `${baseKey}:${projectPrefix}` : baseKey;
+}
+
+function loadStoredString(key: string): string | null {
+  const stored = localStorage.getItem(key)?.trim();
   return stored ? stored : null;
 }
 
-export function saveSelectedWorktree(branch: string | null): void {
-  if (branch) {
-    localStorage.setItem(LAST_SELECTED_WORKTREE_STORAGE_KEY, branch);
+function saveStoredString(key: string, value: string | null): void {
+  if (value) {
+    localStorage.setItem(key, value);
     return;
   }
-  localStorage.removeItem(LAST_SELECTED_WORKTREE_STORAGE_KEY);
+  localStorage.removeItem(key);
 }
 
-function favoriteWorktreesStorageKey(projectPrefix: string): string {
-  return projectPrefix ? `${FAVORITE_WORKTREES_STORAGE_KEY}:${projectPrefix}` : FAVORITE_WORKTREES_STORAGE_KEY;
+export function loadLastProject(): string | null {
+  return loadStoredString(LAST_PROJECT_STORAGE_KEY);
+}
+
+export function saveLastProject(projectPrefix: string | null): void {
+  saveStoredString(LAST_PROJECT_STORAGE_KEY, projectPrefix);
+}
+
+export function loadSavedSelectedWorktree(projectPrefix: string): string | null {
+  return loadStoredString(projectStorageKey(LAST_SELECTED_WORKTREE_STORAGE_KEY, projectPrefix));
+}
+
+export function saveSelectedWorktree(projectPrefix: string, branch: string | null): void {
+  saveStoredString(projectStorageKey(LAST_SELECTED_WORKTREE_STORAGE_KEY, projectPrefix), branch);
 }
 
 export function loadFavoriteWorktrees(projectPrefix: string): Set<string> {
-  const stored = localStorage.getItem(favoriteWorktreesStorageKey(projectPrefix));
+  const stored = localStorage.getItem(projectStorageKey(FAVORITE_WORKTREES_STORAGE_KEY, projectPrefix));
   if (!stored) return new Set();
   try {
     const parsed: unknown = JSON.parse(stored);
@@ -129,7 +146,7 @@ export function loadFavoriteWorktrees(projectPrefix: string): Set<string> {
 }
 
 export function saveFavoriteWorktrees(projectPrefix: string, branches: Set<string>): void {
-  const key = favoriteWorktreesStorageKey(projectPrefix);
+  const key = projectStorageKey(FAVORITE_WORKTREES_STORAGE_KEY, projectPrefix);
   if (branches.size === 0) {
     localStorage.removeItem(key);
     return;

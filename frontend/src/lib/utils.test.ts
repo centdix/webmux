@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { PrEntry } from "./types";
 import {
+  LAST_PROJECT_STORAGE_KEY,
   LAST_SELECTED_WORKTREE_STORAGE_KEY,
   WEB_CHAT_UI_STORAGE_KEY,
   FAVORITE_WORKTREES_STORAGE_KEY,
   ideLabelForUrl,
   loadFavoriteWorktrees,
+  loadLastProject,
   loadSavedSelectedWorktree,
   loadUseWebChatUi,
   makeIdeUrl,
@@ -13,6 +15,7 @@ import {
   prBadgeClass,
   prStateTextClass,
   saveFavoriteWorktrees,
+  saveLastProject,
   saveSelectedWorktree,
   saveUseWebChatUi,
 } from "./utils";
@@ -51,16 +54,28 @@ describe("worktree selection persistence", () => {
     ).toBe("feature/open");
   });
 
-  it("stores and clears the last selected worktree", () => {
-    saveSelectedWorktree("feature/last-used");
+  it("stores and clears the last selected worktree per project", () => {
+    saveSelectedWorktree("proj-a", "feature/last-used");
 
-    expect(loadSavedSelectedWorktree()).toBe("feature/last-used");
-    expect(localStorage.getItem(LAST_SELECTED_WORKTREE_STORAGE_KEY)).toBe("feature/last-used");
+    expect(loadSavedSelectedWorktree("proj-a")).toBe("feature/last-used");
+    expect(loadSavedSelectedWorktree("proj-b")).toBeNull();
+    expect(localStorage.getItem(`${LAST_SELECTED_WORKTREE_STORAGE_KEY}:proj-a`)).toBe("feature/last-used");
 
-    saveSelectedWorktree(null);
+    saveSelectedWorktree("proj-a", null);
 
-    expect(loadSavedSelectedWorktree()).toBeNull();
-    expect(localStorage.getItem(LAST_SELECTED_WORKTREE_STORAGE_KEY)).toBeNull();
+    expect(loadSavedSelectedWorktree("proj-a")).toBeNull();
+    expect(localStorage.getItem(`${LAST_SELECTED_WORKTREE_STORAGE_KEY}:proj-a`)).toBeNull();
+  });
+
+  it("stores and clears the last opened project", () => {
+    saveLastProject("proj-a");
+
+    expect(loadLastProject()).toBe("proj-a");
+    expect(localStorage.getItem(LAST_PROJECT_STORAGE_KEY)).toBe("proj-a");
+
+    saveLastProject(null);
+
+    expect(loadLastProject()).toBeNull();
   });
 
   it("stores favorite worktrees per project and clears them when empty", () => {

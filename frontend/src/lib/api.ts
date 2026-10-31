@@ -7,7 +7,10 @@ import {
   hubApiPaths,
   projectApiBasePath,
   projectApiPaths,
+  type ProjectApi,
 } from "@webmux/api-contract";
+import { pickInitialProject, readLocationHash } from "./project-location";
+import { loadLastProject } from "./utils";
 import type {
   AgentDetails,
   AgentResponse,
@@ -31,18 +34,24 @@ import type {
   WorktreeTab,
 } from "./types";
 
-/** The active project's URL prefix, taken from the first path segment (the
- *  server serves each project under `/<prefix>/...` on the shared port). Empty
- *  when at the root before the bootstrap redirect picks a project. */
-export const activePrefix: string = window.location.pathname.split("/")[1] ?? "";
+/** The active project's prefix. Held in memory (the URL stays `/`): set by
+ *  `setActiveProject` before the dashboard mounts and on every project switch.
+ *  `export let` so importers always read the current value (ES live bindings). */
+export let activePrefix = "";
 
-/** Base path for the active project's API + WebSocket calls. Meaningless at `/`
- *  before a project is selected — main.ts runs the bootstrap redirect first. */
-export const apiBase: string = projectApiBasePath(activePrefix);
+/** Base path for the active project's API + WebSocket calls. Empty-project value
+ *  until `setActiveProject` runs (main.ts resolves the project before mounting). */
+export let apiBase: string = projectApiBasePath(activePrefix);
 
 /** Per-project client — every worktree/agent/config call is scoped to the
  *  active project. */
-export const api = createProjectApi(activePrefix);
+export let api: ProjectApi = createProjectApi(activePrefix);
+
+export function setActiveProject(prefix: string): void {
+  activePrefix = prefix;
+  apiBase = projectApiBasePath(prefix);
+  api = createProjectApi(prefix);
+}
 
 /** Hub client — project list/add/remove + the migration sensor are global (no prefix). */
 const hubApi = createHubApi();
@@ -301,22 +310,16 @@ export async function removeProject(prefix: string): Promise<void> {
   await hubApi.removeProject({ params: { prefix } });
 }
 
-export type ProjectBootstrap = "ready" | "redirecting" | "no-projects";
-
-/** Decide what to mount before the app loads, based on the URL prefix and the
- *  known projects:
- *  - `ready`        — the URL points at a real project; mount the dashboard.
- *  - `redirecting`  — the URL has no/unknown prefix but projects exist; a
- *                     redirect to the first project is in flight, mount nothing.
- *  - `no-projects`  — nothing is registered; mount the empty state so the
- *                     dashboard doesn't boot into 404-ing per-project calls. */
-export async function ensureProjectPrefix(): Promise<ProjectBootstrap> {
+/** Project to open at boot (see `pickInitialProject`); `null` when nothing is
+ *  registered, so the empty state mounts instead of a dashboard whose every
+ *  per-project call would 404. */
+export async function resolveInitialProject(): Promise<string | null> {
   const projects = await fetchProjects().catch((): ProjectSummary[] => []);
-  if (projects.some((project) => project.prefix === activePrefix)) return "ready";
-  const target = projects[0]?.prefix;
-  if (!target) return "no-projects";
-  window.location.replace(`/${target}/`);
-  return "redirecting";
+  return pickInitialProject(
+    projects.map((project) => project.prefix),
+    readLocationHash()?.project ?? null,
+    loadLastProject(),
+  );
 }
 
 /** Subscribe to the hub's merged notification stream. Until the dashboard is
