@@ -253,7 +253,15 @@ describe("parseListCommandArgs", () => {
     expect(parseListCommandArgs(["--all", "--search", "search"])).toEqual({
       mode: "all",
       search: "search",
+      allProjects: false,
     });
+  });
+
+  it("parses --all-projects alone and combined with archive and search filters", () => {
+    expect(parseListCommandArgs(["--all-projects"])).toEqual({ mode: "active", search: "", allProjects: true });
+    expect(parseListCommandArgs(["--all-projects", "--all"])).toEqual({ mode: "all", search: "", allProjects: true });
+    expect(parseListCommandArgs(["--archived", "--all-projects"])).toEqual({ mode: "archived", search: "", allProjects: true });
+    expect(parseListCommandArgs(["--search=fix", "--all-projects"])).toEqual({ mode: "active", search: "fix", allProjects: true });
   });
 
   it("returns null for help", () => {
@@ -1046,7 +1054,115 @@ describe("runWorktreeCommand", () => {
     expect(exitCode).toBe(0);
     expect(createRuntimeCalled).toBe(false);
     expect(stdout).toHaveLength(1);
-    expect(stdout[0]).toContain("webmux list [--all|--archived] [--search <text>]");
+    expect(stdout[0]).toContain("webmux list [--all|--archived] [--search <text>] [--all-projects]");
+    expect(stdout[0]).toContain("--all-projects");
+  });
+
+  describe("list --all-projects", () => {
+    function projectRuntime(projectDir: string, branches: string[]) {
+      return {
+        projectDir,
+        config: { workspace: { mainBranch: "main" } },
+        git: stubGit([
+          { path: projectDir, branch: "main", bare: false },
+          ...branches.map((branch) => ({ path: `${projectDir}/.worktrees/${branch}`, branch, bare: false })),
+        ]),
+        tmux: stubTmux([
+          { sessionName: buildProjectSessionName(projectDir), windowName: buildWorktreeWindowName(branches[0] ?? "") },
+        ]),
+        lifecycleService: stubLifecycleService([]),
+      };
+    }
+
+    const projects = [
+      { path: "/alpha", name: "alpha", addedAt: 1 },
+      { path: "/broken", name: "broken", addedAt: 2 },
+      { path: "/empty", name: "empty", addedAt: 3 },
+      { path: "/beta", name: "beta", addedAt: 4 },
+    ];
+
+    async function runListAllProjects(args: string[]): Promise<{ exitCode: number; stdout: string[]; projectDirs: string[] }> {
+      const stdout: string[] = [];
+      const projectDirs: string[] = [];
+      const exitCode = await runWorktreeCommand(
+        { command: "list", args, projectDir: "/not-a-project", port: 5111 },
+        {
+          listProjects: () => projects,
+          createRuntime: ({ projectDir }) => {
+            projectDirs.push(projectDir);
+            if (projectDir === "/broken") throw new Error("not a git repository");
+            if (projectDir === "/empty") return projectRuntime(projectDir, []);
+            if (projectDir === "/alpha") return projectRuntime(projectDir, ["fix-bug", "add-search"]);
+            return projectRuntime(projectDir, ["search-ui"]);
+          },
+          stdout: (msg) => stdout.push(msg),
+        },
+      );
+      return { exitCode, stdout, projectDirs };
+    }
+
+    it("groups worktrees under a header per project and keeps going past a failing project", async () => {
+      const { exitCode, stdout, projectDirs } = await runListAllProjects(["--all-projects"]);
+
+      expect(exitCode).toBe(0);
+      expect(projectDirs).toEqual(["/alpha", "/broken", "/empty", "/beta"]);
+      expect(stdout).toHaveLength(12);
+      expect(stdout[0]).toContain("alpha");
+      expect(stdout[0]).toContain("/alpha");
+      expect(stdout[1]).toMatch(/^ {2}fix-bug +open/);
+      expect(stdout[2]).toMatch(/^ {2}add-search +closed/);
+      expect(stdout[3]).toBe("");
+      expect(stdout[4]).toContain("broken");
+      expect(stdout[5]).toContain("Failed to list worktrees: not a git repository");
+      expect(stdout[6]).toBe("");
+      expect(stdout[7]).toContain("empty");
+      expect(stdout[8]).toContain("No worktrees found.");
+      expect(stdout[9]).toBe("");
+      expect(stdout[10]).toContain("beta");
+      expect(stdout[11]).toMatch(/^ {2}search-ui +open/);
+    });
+
+    it("applies --search and archive filters to every project", async () => {
+      const { stdout } = await runListAllProjects(["--all-projects", "--archived", "--search", "search"]);
+
+      expect(stdout.map((line) => line.replace(/\u001b\[\d+m/g, ""))).toEqual([
+        "alpha /alpha",
+        "  No archived worktrees found.",
+        "",
+        "broken /broken",
+        "  Failed to list worktrees: not a git repository",
+        "",
+        "empty /empty",
+        "  No worktrees found.",
+        "",
+        "beta /beta",
+        "  No archived worktrees found.",
+      ]);
+    });
+
+    it("applies --search to every project", async () => {
+      const { stdout } = await runListAllProjects(["--all-projects", "--search", "search"]);
+
+      expect(stdout[1]).toMatch(/^ {2}add-search +closed$/);
+      expect(stdout[2]).toBe("");
+      expect(stdout[10]).toMatch(/^ {2}search-ui +open$/);
+      expect(stdout).toHaveLength(11);
+    });
+
+    it("prints a hint when no project is registered", async () => {
+      const stdout: string[] = [];
+      const exitCode = await runWorktreeCommand(
+        { command: "list", args: ["--all-projects"], projectDir: "/not-a-project", port: 5111 },
+        {
+          listProjects: () => [],
+          createRuntime: () => { throw new Error("unexpected"); },
+          stdout: (msg) => stdout.push(msg),
+        },
+      );
+
+      expect(exitCode).toBe(0);
+      expect(stdout).toEqual(["No projects registered. Use `webmux project add` to add one."]);
+    });
   });
 
   it("prints prune help without creating a runtime", async () => {
