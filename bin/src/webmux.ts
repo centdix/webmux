@@ -51,7 +51,8 @@ Options:
   --help              Show this help message
 
 Environment:
-  PORT             Same as --port (flag takes precedence)
+  PORT             Same as --port (flag takes precedence). Ignored inside a
+                   webmux worktree shell, where it is the app's dev-server port.
 `);
 }
 
@@ -162,9 +163,11 @@ export function parseRootArgs(args: string[]): ParsedRootArgs {
     }
   }
 
-  // `webmux port` runs inside agent shells, where an inherited PORT is the app's
-  // dev-server port, not webmux's — only an explicit --port flag pins the server.
-  if (command === "port" && !portFromFlag) {
+  // Inside a worktree shell (and for `webmux port`, which runs in agent shells),
+  // an inherited PORT is the app's dev-server port, not webmux's — only an
+  // explicit --port flag pins the server.
+  const inWorktreeShell = Boolean(process.env.WEBMUX_WORKTREE_ID);
+  if ((inWorktreeShell || command === "port") && !portFromFlag) {
     port = 5111;
     portExplicit = false;
   }
