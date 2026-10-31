@@ -66,6 +66,7 @@ describe("TopBar", () => {
     const onnotificationselect = vi.fn();
     const notification: AppNotification = {
       id: 1,
+      project: "webmux",
       branch: "feature/pr-notif",
       type: "pr_opened",
       message: "PR opened",
