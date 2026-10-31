@@ -8,6 +8,8 @@ import type {
   WorktreeInfo,
 } from "./lib/types";
 
+const mockProject = vi.hoisted(() => ({ prefix: "proj" }));
+
 const { MockFitAddon, MockTerminal, MockWebSocket } = vi.hoisted(() => {
   class MockFitAddon {
     static instances: MockFitAddon[] = [];
@@ -127,7 +129,10 @@ vi.mock("./lib/api", () => ({
   postWorktreeToLinear: vi.fn(),
   subscribeNotifications: vi.fn(),
   uploadFiles: vi.fn(),
-  activePrefix: "",
+  get activePrefix(): string {
+    return mockProject.prefix;
+  },
+  apiBase: "",
   terminalStreamUrl: (worktree: string) => `ws://localhost/ws/${encodeURIComponent(worktree)}`,
   fetchProjects: vi.fn(async () => []),
   fetchInstances: vi.fn(async () => []),
@@ -467,6 +472,53 @@ describe("App create selection", () => {
   afterEach(() => {
     cleanup();
     restoreBrowserMocks();
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("mirrors the selected worktree into the hash and the project's storage key", async () => {
+    vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("main"), createWorktree("feature/x")]);
+
+    render(App);
+
+    await screen.findByTitle("main");
+    await waitFor(() => expect(window.location.hash).toBe("#proj/main"));
+
+    await fireEvent.click(screen.getByRole("button", { name: /^feature\/x\b/i }));
+
+    await screen.findByTitle("feature/x");
+    expect(window.location.hash).toBe("#proj/feature/x");
+    expect(localStorage.getItem("wt-last-selected-worktree:proj")).toBe("feature/x");
+  });
+
+  it("selects the hash branch over the saved selection at mount", async () => {
+    localStorage.setItem("wt-last-selected-worktree:proj", "feature/saved");
+    window.history.replaceState(null, "", "/#proj/feature/hash");
+    vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("feature/saved"), createWorktree("feature/hash")]);
+
+    render(App);
+
+    expect(await screen.findByTitle("feature/hash")).toBeInTheDocument();
+    expect(window.location.hash).toBe("#proj/feature/hash");
+  });
+
+  it("ignores a hash that targets another project", async () => {
+    localStorage.setItem("wt-last-selected-worktree:proj", "feature/saved");
+    window.history.replaceState(null, "", "/#other/feature/hash");
+    vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("feature/hash"), createWorktree("feature/saved")]);
+
+    render(App);
+
+    expect(await screen.findByTitle("feature/saved")).toBeInTheDocument();
+    expect(window.location.hash).toBe("#proj/feature/saved");
+  });
+
+  it("does not restore a selection saved for another project", async () => {
+    localStorage.setItem("wt-last-selected-worktree:other", "feature/b");
+    vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("feature/a"), createWorktree("feature/b")]);
+
+    render(App);
+
+    expect(await screen.findByTitle("feature/a")).toBeInTheDocument();
   });
 
   it("keeps the current selection when a new worktree is created from an existing selection", async () => {
@@ -711,7 +763,7 @@ describe("App create selection", () => {
   });
 
   it("reconnects the visible terminal after refreshing a stale terminal", async () => {
-    localStorage.setItem("wt-last-selected-worktree", "feature/active");
+    localStorage.setItem("wt-last-selected-worktree:proj", "feature/active");
     const staleWorktree = createWorktree("feature/active", {
       mux: "✓",
       agentName: "codex",

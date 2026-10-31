@@ -67,6 +67,22 @@ describe("worktree selection persistence", () => {
     expect(localStorage.getItem(`${LAST_SELECTED_WORKTREE_STORAGE_KEY}:proj-a`)).toBeNull();
   });
 
+  it("migrates the unscoped selection into the first project that loads it", () => {
+    localStorage.setItem(LAST_SELECTED_WORKTREE_STORAGE_KEY, "feature/legacy");
+
+    expect(loadSavedSelectedWorktree("proj-a")).toBe("feature/legacy");
+    expect(localStorage.getItem(LAST_SELECTED_WORKTREE_STORAGE_KEY)).toBeNull();
+    expect(localStorage.getItem(`${LAST_SELECTED_WORKTREE_STORAGE_KEY}:proj-a`)).toBe("feature/legacy");
+    expect(loadSavedSelectedWorktree("proj-b")).toBeNull();
+  });
+
+  it("keeps a scoped selection over the unscoped one", () => {
+    saveSelectedWorktree("proj-a", "feature/scoped");
+    localStorage.setItem(LAST_SELECTED_WORKTREE_STORAGE_KEY, "feature/legacy");
+
+    expect(loadSavedSelectedWorktree("proj-a")).toBe("feature/scoped");
+  });
+
   it("stores and clears the last opened project", () => {
     saveLastProject("proj-a");
 

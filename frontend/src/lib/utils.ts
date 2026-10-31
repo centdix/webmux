@@ -125,7 +125,14 @@ export function saveLastProject(projectPrefix: string | null): void {
 }
 
 export function loadSavedSelectedWorktree(projectPrefix: string): string | null {
-  return loadStoredString(projectStorageKey(LAST_SELECTED_WORKTREE_STORAGE_KEY, projectPrefix));
+  const key = projectStorageKey(LAST_SELECTED_WORKTREE_STORAGE_KEY, projectPrefix);
+  const saved = loadStoredString(key);
+  if (saved || key === LAST_SELECTED_WORKTREE_STORAGE_KEY) return saved;
+  // One-time migration of the pre-multi-project unscoped selection.
+  const legacy = loadStoredString(LAST_SELECTED_WORKTREE_STORAGE_KEY);
+  localStorage.removeItem(LAST_SELECTED_WORKTREE_STORAGE_KEY);
+  saveStoredString(key, legacy);
+  return legacy;
 }
 
 export function saveSelectedWorktree(projectPrefix: string, branch: string | null): void {
