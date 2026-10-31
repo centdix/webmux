@@ -102,11 +102,11 @@ export function buildInitPromptSpec(context: InitProjectContext): InitPromptSpec
     "name: infer from the repository",
     "workspace.mainBranch: infer from git",
     "workspace.worktreeRoot: keep ../worktrees unless there is clear evidence of an existing alternative",
-    "services: one entry per real dev service with name, portEnv, and portStart when a default port is clear",
     "profiles.default.runtime: host",
     "profiles.default.envPassthrough: []",
     "profiles.default.panes: start with an agent pane focused true, then add command panes for real services",
-    "Command panes should use the repository's real dev command and pass the relevant port env var into the command when needed.",
+    "Command panes should use the repository's real dev command. When it starts a server that listens on a port, get the port from webmux with a short label and pass it in the env var the dev server reads, e.g. `PORT=$(webmux port web) bun run dev`.",
+    "Do not add a services section; webmux assigns ports on demand through `webmux port`.",
     "Use split: right for the first command pane and split: bottom for later command panes.",
     "Include integrations.github.linkedRepos as an empty list, integrations.linear.enabled as true, and startupEnvs as an empty object.",
     "Only include optional sections like auto_name, lifecycleHooks, sandbox/docker config, mounts, or systemPrompt if the repository gives clear evidence they are needed.",
@@ -281,7 +281,7 @@ export function buildStarterTemplate(input: {
 
   return `# Starter config for webmux.
 # Keep the active keys below as a minimal working setup, then uncomment
-# the examples to enable more services, profiles, integrations, or hooks.
+# the examples to enable more profiles, integrations, or hooks.
 
 # Project display name shown in the dashboard and browser title.
 name: ${input.projectName}
@@ -299,19 +299,6 @@ workspace:
   #   enabled: false
   #   # Seconds between pull attempts.
   #   intervalSeconds: 300
-
-# Services define the ports webmux allocates and tracks per worktree.
-services:
-  # Example app service with a predictable per-worktree port.
-  # - name: app
-  #   # Env var name injected into panes and hooks.
-  #   portEnv: PORT
-  #   # Starting port for the first worktree slot.
-  #   portStart: 3000
-  #   # Port increment between worktree slots.
-  #   portStep: 10
-  #   # Link shown in the dashboard when the service is running.
-  #   urlTemplate: http://localhost:\${PORT}
 
 # Profiles define runtime, permissions, and tmux pane layout.
 profiles:
@@ -353,8 +340,9 @@ profiles:
       #   cwd: worktree
       #   # Change into a subdirectory before running the command.
       #   workingDir: frontend
-      #   # Command run when the pane starts. webmux injects $PORT.
-      #   command: PORT=$PORT ${devCommand}
+      #   # Command run when the pane starts. \`webmux port <label>\` prints a free
+      #   # port for this worktree and shows the server in the dashboard.
+      #   command: PORT=$(webmux port app) ${devCommand}
       # Example shell pane for manual commands.
       # - id: shell
       #   # Pane type: agent, command, or shell.
@@ -436,8 +424,6 @@ integrations:
 startupEnvs:
   # Example feature flag available in every worktree session.
   # FEATURE_FLAG: true
-  # Example service URL built from allocated ports.
-  # API_BASE_URL: http://localhost:\${PORT}
 
 # lifecycleHooks run custom shell commands during worktree lifecycle events.
 # lifecycleHooks:
