@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import {
   attach,
   cleanupStaleSessions,
@@ -57,6 +57,26 @@ function createFakePtyProcess(pid: number, onKill: () => void) {
   };
 }
 
+type TerminalAdapterDependencies = NonNullable<Parameters<typeof setTerminalAdapterDependenciesForTests>[0]>;
+
+// Any dependency left to its default runs the real tmux, and tests run inside a webmux pane,
+// so cleanupStaleSessions() would kill the live dashboard's wm-dash-5111-* sessions.
+function setFakeDependencies(overrides: TerminalAdapterDependencies = {}): void {
+  setTerminalAdapterDependenciesForTests({
+    spawnPtyProcess: () => {
+      throw new Error("unexpected PTY spawn: mock spawnPtyProcess in this test");
+    },
+    spawnTmuxProcess: () => ({
+      stderr: closedStream(),
+      exited: Promise.resolve(0),
+      kill(): void {},
+    }),
+    sleep: async () => {},
+    spawnSyncCommand: () => ({ exitCode: 0, stdout: encode(""), stderr: encode("") }),
+    ...overrides,
+  });
+}
+
 function extractGroupedSessionName(args: string[]): string {
   const joined = args.join(" ");
   const match = /new-session -d -s "([^"]+)"/.exec(joined);
@@ -67,6 +87,10 @@ function extractGroupedSessionName(args: string[]): string {
 }
 
 describe("terminal adapter", () => {
+  beforeEach(() => {
+    setFakeDependencies();
+  });
+
   afterEach(async () => {
     await detach("attach-a");
     await detach("attach-b");
@@ -78,7 +102,7 @@ describe("terminal adapter", () => {
     const managedSessions = new Set<string>();
     let nextPid = 1000;
 
-    setTerminalAdapterDependenciesForTests({
+    setFakeDependencies({
       spawnPtyProcess: (args) => {
         const groupedSessionName = extractGroupedSessionName(args);
         managedSessions.add(groupedSessionName);
@@ -136,7 +160,7 @@ describe("terminal adapter", () => {
 
   it("hides the tmux status bar in the dashboard's grouped session only", async () => {
     let attachCommand = "";
-    setTerminalAdapterDependenciesForTests({
+    setFakeDependencies({
       spawnPtyProcess: (args) => {
         attachCommand = args.join(" ");
         return createFakePtyProcess(1000, () => {});
@@ -154,7 +178,7 @@ describe("terminal adapter", () => {
   it("sends ctrl-c to the target pane when interrupting a prompt", async () => {
     const tmuxCalls: string[][] = [];
 
-    setTerminalAdapterDependenciesForTests({
+    setFakeDependencies({
       spawnTmuxProcess: (args) => {
         tmuxCalls.push(args);
         return {
@@ -184,7 +208,7 @@ describe("terminal adapter", () => {
     const tmuxCalls: string[][] = [];
     const slept: number[] = [];
 
-    setTerminalAdapterDependenciesForTests({
+    setFakeDependencies({
       sleep: async (ms) => {
         slept.push(ms);
       },
