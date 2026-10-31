@@ -55,7 +55,14 @@ function isInstanceEntry(value: unknown): value is InstanceEntry {
     && typeof v.pid === "number";
 }
 
-export function createInstanceRegistry(dir: string = defaultRegistryDir()): InstanceRegistry {
+/** `checkPids: false` trusts every entry: used inside sandbox containers, whose
+ *  PID namespace can't see the host PIDs the entries record. */
+export function createInstanceRegistry(
+  dir: string = defaultRegistryDir(),
+  opts: { checkPids?: boolean } = {},
+): InstanceRegistry {
+  const checkPids = opts.checkPids ?? true;
+
   function ensureDir(): void {
     mkdirSync(dir, { recursive: true });
   }
@@ -116,7 +123,7 @@ export function createInstanceRegistry(dir: string = defaultRegistryDir()): Inst
       for (const filename of filenames) {
         const entry = readEntry(filename);
         if (!entry) continue;
-        if (!isAlive(entry.pid)) {
+        if (checkPids && !isAlive(entry.pid)) {
           try {
             unlinkSync(join(dir, filename));
           } catch {

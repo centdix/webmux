@@ -441,6 +441,9 @@ async function main(args: string[] = process.argv.slice(2)): Promise<void> {
     // strip them from the tmux server's global environment (see tmux adapter).
     ...(projectEnvKeys.size > 0 ? { WEBMUX_PROJECT_ENV_KEYS: [...projectEnvKeys].join(",") } : {}),
     ...(parsed.debug ? { WEBMUX_DEBUG: "1" } : {}),
+    // This CLI's own JS bundle, mounted into docker sandboxes so agents there
+    // can run `webmux`. Absent when running from source (`bin/src/webmux.ts`).
+    ...(import.meta.path.endsWith(".js") ? { WEBMUX_CLI_ENTRY: import.meta.path } : {}),
   };
 
   const children: Subprocess[] = [];
