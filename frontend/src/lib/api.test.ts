@@ -2,16 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppNotification, InitialProject } from "./types";
 
 /**
- * The active project lives in module state set by `setActiveProject`, so each
- * case re-imports `api.ts` fresh. Regression guard for the notifications SSE +
- * file-upload calls, which must be scoped under the active project's
- * `/api/projects/<prefix>` like every other request.
+ * Every project-scoped call names its project explicitly — `api.ts` holds no
+ * "active project". Regression guard for the WebSocket / upload / SSE URLs,
+ * which must be scoped under `/api/projects/<prefix>` like every other request.
  */
-async function loadApiFor(project: string): Promise<typeof import("./api")> {
+async function loadApi(): Promise<typeof import("./api")> {
   vi.resetModules();
-  const api = await import("./api");
-  api.setActiveProject(project);
-  return api;
+  return import("./api");
 }
 
 afterEach(() => {
@@ -21,36 +18,8 @@ afterEach(() => {
   window.history.replaceState(null, "", "/");
 });
 
-describe("project-prefixed network calls", () => {
-  it("derives apiBase from the active project, without touching the URL", async () => {
-    const api = await loadApiFor("myproject");
-
-    expect(api.activePrefix).toBe("myproject");
-    expect(api.apiBase).toBe("/api/projects/myproject");
-    expect(window.location.pathname).toBe("/");
-  });
-
-  it("rebinds every call when switching projects on the same module instance", async () => {
-    const fetchMock = vi.fn(async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ uploaded: [], dir: "x" }),
-    }));
-    vi.stubGlobal("fetch", fetchMock);
-    const api = await loadApiFor("alpha");
-
-    api.setActiveProject("beta");
-    await api.uploadFiles("feat/x", [new File(["a"], "a.txt")]);
-
-    expect(api.activePrefix).toBe("beta");
-    expect(api.apiBase).toBe("/api/projects/beta");
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/projects/beta/worktrees/feat%2Fx/upload",
-      expect.objectContaining({ method: "POST" }),
-    );
-  });
-
-  it("connectWorktreeConversationStream opens the agents socket under the active prefix", async () => {
+describe("project-scoped network calls", () => {
+  function stubWebSocket(): string[] {
     const urls: string[] = [];
     class MockWebSocket {
       constructor(url: string) {
@@ -60,20 +29,44 @@ describe("project-prefixed network calls", () => {
       close(): void {}
     }
     vi.stubGlobal("WebSocket", MockWebSocket);
+    return urls;
+  }
 
-    const api = await loadApiFor("myproject");
-    api.connectWorktreeConversationStream("feat/x", { onEvent: () => {}, onError: () => {} });
+  it("targets each project's own base path through the same module (no hidden global)", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request) => jsonResponse({ worktrees: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const urls = stubWebSocket();
 
-    expect(urls).toEqual([`ws://${window.location.host}/api/projects/myproject/ws/agents/worktrees/feat%2Fx`]);
+    const api = await loadApi();
+    await api.fetchWorktrees("alpha");
+    await api.fetchWorktrees("beta");
+    await api.fetchWorktrees("alpha");
+    api.connectWorktreeConversationStream("beta", "feat/x", { onEvent: () => {}, onError: () => {} });
+    api.connectWorktreeConversationStream("alpha", "feat/x", { onEvent: () => {}, onError: () => {} });
+
+    expect(fetchMock.mock.calls.map(([input]) => urlOf(input))).toEqual([
+      "/api/projects/alpha/worktrees",
+      "/api/projects/beta/worktrees",
+      "/api/projects/alpha/worktrees",
+    ]);
+    expect(urls).toEqual([
+      `ws://${window.location.host}/api/projects/beta/ws/agents/worktrees/feat%2Fx`,
+      `ws://${window.location.host}/api/projects/alpha/ws/agents/worktrees/feat%2Fx`,
+    ]);
+    expect(api.projectApi("alpha")).toBe(api.projectApi("alpha"));
+    expect(api.projectApi("alpha")).not.toBe(api.projectApi("beta"));
+    expect(window.location.pathname).toBe("/");
   });
 
-  it("terminalStreamUrl targets the terminal socket under the active prefix", async () => {
-    const api = await loadApiFor("myproject");
+  it("terminalSocketUrl points at the project's terminal socket", async () => {
+    const api = await loadApi();
 
-    expect(api.terminalStreamUrl("feat/x")).toBe(`ws://${window.location.host}/api/projects/myproject/ws/feat%2Fx`);
+    expect(api.terminalSocketUrl("myproject", "feat/x")).toBe(
+      `ws://${window.location.host}/api/projects/myproject/ws/feat%2Fx`,
+    );
   });
 
-  it("uploadFiles posts under the active prefix", async () => {
+  it("uploadFiles posts under the given project", async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
       status: 200,
@@ -81,8 +74,8 @@ describe("project-prefixed network calls", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const api = await loadApiFor("myproject");
-    await api.uploadFiles("feat/x", [new File(["a"], "a.txt")]);
+    const api = await loadApi();
+    await api.uploadFiles("myproject", "feat/x", [new File(["a"], "a.txt")]);
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/projects/myproject/worktrees/feat%2Fx/upload",
@@ -114,7 +107,7 @@ describe("setUpProject", () => {
       }),
     ));
 
-    const api = await loadApiFor("y");
+    const api = await loadApi();
     const phases: string[] = [];
     const result = await api.setUpProject("/repo/y", (phase) => phases.push(phase));
 
@@ -138,7 +131,7 @@ describe("setUpProject", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const api = await loadApiFor("x");
+    const api = await loadApi();
     const phases: string[] = [];
     const result = await api.setUpProject("/repo/x", (phase) => phases.push(phase));
 
@@ -159,7 +152,7 @@ describe("setUpProject", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const api = await loadApiFor("x");
+    const api = await loadApi();
     await expect(api.setUpProject("/repo/z", () => {})).rejects.toThrow("not a git repo");
   });
 });
@@ -192,19 +185,19 @@ describe("notifications", () => {
 
   it("subscribeNotifications opens the hub stream", async () => {
     const source = stubEventSource();
-    const api = await loadApiFor("myproject");
-    api.subscribeNotifications(() => {}, () => {});
+    const api = await loadApi();
+    api.subscribeNotifications("myproject", () => {}, () => {});
 
     expect(source.urls).toEqual(["/api/notifications/stream"]);
   });
 
-  it("subscribeNotifications only delivers the active project's events", async () => {
+  it("subscribeNotifications only delivers the given project's events", async () => {
     const source = stubEventSource();
-    const api = await loadApiFor("myproject");
+    const api = await loadApi();
     const initial: AppNotification[] = [];
     const live: AppNotification[] = [];
     const dismissed: number[] = [];
-    api.subscribeNotifications((n) => live.push(n), (id) => dismissed.push(id), (n) => initial.push(n));
+    api.subscribeNotifications("myproject", (n) => live.push(n), (id) => dismissed.push(id), (n) => initial.push(n));
 
     source.emit("initial", notification("other", 1));
     source.emit("initial", notification("myproject", 2));
@@ -225,7 +218,7 @@ describe("notifications", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const api = await loadApiFor("myproject");
+    const api = await loadApi();
     await api.dismissNotification(notification("other", 7));
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -245,8 +238,7 @@ describe("resolveInitialProject", () => {
   }
 
   async function resolve(): Promise<InitialProject> {
-    vi.resetModules();
-    return (await import("./api")).resolveInitialProject();
+    return (await loadApi()).resolveInitialProject();
   }
 
   it("prefers the hash project, then the last project, then the first one", async () => {

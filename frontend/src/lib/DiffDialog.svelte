@@ -3,13 +3,14 @@
   import { ColorSchemeType } from "diff2html/lib/types";
   import "diff2html/bundles/css/diff2html.min.css";
   import type { DiffDialogProps, UnpushedCommit } from "./types";
-  import { api } from "./api";
+  import { projectApi } from "./api";
   import { errorMessage } from "./utils";
   import BaseDialog from "./BaseDialog.svelte";
   import Btn from "./Btn.svelte";
   import IdeButton from "./IdeButton.svelte";
 
   let {
+    project,
     branch,
     ideUrl = null,
     onclose,
@@ -25,7 +26,7 @@
   $effect(() => {
     loading = true;
     error = "";
-    api.fetchWorktreeDiff({ params: { name: branch } })
+    projectApi(project).fetchWorktreeDiff({ params: { name: branch } })
       .then((res) => {
         uncommitted = res.uncommitted;
         uncommittedTruncated = res.uncommittedTruncated;

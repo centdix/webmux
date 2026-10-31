@@ -7,7 +7,7 @@
   import Toggle from "./Toggle.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import AgentEditorDialog from "./AgentEditorDialog.svelte";
-  import { api, createAgent, deleteAgent, fetchAgents, updateAgent, validateAgent } from "./api";
+  import { createAgent, deleteAgent, fetchAgents, updateAgent, validateAgent, projectApi } from "./api";
   import type { AgentDetails, AgentSummary, IdeKind, UpsertCustomAgentRequest } from "./types";
 
   interface AgentEditorState {
@@ -22,6 +22,7 @@
   }
 
   let {
+    project,
     currentTheme,
     useWebChatUi,
     ide,
@@ -35,6 +36,7 @@
     onsave,
     onclose,
   }: {
+    project: string;
     currentTheme: ThemeKey;
     useWebChatUi: boolean;
     ide: IdeKind;
@@ -72,7 +74,7 @@
     agentsError = null;
 
     try {
-      agents = await fetchAgents();
+      agents = await fetchAgents(project);
     } catch (err) {
       agentsError = errorMessage(err);
     } finally {
@@ -81,7 +83,7 @@
   }
 
   function syncAgentSummaries(): void {
-    api.fetchConfig()
+    projectApi(project).fetchConfig()
       .then((config) => {
         onagentschange(config.agents);
       })
@@ -97,7 +99,7 @@
   function handleAutoCreateToggle(enabled: boolean) {
     pendingAutoCreate = enabled;
     autoCreateSaving = true;
-    api.setLinearAutoCreate({ body: { enabled } })
+    projectApi(project).setLinearAutoCreate({ body: { enabled } })
       .then((result) => {
         onlinearautocreatechange(result.enabled);
       })
@@ -110,7 +112,7 @@
   function handleAutoRemoveToggle(enabled: boolean) {
     pendingAutoRemove = enabled;
     autoRemoveSaving = true;
-    api.setAutoRemoveOnMerge({ body: { enabled } })
+    projectApi(project).setAutoRemoveOnMerge({ body: { enabled } })
       .then((result) => {
         onautoremovechange(result.enabled);
       })
@@ -176,9 +178,9 @@
     if (!editor) return;
 
     if (editor.mode === "edit" && editor.agentId) {
-      await updateAgent(editor.agentId, input);
+      await updateAgent(project, editor.agentId, input);
     } else {
-      await createAgent(input);
+      await createAgent(project, input);
     }
 
     await loadAgentList();
@@ -187,7 +189,7 @@
   }
 
   function handleValidateAgent(input: UpsertCustomAgentRequest) {
-    return validateAgent(input);
+    return validateAgent(project, input);
   }
 
   async function handleDeleteAgent(): Promise<void> {
@@ -195,7 +197,7 @@
     deletingAgentId = deleteCandidate.id;
 
     try {
-      await deleteAgent(deleteCandidate.id);
+      await deleteAgent(project, deleteCandidate.id);
       await loadAgentList();
       syncAgentSummaries();
       deleteCandidate = null;

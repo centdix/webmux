@@ -1,14 +1,14 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import { activePrefix, api } from "../lib/api";
+  import { onMount, untrack } from "svelte";
+  import { projectApi } from "../lib/api";
 
-  let { onSwitchProject }: { onSwitchProject: (prefix: string | null) => void } = $props();
+  let { project, onSwitchProject }: { project: string; onSwitchProject: (prefix: string | null) => void } = $props();
 
   // Captured once per instance: a remount is the only way this text changes.
-  const mountedFor = activePrefix;
+  const mountedFor = untrack(() => project);
 
   onMount(() => {
-    void api.fetchConfig().catch(() => {});
+    void projectApi(project).fetchConfig().catch(() => {});
   });
 </script>
 

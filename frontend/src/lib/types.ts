@@ -99,6 +99,7 @@ export interface AskUserQuestionInput {
 }
 
 export interface DiffDialogProps {
+  project: string;
   branch: string;
   ideUrl?: string | null;
   onclose: () => void;

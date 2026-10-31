@@ -128,6 +128,7 @@ describe("MobileChatSurface", () => {
 
     render(MobileChatSurface, {
       props: {
+        project: "myproject",
         worktree: createWorktree(),
       },
     });
@@ -141,10 +142,11 @@ describe("MobileChatSurface", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     await waitFor(() => {
-      expect(sendWorktreeConversationMessage).toHaveBeenCalledWith("feature/mobile-chat", { text: "Ship it" });
+      expect(sendWorktreeConversationMessage).toHaveBeenCalledWith("myproject", "feature/mobile-chat", { text: "Ship it" });
     });
     await waitFor(() => {
       expect(connectWorktreeConversationStream).toHaveBeenCalledWith(
+        "myproject",
         "feature/mobile-chat",
         expect.any(Object),
       );
@@ -173,6 +175,7 @@ describe("MobileChatSurface", () => {
 
     render(MobileChatSurface, {
       props: {
+        project: "myproject",
         worktree: createWorktree(),
       },
     });
@@ -186,7 +189,7 @@ describe("MobileChatSurface", () => {
     expect(connectWorktreeConversationStream).toHaveBeenCalledTimes(1);
 
     // Turn 1 completes — the stream must stay open, not tear down.
-    const callbacks = vi.mocked(connectWorktreeConversationStream).mock.calls[0]?.[1];
+    const callbacks = vi.mocked(connectWorktreeConversationStream).mock.calls[0]?.[2];
     callbacks?.onEvent({
       type: "conversationStatus",
       revision: 1,
@@ -243,6 +246,7 @@ describe("MobileChatSurface", () => {
 
     render(MobileChatSurface, {
       props: {
+        project: "myproject",
         worktree: createWorktree(),
       },
     });
@@ -255,12 +259,12 @@ describe("MobileChatSurface", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     await waitFor(() => {
-      expect(sendWorktreeConversationMessage).toHaveBeenCalledWith("feature/mobile-chat", { text: "Ship it" });
+      expect(sendWorktreeConversationMessage).toHaveBeenCalledWith("myproject", "feature/mobile-chat", { text: "Ship it" });
     });
     await vi.advanceTimersByTimeAsync(1000);
 
     await waitFor(() => {
-      expect(fetchWorktreeConversationHistory).toHaveBeenCalledWith("feature/mobile-chat");
+      expect(fetchWorktreeConversationHistory).toHaveBeenCalledWith("myproject", "feature/mobile-chat");
     });
     await screen.findByText("Done from terminal");
   });
@@ -277,6 +281,7 @@ describe("MobileChatSurface", () => {
 
     render(MobileChatSurface, {
       props: {
+        project: "myproject",
         worktree: createWorktree({ agentName: "codex" }),
       },
     });
@@ -291,6 +296,7 @@ describe("MobileChatSurface", () => {
 
     await waitFor(() => {
       expect(connectWorktreeConversationStream).toHaveBeenCalledWith(
+        "myproject",
         "feature/mobile-chat",
         expect.any(Object),
       );
@@ -306,6 +312,7 @@ describe("MobileChatSurface", () => {
 
     render(MobileChatSurface, {
       props: {
+        project: "myproject",
         worktree: createWorktree({ agentName: "codex" }),
       },
     });
@@ -323,12 +330,14 @@ describe("MobileChatSurface", () => {
 
     render(MobileChatSurface, {
       props: {
+        project: "myproject",
         worktree: createWorktree({ agentName: "codex" }),
       },
     });
 
     await waitFor(() => {
       expect(connectWorktreeConversationStream).toHaveBeenCalledWith(
+        "myproject",
         "feature/mobile-chat",
         expect.any(Object),
       );
@@ -346,6 +355,7 @@ describe("MobileChatSurface", () => {
 
     render(MobileChatSurface, {
       props: {
+        project: "myproject",
         worktree: createWorktree({ agentName: "codex" }),
       },
     });
@@ -359,12 +369,13 @@ describe("MobileChatSurface", () => {
 
     await waitFor(() => {
       expect(connectWorktreeConversationStream).toHaveBeenCalledWith(
+        "myproject",
         "feature/mobile-chat",
         expect.any(Object),
       );
     });
 
-    const callbacks = vi.mocked(connectWorktreeConversationStream).mock.calls[0]?.[1];
+    const callbacks = vi.mocked(connectWorktreeConversationStream).mock.calls[0]?.[2];
     callbacks?.onEvent({
       type: "messageUpsert",
       revision: 1,
@@ -394,18 +405,20 @@ describe("MobileChatSurface", () => {
 
     render(MobileChatSurface, {
       props: {
+        project: "myproject",
         worktree: createWorktree(),
       },
     });
 
     await waitFor(() => {
       expect(connectWorktreeConversationStream).toHaveBeenCalledWith(
+        "myproject",
         "feature/mobile-chat",
         expect.any(Object),
       );
     });
 
-    const callbacks = vi.mocked(connectWorktreeConversationStream).mock.calls[0]?.[1];
+    const callbacks = vi.mocked(connectWorktreeConversationStream).mock.calls[0]?.[2];
     callbacks?.onEvent({
       type: "messageDelta",
       revision: 1,
@@ -427,18 +440,20 @@ describe("MobileChatSurface", () => {
 
     render(MobileChatSurface, {
       props: {
+        project: "myproject",
         worktree: createWorktree({ agentName: "codex", agentLabel: "Codex" }),
       },
     });
 
     await waitFor(() => {
       expect(connectWorktreeConversationStream).toHaveBeenCalledWith(
+        "myproject",
         "feature/mobile-chat",
         expect.any(Object),
       );
     });
 
-    const callbacks = vi.mocked(connectWorktreeConversationStream).mock.calls[0]?.[1];
+    const callbacks = vi.mocked(connectWorktreeConversationStream).mock.calls[0]?.[2];
     const deltaEvent: AgentsUiConversationEvent = {
       type: "messageDelta",
       revision: 1,
@@ -475,18 +490,20 @@ describe("MobileChatSurface", () => {
 
     render(MobileChatSurface, {
       props: {
+        project: "myproject",
         worktree: createWorktree({ agentName: "codex", agentLabel: "Codex" }),
       },
     });
 
     await waitFor(() => {
       expect(connectWorktreeConversationStream).toHaveBeenCalledWith(
+        "myproject",
         "feature/mobile-chat",
         expect.any(Object),
       );
     });
 
-    const callbacks = vi.mocked(connectWorktreeConversationStream).mock.calls[0]?.[1];
+    const callbacks = vi.mocked(connectWorktreeConversationStream).mock.calls[0]?.[2];
     callbacks?.onEvent({
       type: "messageDelta",
       revision: 1,
@@ -575,6 +592,7 @@ describe("MobileChatSurface", () => {
 
     const { rerender } = render(MobileChatSurface, {
       props: {
+        project: "myproject",
         worktree: createWorktree({ agent: "working", status: "running" }),
       },
     });
@@ -586,7 +604,7 @@ describe("MobileChatSurface", () => {
     // Polling surfaces the terminal claude's flushed response live.
     await vi.advanceTimersByTimeAsync(1000);
     await waitFor(() => {
-      expect(fetchWorktreeConversationHistory).toHaveBeenCalledWith("feature/mobile-chat");
+      expect(fetchWorktreeConversationHistory).toHaveBeenCalledWith("myproject", "feature/mobile-chat");
     });
     await screen.findByText("Done from terminal");
 

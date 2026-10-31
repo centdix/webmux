@@ -8,8 +8,6 @@ import type {
   WorktreeInfo,
 } from "./lib/types";
 
-const mockProject = vi.hoisted(() => ({ prefix: "proj" }));
-
 const { MockFitAddon, MockTerminal, MockWebSocket } = vi.hoisted(() => {
   class MockFitAddon {
     static instances: MockFitAddon[] = [];
@@ -100,8 +98,8 @@ vi.mock("@xterm/addon-web-links", () => ({
   WebLinksAddon: class MockWebLinksAddon {},
 }));
 
-vi.mock("./lib/api", () => ({
-  api: {
+vi.mock("./lib/api", () => {
+  const client = {
     closeWorktree: vi.fn(),
     createWorktree: vi.fn(),
     fetchAvailableBranches: vi.fn(),
@@ -115,45 +113,51 @@ vi.mock("./lib/api", () => ({
     removeWorktree: vi.fn(),
     setWorktreeArchived: vi.fn(),
     sendWorktreePrompt: vi.fn(),
-  },
-  attachWorktreeConversation: vi.fn(),
-  connectWorktreeConversationStream: vi.fn(),
-  dismissNotification: vi.fn(),
-  fetchWorktreeConversationHistory: vi.fn(),
-  fetchWorktrees: vi.fn(),
-  interruptWorktreeConversation: vi.fn(),
-  refreshWorktreeAgentTerminal: vi.fn(),
-  sendWorktreeConversationMessage: vi.fn(),
-  setWorktreeLabel: vi.fn(),
-  setWorktreeProfile: vi.fn(),
-  postWorktreeToLinear: vi.fn(),
-  subscribeNotifications: vi.fn(),
-  uploadFiles: vi.fn(),
-  get activePrefix(): string {
-    return mockProject.prefix;
-  },
-  apiBase: "",
-  terminalStreamUrl: (worktree: string) => `ws://localhost/ws/${encodeURIComponent(worktree)}`,
-  fetchProjects: vi.fn(async () => []),
-  fetchInstances: vi.fn(async () => []),
-  setUpProject: vi.fn(),
-  removeProject: vi.fn(),
-}));
+  };
+  return {
+    projectApi: vi.fn(() => client),
+    attachWorktreeConversation: vi.fn(),
+    connectWorktreeConversationStream: vi.fn(),
+    dismissNotification: vi.fn(),
+    fetchWorktreeConversationHistory: vi.fn(),
+    fetchWorktrees: vi.fn(),
+    interruptWorktreeConversation: vi.fn(),
+    refreshWorktreeAgentTerminal: vi.fn(),
+    sendWorktreeConversationMessage: vi.fn(),
+    setWorktreeLabel: vi.fn(),
+    setWorktreeProfile: vi.fn(),
+    postWorktreeToLinear: vi.fn(),
+    subscribeNotifications: vi.fn(),
+    terminalSocketUrl: vi.fn(() => "ws://localhost/ws"),
+    uploadFiles: vi.fn(),
+    fetchProjects: vi.fn(async () => []),
+    fetchInstances: vi.fn(async () => []),
+    setUpProject: vi.fn(),
+    removeProject: vi.fn(),
+  };
+});
 
 import App from "./App.svelte";
 import {
-  api,
   attachWorktreeConversation,
   connectWorktreeConversationStream,
   dismissNotification,
   fetchWorktrees,
   postWorktreeToLinear,
+  projectApi,
   refreshWorktreeAgentTerminal,
   setWorktreeLabel,
   setWorktreeProfile,
   subscribeNotifications,
 } from "./lib/api";
 import { WEB_CHAT_UI_STORAGE_KEY } from "./lib/utils";
+
+const PROJECT = "webmux";
+const api = projectApi(PROJECT);
+
+function renderApp(): void {
+  render(App, { props: { project: PROJECT, onSwitchProject: vi.fn() } });
+}
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -478,45 +482,45 @@ describe("App create selection", () => {
   it("mirrors the selected worktree into the hash and the project's storage key", async () => {
     vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("main"), createWorktree("feature/x")]);
 
-    render(App);
+    renderApp();
 
     await screen.findByTitle("main");
-    await waitFor(() => expect(window.location.hash).toBe("#proj/main"));
+    await waitFor(() => expect(window.location.hash).toBe(`#${PROJECT}/main`));
 
     await fireEvent.click(screen.getByRole("button", { name: /^feature\/x\b/i }));
 
     await screen.findByTitle("feature/x");
-    expect(window.location.hash).toBe("#proj/feature/x");
-    expect(localStorage.getItem("wt-last-selected-worktree:proj")).toBe("feature/x");
+    expect(window.location.hash).toBe(`#${PROJECT}/feature/x`);
+    expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("feature/x");
   });
 
   it("selects the hash branch over the saved selection at mount", async () => {
-    localStorage.setItem("wt-last-selected-worktree:proj", "feature/saved");
-    window.history.replaceState(null, "", "/#proj/feature/hash");
+    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "feature/saved");
+    window.history.replaceState(null, "", `/#${PROJECT}/feature/hash`);
     vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("feature/saved"), createWorktree("feature/hash")]);
 
-    render(App);
+    renderApp();
 
     expect(await screen.findByTitle("feature/hash")).toBeInTheDocument();
-    expect(window.location.hash).toBe("#proj/feature/hash");
+    expect(window.location.hash).toBe(`#${PROJECT}/feature/hash`);
   });
 
   it("ignores a hash that targets another project", async () => {
-    localStorage.setItem("wt-last-selected-worktree:proj", "feature/saved");
+    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "feature/saved");
     window.history.replaceState(null, "", "/#other/feature/hash");
     vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("feature/hash"), createWorktree("feature/saved")]);
 
-    render(App);
+    renderApp();
 
     expect(await screen.findByTitle("feature/saved")).toBeInTheDocument();
-    expect(window.location.hash).toBe("#proj/feature/saved");
+    expect(window.location.hash).toBe(`#${PROJECT}/feature/saved`);
   });
 
   it("does not restore a selection saved for another project", async () => {
     localStorage.setItem("wt-last-selected-worktree:other", "feature/b");
     vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("feature/a"), createWorktree("feature/b")]);
 
-    render(App);
+    renderApp();
 
     expect(await screen.findByTitle("feature/a")).toBeInTheDocument();
   });
@@ -537,7 +541,7 @@ describe("App create selection", () => {
       .mockResolvedValue([existingWorktree, newWorktree]);
     vi.mocked(api.createWorktree).mockReturnValueOnce(createResult.promise);
 
-    render(App);
+    renderApp();
 
     await screen.findByTitle("main");
 
@@ -574,7 +578,7 @@ describe("App create selection", () => {
       .mockResolvedValue([newWorktree]);
     vi.mocked(api.createWorktree).mockReturnValueOnce(createResult.promise);
 
-    render(App);
+    renderApp();
 
     await screen.findByText("Select a worktree");
 
@@ -591,7 +595,7 @@ describe("App create selection", () => {
     vi.mocked(fetchWorktrees).mockResolvedValue([]);
     vi.mocked(api.createWorktree).mockRejectedValueOnce(new Error("branch exists"));
 
-    render(App);
+    renderApp();
 
     await screen.findByText("Select a worktree");
     await openCreateDialogAndSubmit("feature/new");
@@ -604,12 +608,12 @@ describe("App create selection", () => {
     let onNotification: ((notification: AppNotification) => void) | undefined;
 
     vi.mocked(fetchWorktrees).mockResolvedValue([]);
-    vi.mocked(subscribeNotifications).mockImplementation((handleNotification) => {
+    vi.mocked(subscribeNotifications).mockImplementation((_project, handleNotification) => {
       onNotification = handleNotification;
       return () => {};
     });
 
-    render(App);
+    renderApp();
 
     await screen.findByText("Select a worktree");
     onNotification?.(createAppNotification({ id: 42, project: "images", message: "Background error" }));
@@ -633,7 +637,7 @@ describe("App create selection", () => {
     vi.mocked(fetchWorktrees).mockResolvedValue([]);
     vi.mocked(api.pullMain).mockResolvedValueOnce({ status: "updated" });
 
-    render(App);
+    renderApp();
 
     await screen.findByText("Select a worktree");
     await screen.findByText("main");
@@ -664,7 +668,7 @@ describe("App create selection", () => {
       .mockResolvedValue([createdClaude, createdCodex]);
     vi.mocked(api.createWorktree).mockReturnValueOnce(createResult.promise);
 
-    render(App);
+    renderApp();
 
     await screen.findByText("Select a worktree");
 
@@ -694,7 +698,7 @@ describe("App create selection", () => {
       createWorktree("feature/archived", { archived: true }),
     ]);
 
-    render(App);
+    renderApp();
 
     await screen.findByRole("button", { name: /^feature\/active\b/i });
     expect(screen.queryByRole("button", { name: /feature\/archived/i })).not.toBeInTheDocument();
@@ -713,7 +717,7 @@ describe("App create selection", () => {
       createWorktree("feature/beta"),
     ]);
 
-    render(App);
+    renderApp();
 
     const searchInput = await screen.findByRole("searchbox", { name: /search worktrees/i });
     await screen.findByTitle("main");
@@ -732,7 +736,7 @@ describe("App create selection", () => {
       createWorktree("feature/beta"),
     ]);
 
-    render(App);
+    renderApp();
 
     const searchInput = await screen.findByRole("searchbox", { name: /search worktrees/i });
     await fireEvent.input(searchInput, { target: { value: "alpha" } });
@@ -749,7 +753,7 @@ describe("App create selection", () => {
       .mockResolvedValueOnce([createWorktree("feature/active", { archived: true })])
       .mockResolvedValue([createWorktree("feature/active", { archived: true })]);
 
-    render(App);
+    renderApp();
 
     await screen.findByTitle("feature/active");
     await fireEvent.click(screen.getByRole("button", { name: "Archive" }));
@@ -763,7 +767,7 @@ describe("App create selection", () => {
   });
 
   it("reconnects the visible terminal after refreshing a stale terminal", async () => {
-    localStorage.setItem("wt-last-selected-worktree:proj", "feature/active");
+    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "feature/active");
     const staleWorktree = createWorktree("feature/active", {
       mux: "✓",
       agentName: "codex",
@@ -782,7 +786,7 @@ describe("App create selection", () => {
       .mockResolvedValueOnce([refreshedWorktree])
       .mockResolvedValue([refreshedWorktree]);
 
-    render(App);
+    renderApp();
 
     await screen.findByText("Terminal stale");
     await waitFor(() => {
@@ -792,7 +796,7 @@ describe("App create selection", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
 
     await waitFor(() => {
-      expect(refreshWorktreeAgentTerminal).toHaveBeenCalledWith("feature/active");
+      expect(refreshWorktreeAgentTerminal).toHaveBeenCalledWith(PROJECT, "feature/active");
     });
     await waitFor(() => {
       expect(MockWebSocket.instances).toHaveLength(2);
@@ -804,7 +808,7 @@ describe("App create selection", () => {
     vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("feature/active")]);
     vi.mocked(setWorktreeLabel).mockResolvedValue("Search ranking");
 
-    render(App);
+    renderApp();
 
     await screen.findByTitle("feature/active");
     await fireEvent.click(screen.getByRole("button", { name: "Edit workspace label" }));
@@ -814,7 +818,7 @@ describe("App create selection", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
-      expect(setWorktreeLabel).toHaveBeenCalledWith("feature/active", "Search ranking");
+      expect(setWorktreeLabel).toHaveBeenCalledWith(PROJECT, "feature/active", "Search ranking");
     });
     expect(screen.getAllByText("Search ranking").length).toBeGreaterThan(0);
   });
@@ -828,7 +832,7 @@ describe("App create selection", () => {
       createWorktree("feature/active", { profile: "slim", mux: "✓" }),
     ]);
 
-    render(App);
+    renderApp();
 
     await screen.findByTitle("feature/active");
     await fireEvent.click(screen.getByRole("button", { name: /actions for feature\/active/i }));
@@ -837,7 +841,7 @@ describe("App create selection", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Switch" }));
 
     await waitFor(() => {
-      expect(setWorktreeProfile).toHaveBeenCalledWith("feature/active", "full");
+      expect(setWorktreeProfile).toHaveBeenCalledWith(PROJECT, "feature/active", "full");
     });
   });
 
@@ -847,7 +851,7 @@ describe("App create selection", () => {
       createLinearIssuesResponse({ availability: "missing_api_key" }),
     );
 
-    render(App);
+    renderApp();
 
     const toggle = await screen.findByRole("button", { name: /linear/i });
     expect(toggle).toBeInTheDocument();
@@ -867,7 +871,7 @@ describe("App create selection", () => {
       createLinearIssuesResponse({ availability: "ready", issues: [] }),
     );
 
-    render(App);
+    renderApp();
 
     const toggle = await screen.findByRole("button", { name: /linear/i });
     expect(toggle).toBeInTheDocument();
@@ -889,10 +893,10 @@ describe("App create selection", () => {
     vi.mocked(fetchWorktrees).mockResolvedValue([worktree]);
     vi.mocked(attachWorktreeConversation).mockResolvedValue(createConversationResponse(worktree));
 
-    render(App);
+    renderApp();
 
     expect(await screen.findByRole("textbox", { name: "Message" })).toBeInTheDocument();
-    expect(attachWorktreeConversation).toHaveBeenCalledWith("feature/chat");
+    expect(attachWorktreeConversation).toHaveBeenCalledWith(PROJECT, "feature/chat");
   });
 
   it("does not show the stale terminal banner in the web chat UI", async () => {
@@ -906,7 +910,7 @@ describe("App create selection", () => {
     vi.mocked(fetchWorktrees).mockResolvedValue([worktree]);
     vi.mocked(attachWorktreeConversation).mockResolvedValue(createConversationResponse(worktree));
 
-    render(App);
+    renderApp();
 
     expect(await screen.findByRole("textbox", { name: "Message" })).toBeInTheDocument();
     expect(screen.queryByText("Terminal stale")).not.toBeInTheDocument();
@@ -915,7 +919,7 @@ describe("App create selection", () => {
   it("hides the Linear ticket option when disabled in config", async () => {
     vi.mocked(fetchWorktrees).mockResolvedValue([]);
 
-    render(App);
+    renderApp();
 
     await fireEvent.click(screen.getByTitle("New Worktree (Cmd+K)"));
     await screen.findByText("New Worktree");
@@ -933,7 +937,7 @@ describe("App create selection", () => {
       branches: ["eng-123-new-flow"],
     });
 
-    render(App);
+    renderApp();
 
     await fireEvent.click(screen.getByTitle("New Worktree (Cmd+K)"));
     await screen.findByText("New Worktree");
@@ -977,7 +981,7 @@ describe("App create selection", () => {
   it("shows prefixed branch previews when multiple agents are selected", async () => {
     vi.mocked(fetchWorktrees).mockResolvedValue([]);
 
-    render(App);
+    renderApp();
 
     await fireEvent.click(screen.getByTitle("New Worktree (Cmd+K)"));
     await screen.findByText("New Worktree");
@@ -999,7 +1003,7 @@ describe("App create selection", () => {
       branches: ["claude-feature/new", "codex-feature/new"],
     });
 
-    render(App);
+    renderApp();
 
     await fireEvent.click(screen.getByTitle("New Worktree (Cmd+K)"));
     await screen.findByText("New Worktree");
@@ -1035,7 +1039,7 @@ describe("App create selection", () => {
       branches: ["feature/from-release"],
     });
 
-    render(App);
+    renderApp();
 
     await openCreateDialogWithBaseAndSubmit("feature/from-release", "release/base");
 
@@ -1059,7 +1063,7 @@ describe("App create selection", () => {
       .mockResolvedValueOnce({ branches: [{ name: "feature/local-only" }, { name: "feature/remote-only" }] });
     vi.mocked(api.fetchBaseBranches).mockResolvedValue({ branches: [{ name: "main" }] });
 
-    render(App);
+    renderApp();
 
     await fireEvent.click(screen.getByTitle("New Worktree (Cmd+K)"));
     await screen.findByText("New Worktree");
@@ -1104,7 +1108,7 @@ describe("App create selection", () => {
       .mockResolvedValueOnce({ branches: [{ name: "feature/local-only" }] })
       .mockReturnValueOnce(remoteBranches.promise.then((branches) => ({ branches })));
 
-    render(App);
+    renderApp();
 
     await fireEvent.click(screen.getByTitle("New Worktree (Cmd+K)"));
     await screen.findByText("New Worktree");
@@ -1133,7 +1137,7 @@ describe("App create selection", () => {
     });
     vi.mocked(fetchWorktrees).mockResolvedValue([linkedWorktree]);
 
-    render(App);
+    renderApp();
 
     await screen.findByTitle("feature/linked");
 
@@ -1146,7 +1150,7 @@ describe("App create selection", () => {
     await waitFor(() => {
       expect(postWorktreeToLinear).toHaveBeenCalledTimes(1);
     });
-    expect(postWorktreeToLinear).toHaveBeenCalledWith("feature/linked", {
+    expect(postWorktreeToLinear).toHaveBeenCalledWith(PROJECT, "feature/linked", {
       kind: "issue",
       issueId: "ENG-42",
     });
@@ -1172,7 +1176,7 @@ describe("App create selection", () => {
     }>();
     vi.mocked(postWorktreeToLinear).mockReturnValueOnce(pending.promise);
 
-    render(App);
+    renderApp();
 
     await screen.findByTitle("feature/linked");
 

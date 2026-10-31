@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, type Component } from "svelte";
+  import { onMount, untrack, type Component } from "svelte";
   import WorktreeList from "./lib/WorktreeList.svelte";
   import TopBar from "./lib/TopBar.svelte";
   import Terminal from "./lib/Terminal.svelte";
@@ -63,12 +63,11 @@
   import type { ThemeKey } from "./lib/themes";
   import { setToastController } from "./lib/toast-context";
   import {
-    activePrefix,
-    api,
     createWorktreeTab,
     deleteWorktreeTab,
     fetchWorktrees,
     postWorktreeToLinear,
+    projectApi,
     refreshWorktreeAgentTerminal,
     selectWorktreeTab,
     setWorktreeLabel,
@@ -79,7 +78,7 @@
   import TabBar from "./lib/TabBar.svelte";
   import { pickInitialBranch, readLocationHash, writeLocationHash } from "./lib/project-location";
 
-  let { onSwitchProject }: { onSwitchProject: (prefix: string | null) => void } = $props();
+  let { project, onSwitchProject }: { project: string; onSwitchProject: (prefix: string | null) => void } = $props();
 
   function createDefaultConfig(): AppConfig {
     return {
@@ -111,10 +110,11 @@
   let config = $state<AppConfig>(createDefaultConfig());
   let worktrees = $state<WorktreeInfo[]>([]);
   let selectedBranch = $state<string | null>(
-    pickInitialBranch(readLocationHash(), activePrefix, loadSavedSelectedWorktree(activePrefix)),
+    // Root remounts App per project, so the initial `project` is the only one.
+    untrack(() => pickInitialBranch(readLocationHash(), project, loadSavedSelectedWorktree(project))),
   );
   let hasLoadedWorktrees = $state(false);
-  let favoriteBranches = $state<Set<string>>(loadFavoriteWorktrees(activePrefix));
+  let favoriteBranches = $state<Set<string>>(untrack(() => loadFavoriteWorktrees(project)));
   let removeBranch = $state<string | null>(null);
   let postToLinearBranch = $state<string | null>(null);
   let postToLinkedConfirm = $state<{ branch: string; issueId: string } | null>(null);
@@ -218,7 +218,7 @@
     const inFlight = availableBranchRequests[key];
     if (inFlight) return inFlight;
 
-    const request = api.fetchAvailableBranches({ query: { includeRemote } })
+    const request = projectApi(project).fetchAvailableBranches({ query: { includeRemote } })
       .then((data) => {
         availableBranchCache[key] = data.branches;
         return data.branches;
@@ -235,7 +235,7 @@
     if (baseBranchCache) return Promise.resolve(baseBranchCache);
     if (baseBranchRequest) return baseBranchRequest;
 
-    baseBranchRequest = api.fetchBaseBranches()
+    baseBranchRequest = projectApi(project).fetchBaseBranches()
       .then((data) => {
         baseBranchCache = data.branches;
         return data.branches;
@@ -529,16 +529,16 @@
   $effect(() => {
     if (!hasLoadedWorktrees) return;
     if (selectedWorktree) {
-      saveSelectedWorktree(activePrefix, selectedWorktree.branch);
+      saveSelectedWorktree(project, selectedWorktree.branch);
       return;
     }
     if (selectableWorktrees.length === 0) {
-      saveSelectedWorktree(activePrefix, null);
+      saveSelectedWorktree(project, null);
     }
   });
 
   $effect(() => {
-    writeLocationHash(activePrefix, selectedBranch);
+    writeLocationHash(project, selectedBranch);
   });
 
   $effect(() => {
@@ -619,7 +619,7 @@
     const now = Date.now();
     if (now - linearLastFetch < LINEAR_THROTTLE_MS) return;
     linearLastFetch = now;
-    api.fetchLinearIssues().then((data) => {
+    projectApi(project).fetchLinearIssues().then((data) => {
       linearAvailability = data.availability;
       linearIssues = data.issues;
     }).catch((err: unknown) => console.warn("[linear]", err));
@@ -627,7 +627,7 @@
 
   async function refresh() {
     try {
-      worktrees = await fetchWorktrees();
+      worktrees = await fetchWorktrees(project);
       hasLoadedWorktrees = true;
     } catch (err) {
       console.error("Failed to refresh:", err);
@@ -680,7 +680,7 @@
     lockedBaseBranch = null;
 
     try {
-      const createPromise = api.createWorktree({ body: finalRequest });
+      const createPromise = projectApi(project).createWorktree({ body: finalRequest });
       void refresh();
       const result = await createPromise;
       if (shouldAutoSelectCreatedWorktree) {
@@ -735,7 +735,7 @@
     const next = new Set(favoriteBranches);
     if (!next.delete(branch)) next.add(branch);
     favoriteBranches = next;
-    saveFavoriteWorktrees(activePrefix, next);
+    saveFavoriteWorktrees(project, next);
   }
 
   function handleSelectWorktree(branch: string): void {
@@ -753,7 +753,7 @@
 
     removingBranches = new Set([...removingBranches, branch]);
     try {
-      await api.removeWorktree({ params: { name: branch } });
+      await projectApi(project).removeWorktree({ params: { name: branch } });
       invalidateBranchCaches();
       await refresh();
     } catch (err) {
@@ -784,7 +784,7 @@
     labelLoading = true;
     labelError = "";
     try {
-      const nextLabel = await setWorktreeLabel(branch, label);
+      const nextLabel = await setWorktreeLabel(project, branch, label);
       applyWorktreeLabel(branch, nextLabel);
       labelBranch = null;
     } catch (err) {
@@ -806,7 +806,7 @@
     profileLoading = true;
     profileError = "";
     try {
-      const result = await setWorktreeProfile(branch, profile);
+      const result = await setWorktreeProfile(project, branch, profile);
       profileBranch = null;
       await refresh();
       if (result.restarted) {
@@ -832,7 +832,7 @@
     pullMainLoading = true;
     pullMainError = "";
     try {
-      const result = await api.pullMain({
+      const result = await projectApi(project).pullMain({
         body: { ...(pullMainForce ? { force: true } : {}) },
       });
       if (result.status === "updated" || result.status === "already_up_to_date") {
@@ -862,7 +862,7 @@
     pullLinkedRepoLoading = true;
     pullLinkedRepoError = "";
     try {
-      const result = await api.pullMain({
+      const result = await projectApi(project).pullMain({
         body: {
           ...(pullLinkedRepoForce ? { force: true } : {}),
           ...(pullLinkedRepoAlias ? { repo: pullLinkedRepoAlias } : {}),
@@ -889,7 +889,7 @@
     if (!branch) return;
     openingBranches = new Set([...openingBranches, branch]);
     try {
-      await api.openWorktree({ params: { name: branch }, body: {} });
+      await projectApi(project).openWorktree({ params: { name: branch }, body: {} });
       await refresh();
     } catch (err) {
       showToast({ tone: "error", message: `Failed to open worktree: ${errorMessage(err)}` });
@@ -906,7 +906,7 @@
 
     archivingBranches = new Set([...archivingBranches, branch]);
     try {
-      await api.setWorktreeArchived({
+      await projectApi(project).setWorktreeArchived({
         params: { name: branch },
         body: { archived: nextArchived },
       });
@@ -921,7 +921,7 @@
   async function closeWorktree(branch: string): Promise<void> {
     selectNeighborOf(branch);
     try {
-      await api.closeWorktree({ params: { name: branch } });
+      await projectApi(project).closeWorktree({ params: { name: branch } });
       await refresh();
     } catch (err) {
       showToast({ tone: "error", message: `Failed to close worktree: ${errorMessage(err)}` });
@@ -950,7 +950,7 @@
     postToLinkedConfirm = null;
     postingLinearBranches = new Set([...postingLinearBranches, branch]);
     try {
-      const response = await postWorktreeToLinear(branch, { kind: "issue", issueId });
+      const response = await postWorktreeToLinear(project, branch, { kind: "issue", issueId });
       showToast({ tone: "success", message: `Posted to Linear: ${response.issueUrl}` });
     } catch (err) {
       showToast({ tone: "error", message: `Failed to post to Linear: ${errorMessage(err)}` });
@@ -965,7 +965,7 @@
     if (refreshingAgentTerminalBranches.has(branch)) return;
     refreshingAgentTerminalBranches = new Set([...refreshingAgentTerminalBranches, branch]);
     try {
-      await refreshWorktreeAgentTerminal(branch);
+      await refreshWorktreeAgentTerminal(project, branch);
       await refresh();
       terminalSessionRevisions = {
         ...terminalSessionRevisions,
@@ -986,7 +986,7 @@
     if (!branch || tabBusy) return;
     tabBusy = true;
     try {
-      await createWorktreeTab(branch);
+      await createWorktreeTab(project, branch);
       await refresh();
     } catch (err) {
       showToast({ tone: "error", message: `Failed to create tab: ${errorMessage(err)}` });
@@ -1000,7 +1000,7 @@
     if (!branch || tabBusy) return;
     tabBusy = true;
     try {
-      await selectWorktreeTab(branch, tabId);
+      await selectWorktreeTab(project, branch, tabId);
       await refresh();
     } catch (err) {
       showToast({ tone: "error", message: `Failed to switch tab: ${errorMessage(err)}` });
@@ -1014,7 +1014,7 @@
     if (!branch || tabBusy) return;
     tabBusy = true;
     try {
-      await deleteWorktreeTab(branch, tabId);
+      await deleteWorktreeTab(project, branch, tabId);
       await refresh();
     } catch (err) {
       showToast({ tone: "error", message: `Failed to delete tab: ${errorMessage(err)}` });
@@ -1086,7 +1086,7 @@
 
   onMount(() => {
     applyTheme(currentTheme);
-    api
+    projectApi(project)
       .fetchConfig()
       .then((c) => {
         config = c;
@@ -1097,7 +1097,7 @@
     let intervalMs = pollIntervalMs;
     let interval: ReturnType<typeof setInterval> | undefined;
     window.addEventListener("keydown", handleKeydown);
-    let unsubNotifications = subscribeNotifications(handleNotification, handleSseDismiss, handleInitialNotification);
+    let unsubNotifications = subscribeNotifications(project, handleNotification, handleSseDismiss, handleInitialNotification);
     // Request notification permission (no-op if already granted/denied)
     if (Notification.permission === "default") {
       Notification.requestPermission().catch(() => {});
@@ -1193,7 +1193,7 @@
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-1 min-w-0">
             <h1 class="text-base font-semibold truncate">{config.name ?? "Dashboard"}</h1>
-            <ProjectSwitcher current={activePrefix} onSwitch={onSwitchProject} />
+            <ProjectSwitcher current={project} onSwitch={onSwitchProject} />
           </div>
           <div class="flex items-center gap-2">
             <button
@@ -1359,6 +1359,7 @@
     {#if showWebChat}
       {#key selectedBranch}
         <MobileChatSurface
+          {project}
           worktree={selectedWorktree!}
           onConversationMessageSent={() => void refresh()}
         />
@@ -1376,6 +1377,7 @@
       {/if}
       {#key selectedTerminalKey}
         <Terminal
+          {project}
           worktree={selectedBranch!}
           {isMobile}
           initialPane={isMobile ? activePane : undefined}
@@ -1541,6 +1543,7 @@
 
 {#if showSettingsDialog}
   <SettingsDialog
+    {project}
     {currentTheme}
     {useWebChatUi}
     ide={config.ide}
@@ -1564,6 +1567,7 @@
 
 {#if ciDetailsPr}
   <CiDetailsDialog
+    {project}
     pr={ciDetailsPr}
     branch={selectedWorktree?.branch ?? ""}
     onclose={() => (ciDetailsPr = null)}
@@ -1575,6 +1579,7 @@
 
 {#if commentReviewPr}
   <CommentReviewDialog
+    {project}
     pr={commentReviewPr}
     branch={selectedWorktree?.branch ?? ""}
     onclose={() => (commentReviewPr = null)}
@@ -1586,6 +1591,7 @@
 
 {#if showDiffDialog && selectedBranch && DiffDialogComponent}
   <DiffDialogComponent
+    {project}
     branch={selectedBranch}
     ideUrl={makeIdeUrl(selectedWorktree?.dir, sshHost, config.ide)}
     onclose={() => (showDiffDialog = false)}
@@ -1606,7 +1612,7 @@
     onsubmit={async (target) => {
       const branch = postToLinearBranch;
       if (!branch) return;
-      const response = await postWorktreeToLinear(branch, target);
+      const response = await postWorktreeToLinear(project, branch, target);
       showToast({
         tone: "success",
         message: `Posted to Linear: ${response.issueUrl}`,

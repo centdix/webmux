@@ -3,20 +3,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SettingsDialog from "./SettingsDialog.svelte";
 import type { AgentDetails, AgentSummary, AppConfig } from "./types";
 
-vi.mock("./api", () => ({
-  api: {
+vi.mock("./api", () => {
+  const client = {
     fetchConfig: vi.fn(),
     setAutoRemoveOnMerge: vi.fn(),
     setLinearAutoCreate: vi.fn(),
-  },
-  fetchAgents: vi.fn(),
-  createAgent: vi.fn(),
-  updateAgent: vi.fn(),
-  deleteAgent: vi.fn(),
-  validateAgent: vi.fn(),
-}));
+  };
+  return {
+    projectApi: vi.fn(() => client),
+    fetchAgents: vi.fn(),
+    createAgent: vi.fn(),
+    updateAgent: vi.fn(),
+    deleteAgent: vi.fn(),
+    validateAgent: vi.fn(),
+  };
+});
 
-import { api, createAgent, deleteAgent, fetchAgents, validateAgent } from "./api";
+import { createAgent, deleteAgent, fetchAgents, projectApi, validateAgent } from "./api";
+
+const api = projectApi("myproject");
 
 const originalDialogShowModal = HTMLDialogElement.prototype.showModal;
 const originalDialogClose = HTMLDialogElement.prototype.close;
@@ -77,6 +82,7 @@ function createConfig(overrides: Partial<AppConfig> = {}): AppConfig {
 
 function renderDialog() {
   return render(SettingsDialog, {
+    project: "myproject",
     currentTheme: "github-dark",
     useWebChatUi: false,
     ide: "cursor",
@@ -133,6 +139,7 @@ describe("SettingsDialog agent management", () => {
     vi.mocked(fetchAgents).mockResolvedValue([]);
 
     render(SettingsDialog, {
+      project: "myproject",
       currentTheme: "github-dark",
       useWebChatUi: false,
       ide: "cursor",
@@ -183,6 +190,7 @@ describe("SettingsDialog agent management", () => {
       .mockResolvedValueOnce(createConfig({ agents: [] }));
 
     render(SettingsDialog, {
+      project: "myproject",
       currentTheme: "github-dark",
       useWebChatUi: false,
       ide: "cursor",
@@ -204,7 +212,7 @@ describe("SettingsDialog agent management", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Test" }));
 
     await waitFor(() => {
-      expect(validateAgent).toHaveBeenCalledWith({
+      expect(validateAgent).toHaveBeenCalledWith("myproject", {
         label: "Gemini CLI",
         startCommand: 'gemini --prompt "${PROMPT}"',
       });
@@ -214,7 +222,7 @@ describe("SettingsDialog agent management", () => {
     await fireEvent.click(screen.getAllByRole("button", { name: "Save" }).at(-1)!);
 
     await waitFor(() => {
-      expect(createAgent).toHaveBeenCalledWith({
+      expect(createAgent).toHaveBeenCalledWith("myproject", {
         label: "Gemini CLI",
         startCommand: 'gemini --prompt "${PROMPT}"',
       });
@@ -227,7 +235,7 @@ describe("SettingsDialog agent management", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Remove" }));
 
     await waitFor(() => {
-      expect(deleteAgent).toHaveBeenCalledWith("gemini");
+      expect(deleteAgent).toHaveBeenCalledWith("myproject", "gemini");
     });
     await waitFor(() => {
       expect(onagentschange).toHaveBeenCalledWith([]);

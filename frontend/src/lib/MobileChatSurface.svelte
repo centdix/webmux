@@ -24,11 +24,13 @@
   import WorktreeConversationPanel from "./WorktreeConversationPanel.svelte";
 
   interface Props {
+    project: string;
     worktree: WorktreeInfo;
     onConversationMessageSent?: () => void;
   }
 
   const {
+    project,
     worktree,
     onConversationMessageSent = () => {},
   }: Props = $props();
@@ -128,7 +130,7 @@
     }
 
     lastStreamRevision = 0;
-    const disconnect = connectWorktreeConversationStream(worktree.branch, {
+    const disconnect = connectWorktreeConversationStream(project, worktree.branch, {
       onEvent: (event) => {
         handleConversationStreamEvent(conversationId, event);
       },
@@ -144,8 +146,8 @@
 
   function requestConversation(mode: "attach" | "history"): Promise<AgentsUiWorktreeConversationResponse> {
     return mode === "attach"
-      ? attachWorktreeConversation(worktree.branch)
-      : fetchWorktreeConversationHistory(worktree.branch);
+      ? attachWorktreeConversation(project, worktree.branch)
+      : fetchWorktreeConversationHistory(project, worktree.branch);
   }
 
   async function loadConversation(mode: "attach" | "history"): Promise<void> {
@@ -218,7 +220,7 @@
     conversationError = null;
     try {
       syncConversationStream(true);
-      const response = await sendWorktreeConversationMessage(worktree.branch, { text: trimmed });
+      const response = await sendWorktreeConversationMessage(project, worktree.branch, { text: trimmed });
       if (conversation.conversationId !== response.conversationId) {
         conversation = {
           ...conversation,
@@ -252,7 +254,7 @@
     const baselineConversation = conversation;
     conversationError = null;
     try {
-      const response = await interruptWorktreeConversation(worktree.branch);
+      const response = await interruptWorktreeConversation(project, worktree.branch);
       if (response.streaming) {
         syncConversationStream();
       } else {

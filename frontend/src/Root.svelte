@@ -3,7 +3,7 @@
   import App from "./App.svelte";
   import Btn from "./lib/Btn.svelte";
   import EmptyProjects from "./lib/EmptyProjects.svelte";
-  import { resolveInitialProject, setActiveProject } from "./lib/api";
+  import { resolveInitialProject } from "./lib/api";
   import { writeLocationHash } from "./lib/project-location";
   import { applyTheme, loadSavedTheme, saveLastProject } from "./lib/utils";
   import type { InitialProject } from "./lib/types";
@@ -20,10 +20,9 @@
   untrack(() => applyInitial(initial));
 
   /** Switch the dashboard to `next` in memory: no reload, no path change —
-   *  `{#key}` remounts App against the new project's API client. */
+   *  `{#key}` remounts App against the new project. */
   function switchProject(next: string | null): void {
-    if (next) setActiveProject(next);
-    else writeLocationHash(null, null);
+    if (!next) writeLocationHash(null, null);
     saveLastProject(next);
     project = next;
   }
@@ -58,6 +57,6 @@
   <EmptyProjects onProjectAdded={switchProject} />
 {:else}
   {#key project}
-    <App onSwitchProject={switchProject} />
+    <App {project} onSwitchProject={switchProject} />
   {/key}
 {/if}
