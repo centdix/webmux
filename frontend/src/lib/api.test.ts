@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AppNotification } from "./types";
+import type { AppNotification, InitialProject } from "./types";
 
 /**
  * The active project lives in module state set by `setActiveProject`, so each
@@ -28,6 +28,26 @@ describe("project-prefixed network calls", () => {
     expect(api.activePrefix).toBe("myproject");
     expect(api.apiBase).toBe("/api/projects/myproject");
     expect(window.location.pathname).toBe("/");
+  });
+
+  it("rebinds every call when switching projects on the same module instance", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ uploaded: [], dir: "x" }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const api = await loadApiFor("alpha");
+
+    api.setActiveProject("beta");
+    await api.uploadFiles("feat/x", [new File(["a"], "a.txt")]);
+
+    expect(api.activePrefix).toBe("beta");
+    expect(api.apiBase).toBe("/api/projects/beta");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/projects/beta/worktrees/feat%2Fx/upload",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 
   it("connectWorktreeConversationStream opens the agents socket under the active prefix", async () => {
@@ -224,7 +244,7 @@ describe("resolveInitialProject", () => {
     );
   }
 
-  async function resolve(): Promise<string | null> {
+  async function resolve(): Promise<InitialProject> {
     vi.resetModules();
     return (await import("./api")).resolveInitialProject();
   }
@@ -234,18 +254,27 @@ describe("resolveInitialProject", () => {
     localStorage.setItem("wt-last-project", "beta");
 
     window.history.replaceState(null, "", "/#gamma/feat/x");
-    expect(await resolve()).toBe("gamma");
+    expect(await resolve()).toEqual({ kind: "project", prefix: "gamma" });
 
     window.history.replaceState(null, "", "/");
-    expect(await resolve()).toBe("beta");
+    expect(await resolve()).toEqual({ kind: "project", prefix: "beta" });
 
     localStorage.clear();
-    expect(await resolve()).toBe("alpha");
+    expect(await resolve()).toEqual({ kind: "project", prefix: "alpha" });
   });
 
-  it("returns null when no project is registered", async () => {
+  it("reports none when no project is registered", async () => {
     stubProjects([]);
 
-    expect(await resolve()).toBeNull();
+    expect(await resolve()).toEqual({ kind: "none" });
+  });
+
+  it("reports an error instead of none when the list fails to load", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ error: "boom" }), { status: 500, headers: { "content-type": "application/json" } })),
+    );
+
+    expect((await resolve()).kind).toBe("error");
   });
 });

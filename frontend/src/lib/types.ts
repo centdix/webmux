@@ -160,3 +160,10 @@ export interface NotificationToastItem extends ToastInput {
 }
 
 export type ToastItem = UiToastItem | NotificationToastItem;
+
+/** Boot-time project resolution: a project to open, none registered, or the
+ *  project list could not be fetched (distinct from an empty list). */
+export type InitialProject =
+  | { kind: "project"; prefix: string }
+  | { kind: "none" }
+  | { kind: "error"; message: string };

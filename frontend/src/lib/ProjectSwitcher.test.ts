@@ -22,6 +22,9 @@ async function openMenu(): Promise<void> {
 
 describe("ProjectSwitcher", () => {
   beforeEach(() => {
+    HTMLDialogElement.prototype.showModal = vi.fn(function (this: HTMLDialogElement): void {
+      this.open = true;
+    });
     vi.mocked(fetchProjects).mockResolvedValue([project("alpha"), project("beta")]);
     vi.mocked(removeProject).mockResolvedValue(undefined);
   });
@@ -71,9 +74,37 @@ describe("ProjectSwitcher", () => {
     vi.mocked(fetchProjects).mockResolvedValue([project("beta")]);
 
     await fireEvent.click(screen.getAllByTitle("Remove project")[0]);
+    expect(removeProject).not.toHaveBeenCalled();
+    await fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
 
     await waitFor(() => expect(onSwitch).toHaveBeenCalledWith("beta"));
     expect(removeProject).toHaveBeenCalledWith("alpha");
+  });
+
+  it("keeps the current project when removing it is cancelled", async () => {
+    const onSwitch = vi.fn();
+    render(ProjectSwitcher, { current: "alpha", onSwitch });
+    await openMenu();
+
+    await fireEvent.click(screen.getAllByTitle("Remove project")[0]);
+    await fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+    expect(removeProject).not.toHaveBeenCalled();
+    expect(onSwitch).not.toHaveBeenCalled();
+  });
+
+  it("stays put and shows the error when the reload after a removal fails", async () => {
+    const onSwitch = vi.fn();
+    render(ProjectSwitcher, { current: "alpha", onSwitch });
+    await openMenu();
+    vi.mocked(fetchProjects).mockRejectedValue(new Error("hub unreachable"));
+
+    await fireEvent.click(screen.getAllByTitle("Remove project")[0]);
+    await fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+
+    expect(await screen.findByText("hub unreachable")).toBeInTheDocument();
+    expect(onSwitch).not.toHaveBeenCalled();
   });
 
   it("falls back to the empty state when the last project is removed", async () => {
@@ -85,6 +116,7 @@ describe("ProjectSwitcher", () => {
     vi.mocked(fetchProjects).mockResolvedValue([]);
 
     await fireEvent.click(screen.getByTitle("Remove project"));
+    await fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
 
     await waitFor(() => expect(onSwitch).toHaveBeenCalledWith(null));
   });

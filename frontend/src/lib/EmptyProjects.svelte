@@ -1,7 +1,6 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import { setUpProject } from "./api";
-  import { applyTheme, loadSavedTheme, projectInitPhaseLabel } from "./utils";
+  import { projectInitPhaseLabel } from "./utils";
   import type { ProjectInitPhase } from "./types";
 
   let { onProjectAdded }: { onProjectAdded: (prefix: string) => void } = $props();
@@ -10,10 +9,6 @@
   let error = $state<string | null>(null);
   let busy = $state(false);
   let phase = $state<ProjectInitPhase | null>(null);
-
-  onMount(() => {
-    applyTheme(loadSavedTheme());
-  });
 
   async function add(): Promise<void> {
     const target = path.trim();

@@ -10,7 +10,7 @@ import {
   type ProjectApi,
 } from "@webmux/api-contract";
 import { pickInitialProject, readLocationHash } from "./project-location";
-import { loadLastProject } from "./utils";
+import { errorMessage, loadLastProject } from "./utils";
 import type {
   AgentDetails,
   AgentResponse,
@@ -21,6 +21,7 @@ import type {
   AgentsUiWorktreeConversationResponse,
   AppNotification,
   FileUploadResult,
+  InitialProject,
   InstanceSummary,
   PostWorktreeToLinearResponse,
   PostWorktreeToLinearTarget,
@@ -310,16 +311,22 @@ export async function removeProject(prefix: string): Promise<void> {
   await hubApi.removeProject({ params: { prefix } });
 }
 
-/** Project to open at boot (see `pickInitialProject`); `null` when nothing is
+/** Project to open at boot (see `pickInitialProject`); `none` when nothing is
  *  registered, so the empty state mounts instead of a dashboard whose every
- *  per-project call would 404. */
-export async function resolveInitialProject(): Promise<string | null> {
-  const projects = await fetchProjects().catch((): ProjectSummary[] => []);
-  return pickInitialProject(
+ *  per-project call would 404; `error` when the list itself failed to load. */
+export async function resolveInitialProject(): Promise<InitialProject> {
+  let projects: ProjectSummary[];
+  try {
+    projects = await fetchProjects();
+  } catch (error) {
+    return { kind: "error", message: errorMessage(error) };
+  }
+  const prefix = pickInitialProject(
     projects.map((project) => project.prefix),
     readLocationHash()?.project ?? null,
     loadLastProject(),
   );
+  return prefix ? { kind: "project", prefix } : { kind: "none" };
 }
 
 /** Subscribe to the hub's merged notification stream. Until the dashboard is

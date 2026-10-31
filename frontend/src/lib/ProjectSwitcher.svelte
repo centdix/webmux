@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { fetchProjects, removeProject, setUpProject } from "./api";
-  import { projectInitPhaseLabel } from "./utils";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
+  import { errorMessage, projectInitPhaseLabel } from "./utils";
   import type { ProjectInitPhase, ProjectSummary } from "./types";
 
   let { current, onSwitch }: { current: string; onSwitch: (prefix: string | null) => void } = $props();
@@ -9,7 +10,8 @@
   let projects = $state<ProjectSummary[]>([]);
   let open = $state(false);
   let addPath = $state("");
-  let addError = $state<string | null>(null);
+  let error = $state<string | null>(null);
+  let confirmRemove = $state<ProjectSummary | null>(null);
   let busy = $state(false);
   let addPhase = $state<ProjectInitPhase | null>(null);
   let triggerEl: HTMLButtonElement | undefined = $state();
@@ -20,13 +22,12 @@
     void load();
   });
 
-  async function load(): Promise<ProjectSummary[]> {
+  async function load(): Promise<void> {
     try {
       projects = await fetchProjects();
     } catch {
       projects = [];
     }
-    return projects;
   }
 
   function switchTo(prefix: string | null): void {
@@ -47,7 +48,7 @@
       open = false;
       return;
     }
-    addError = null;
+    error = null;
     void load();
     positionMenu();
     open = true;
@@ -73,14 +74,14 @@
     const path = addPath.trim();
     if (!path || busy) return;
     busy = true;
-    addError = null;
+    error = null;
     addPhase = null;
     try {
       const { prefix } = await setUpProject(path, (next) => (addPhase = next));
       addPath = "";
       switchTo(prefix);
-    } catch (error) {
-      addError = error instanceof Error ? error.message : String(error);
+    } catch (err) {
+      error = errorMessage(err);
     } finally {
       busy = false;
       addPhase = null;
@@ -94,21 +95,34 @@
     }
   }
 
-  async function handleRemove(event: MouseEvent, prefix: string): Promise<void> {
+  function handleRemoveClick(event: MouseEvent, project: ProjectSummary): void {
     event.preventDefault();
     event.stopPropagation();
     if (busy) return;
+    error = null;
+    // Removing the open project tears down the dashboard: confirm first.
+    if (project.prefix === current) confirmRemove = project;
+    else void remove(project.prefix);
+  }
+
+  async function remove(prefix: string): Promise<void> {
     busy = true;
+    error = null;
     try {
       await removeProject(prefix);
-      const remaining = await load();
+      // A failed reload must not read as "no projects left": keep the current
+      // state and surface the error instead.
+      const remaining = await fetchProjects();
+      projects = remaining;
+      confirmRemove = null;
       // The dashboard can't stay on a removed project: move to another one,
       // or to the empty state when none is left.
       if (prefix === current) switchTo(remaining[0]?.prefix ?? null);
-    } catch {
-      // ignore — list reload will reflect actual state
+    } catch (err) {
+      error = errorMessage(err);
+    } finally {
+      busy = false;
     }
-    busy = false;
   }
 </script>
 
@@ -159,7 +173,7 @@
           class="shrink-0 px-2 text-muted hover:text-primary"
           title="Remove project"
           disabled={busy}
-          onclick={(event) => handleRemove(event, project.prefix)}
+          onclick={(event) => handleRemoveClick(event, project)}
         >
           ×
         </button>
@@ -191,9 +205,20 @@
           {projectInitPhaseLabel(addPhase)}…
         </div>
       {/if}
-      {#if addError}
-        <div class="mt-1 text-[11px] text-red-400 break-words">{addError}</div>
+      {#if error}
+        <div class="mt-1 text-[11px] text-red-400 break-words">{error}</div>
       {/if}
     </div>
   </div>
+{/if}
+
+{#if confirmRemove}
+  {@const target = confirmRemove}
+  <ConfirmDialog
+    message={`Remove ${target.name}, the project open now? The dashboard switches to another project.`}
+    loading={busy}
+    error={error ?? ""}
+    onconfirm={() => remove(target.prefix)}
+    oncancel={() => (confirmRemove = null)}
+  />
 {/if}
