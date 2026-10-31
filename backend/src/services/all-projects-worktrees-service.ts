@@ -1,3 +1,15 @@
+import type { ReconcileOptions } from "./reconciliation-service";
+
+/** Idle projects (no open socket) still need dirty/ahead, tmux state and
+ *  out-of-band worktree changes refreshed, but only occasionally. */
+export const IDLE_PROJECT_RECONCILE_FRESHNESS_MS = 30_000;
+
+/** Reconcile options for one project in the hub listing: active projects use
+ *  the service's default freshness, idle ones a long staleness window. */
+export function hubReconcileOptions(active: boolean): ReconcileOptions {
+  return active ? {} : { freshnessMs: IDLE_PROJECT_RECONCILE_FRESHNESS_MS };
+}
+
 export interface ProjectWorktreesSource<T> {
   prefix: string;
   name: string;
@@ -11,7 +23,8 @@ export interface ProjectWorktreesResult<T> {
   error: string | null;
 }
 
-/** Read every project's worktrees concurrently. One project failing yields an
+/** Start every project's read at once and wait for all of them (the reads
+ *  themselves may still block on synchronous git calls). One project failing yields an
  *  entry with `error` set and no worktrees; the others are still returned, in
  *  input order. */
 export async function collectAllProjectWorktrees<T>(

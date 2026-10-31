@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { collectAllProjectWorktrees } from "../services/all-projects-worktrees-service";
+import {
+  collectAllProjectWorktrees,
+  hubReconcileOptions,
+  IDLE_PROJECT_RECONCILE_FRESHNESS_MS,
+} from "../services/all-projects-worktrees-service";
 
 describe("all-projects-worktrees-service", () => {
   it("returns each project's worktrees in input order", async () => {
@@ -22,6 +26,18 @@ describe("all-projects-worktrees-service", () => {
       { prefix: "a", name: "Alpha", worktrees: [], error: "git exploded" },
       { prefix: "b", name: "Beta", worktrees: ["b1"], error: null },
     ]);
+  });
+
+  it("stringifies a non-Error rejection", async () => {
+    const result = await collectAllProjectWorktrees<string>([
+      { prefix: "a", name: "Alpha", readWorktrees: () => Promise.reject("plain failure") },
+    ]);
+    expect(result).toEqual([{ prefix: "a", name: "Alpha", worktrees: [], error: "plain failure" }]);
+  });
+
+  it("uses the default reconcile freshness for active projects only", () => {
+    expect(hubReconcileOptions(true)).toEqual({});
+    expect(hubReconcileOptions(false)).toEqual({ freshnessMs: IDLE_PROJECT_RECONCILE_FRESHNESS_MS });
   });
 
   it("returns an empty list when there are no projects", async () => {

@@ -122,7 +122,8 @@ import {
 } from "./services/agents-ui-stream-service";
 import { classifyAgentsTerminalWorktreeError } from "./services/agents-ui-action-service";
 import { buildProjectSnapshot } from "./services/snapshot-service";
-import { collectAllProjectWorktrees } from "./services/all-projects-worktrees-service";
+import { collectAllProjectWorktrees, hubReconcileOptions } from "./services/all-projects-worktrees-service";
+import type { ReconcileOptions } from "./services/reconciliation-service";
 import {
   ClaudeConversationService,
   isPendingClaudeConversationId,
@@ -214,7 +215,7 @@ interface ProjectApp {
   prefix: string;
   routes: ProjectRoutes;
   wsHandlers: WsHandlers;
-  readWorktrees(): Promise<WorktreeSnapshot[]>;
+  readWorktrees(reconcileOptions?: ReconcileOptions): Promise<WorktreeSnapshot[]>;
   startLight(): void;
   stopLight(): void;
 }
@@ -685,12 +686,12 @@ function makeCallbacks(ws: { send: (data: string) => void; readyState: number })
   };
 }
 
-async function readProjectSnapshot(): Promise<ProjectSnapshot> {
+async function readProjectSnapshot(reconcileOptions: ReconcileOptions = {}): Promise<ProjectSnapshot> {
   const linearApiKey = Bun.env.LINEAR_API_KEY;
   const linearIssuesPromise = config.integrations.linear.enabled && linearApiKey?.trim()
     ? fetchAssignedIssues()
     : Promise.resolve({ ok: true as const, data: [] });
-  await reconciliationService.reconcile(PROJECT_DIR);
+  await reconciliationService.reconcile(PROJECT_DIR, reconcileOptions);
   const archiveState = await archiveStateService.prune(projectRuntime.listWorktrees().map((worktree) => worktree.path));
   const linearResult = await linearIssuesPromise;
   const archivedPaths = buildArchivedWorktreePathSet(archiveState);
@@ -728,9 +729,7 @@ async function apiGetProject(): Promise<Response> {
 
 async function apiGetWorktrees(): Promise<Response> {
   touchDashboardActivity();
-  return jsonResponse({
-    worktrees: (await readProjectSnapshot()).worktrees,
-  });
+  return jsonResponse({ worktrees: await readWorktrees() });
 }
 
 function findSnapshotWorktree(snapshot: ProjectSnapshot, branch: string): WorktreeSnapshot | null {
@@ -2462,8 +2461,8 @@ function parseAgentIdParam(params: Record<string, string>):
     stopSessionSnapshot = null;
   }
 
-  async function readWorktrees(): Promise<WorktreeSnapshot[]> {
-    return (await readProjectSnapshot()).worktrees;
+  async function readWorktrees(reconcileOptions: ReconcileOptions = {}): Promise<WorktreeSnapshot[]> {
+    return (await readProjectSnapshot(reconcileOptions)).worktrees;
   }
 
   return { prefix: instancePrefix, routes, wsHandlers, readWorktrees, startLight, stopLight };
@@ -2508,14 +2507,24 @@ function apiListProjects(): Response {
   return jsonResponse({ projects: manager.list().map(toProjectSummary) });
 }
 
-/** Worktrees of every served project, for the cross-project sidebar. Does not
- *  touch dashboard activity: listing must not mark other projects as viewed. */
+/** Worktrees of every served project, for the cross-project sidebar. Idle
+ *  projects reconcile on a long staleness window so polling stays cheap. */
 async function apiListAllProjectWorktrees(): Promise<Response> {
+  // Dashboard activity is process-wide: any open dashboard keeps PR/CI display sync running.
+  touchDashboardActivity();
   const sources = manager.list().flatMap((p) => {
     const app = apps.get(p.prefix);
-    return app ? [{ prefix: p.prefix, name: p.entry.name, readWorktrees: app.readWorktrees }] : [];
+    if (!app) return [];
+    const reconcileOptions = hubReconcileOptions(p.active);
+    return [{ prefix: p.prefix, name: p.entry.name, readWorktrees: () => app.readWorktrees(reconcileOptions) }];
   });
-  return jsonResponse({ projects: await collectAllProjectWorktrees(sources) });
+  const projects = await collectAllProjectWorktrees(sources);
+  for (const project of projects) {
+    if (project.error !== null) {
+      log.warn(`[projects-worktrees] ${project.prefix}: ${project.error}`);
+    }
+  }
+  return jsonResponse({ projects });
 }
 
 /** A repo is a webmux project once it has a config file. */

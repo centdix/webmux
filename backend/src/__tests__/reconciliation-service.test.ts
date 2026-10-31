@@ -760,4 +760,39 @@ describe("ReconciliationService", () => {
     secondProbeRelease.resolve();
     await third;
   });
+  it("honors a per-call freshness override", async () => {
+    const repoRoot = "/repo/project";
+    let nowMs = 10_000;
+    const portProbe = new FakePortProbe();
+    let listCalls = 0;
+    class CountingGitGateway extends FakeGitGateway {
+      override listLiveWorktrees(): GitWorktreeEntry[] {
+        listCalls += 1;
+        return super.listLiveWorktrees();
+      }
+    }
+    const git = new CountingGitGateway(
+      [{ path: repoRoot, branch: "main", head: "aaa111", detached: false, bare: false }],
+      new Map(),
+      new Map(),
+    );
+    const service = new ReconciliationService(
+      { git, tmux: new FakeTmuxGateway([]), portProbe, runtime: new ProjectRuntime(), portRegistrations: { list: () => [] } },
+      { freshnessMs: 500, now: () => nowMs },
+    );
+
+    await service.reconcile(repoRoot);
+    expect(listCalls).toBe(1);
+
+    nowMs += 1_000;
+    await service.reconcile(repoRoot, { freshnessMs: 30_000 });
+    expect(listCalls).toBe(1);
+
+    await service.reconcile(repoRoot);
+    expect(listCalls).toBe(2);
+
+    nowMs += 30_001;
+    await service.reconcile(repoRoot, { freshnessMs: 30_000 });
+    expect(listCalls).toBe(3);
+  });
 });
