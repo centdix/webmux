@@ -191,7 +191,6 @@ function deferred<T>(): Deferred<T> {
 function createConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
     name: "repo",
-    services: [],
     startupEnvs: {},
     profiles: [{ name: "default" }],
     agents: [

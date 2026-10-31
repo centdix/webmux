@@ -979,7 +979,6 @@ describe("runWorktreeCommand", () => {
         agent: "codex",
         runtime: "host",
         startupEnvValues: {},
-        allocatedPorts: {},
       }));
       const stdout: string[] = [];
 

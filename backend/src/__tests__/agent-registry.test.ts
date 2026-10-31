@@ -32,7 +32,6 @@ const TEST_CONFIG: ProjectConfig = {
       resumeCommand: "gemini resume --last",
     },
   },
-  services: [],
   startupEnvs: {},
   integrations: {
     github: { linkedRepos: [], autoRemoveOnMerge: false },

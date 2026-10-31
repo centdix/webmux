@@ -21,9 +21,6 @@ function makeMeta(overrides: Partial<WorktreeMeta> = {}): WorktreeMeta {
     startupEnvValues: {
       STARTUP_TOKEN: "startup-token",
     },
-    allocatedPorts: {
-      FRONTEND_PORT: 3010,
-    },
     ...overrides,
   };
 }
@@ -60,7 +57,6 @@ describe("buildClaudeStreamingLaunchContext", () => {
       env: {
         DOTENV_ONLY: "local-value",
         STARTUP_TOKEN: "startup-token",
-        FRONTEND_PORT: "3010",
         WEBMUX_WORKTREE_PATH: worktreePath,
         WEBMUX_WORKTREE_ID: "wt_claude",
         WEBMUX_BRANCH: "feature/claude-stream",

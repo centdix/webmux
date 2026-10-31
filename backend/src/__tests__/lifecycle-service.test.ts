@@ -262,14 +262,6 @@ const TEST_CONFIG: ProjectConfig = {
     },
   },
   agents: {},
-  services: [
-    {
-      name: "frontend",
-      portEnv: "FRONTEND_PORT",
-      portStart: 3000,
-      portStep: 10,
-    },
-  ],
   startupEnvs: {
     FEATURE_FLAG: true,
   },
@@ -341,11 +333,11 @@ function makeLifecycleService(
   portRegistrations: LifecycleServiceDependencies["portRegistrations"] = { releaseWorktree: () => {} },
 ): LifecycleService {
   const reconciliation = new ReconciliationService({
-    config,
     git,
     tmux,
     portProbe: new FakePortProbe(),
     runtime,
+    portRegistrations: { list: () => [] },
   });
 
   return new LifecycleService({
@@ -429,7 +421,6 @@ describe("LifecycleService", () => {
       FEATURE_FLAG: "true",
       CUSTOM_TOKEN: "abc123",
     });
-    expect(meta?.allocatedPorts).toEqual({ FRONTEND_PORT: 3010 });
     expect(runtimeEnvText).toContain("WEBMUX_WORKTREE_PATH=");
     expect(runtimeEnvText).toContain("CUSTOM_TOKEN=abc123");
     expect(controlEnvText).toContain("WEBMUX_CONTROL_URL=http://127.0.0.1:5111/api/runtime/events");
@@ -441,7 +432,6 @@ describe("LifecycleService", () => {
         env: expect.objectContaining({
           CUSTOM_TOKEN: "abc123",
           FEATURE_FLAG: "true",
-          FRONTEND_PORT: "3010",
           WEBMUX_BRANCH: "feature/search",
           WEBMUX_PROFILE: "default",
           WEBMUX_RUNTIME: "host",
@@ -782,7 +772,7 @@ describe("LifecycleService", () => {
           ...TEST_CONFIG.profiles,
           default: {
             ...TEST_CONFIG.profiles.default,
-            systemPrompt: "Database: ${FRONTEND_PORT}",
+            systemPrompt: "Database: ${FEATURE_FLAG}",
           },
         },
         agents: {
@@ -1188,7 +1178,7 @@ describe("LifecycleService", () => {
           ...TEST_CONFIG.profiles,
           default: {
             ...TEST_CONFIG.profiles.default,
-            systemPrompt: "Database: ${FRONTEND_PORT}",
+            systemPrompt: "Database: ${FEATURE_FLAG}",
           },
         },
       },
@@ -1232,7 +1222,7 @@ describe("LifecycleService", () => {
           default: {
             ...TEST_CONFIG.profiles.default,
             yolo: true,
-            systemPrompt: "Database: ${FRONTEND_PORT}",
+            systemPrompt: "Database: ${FEATURE_FLAG}",
           },
         },
       },
@@ -1499,7 +1489,6 @@ describe("LifecycleService", () => {
     const paths = getWorktreeStoragePaths(gitDir);
     await Bun.write(paths.runtimeEnvPath, "runtime-marker\n");
     await Bun.write(paths.controlEnvPath, "control-marker\n");
-    const allocatedPorts = { ...(await readWorktreeMeta(gitDir))?.allocatedPorts };
     const labeled = await lifecycle.setWorktreeLabel("feature-label", "  Search ranking  ");
 
     expect(labeled).toEqual({ label: "Search ranking" });
@@ -1507,7 +1496,6 @@ describe("LifecycleService", () => {
     expect(runtime.getWorktreeByBranch("feature-label")?.label).toBe("Search ranking");
     expect(await Bun.file(paths.runtimeEnvPath).text()).toBe("runtime-marker\n");
     expect(await Bun.file(paths.controlEnvPath).text()).toBe("control-marker\n");
-    expect((await readWorktreeMeta(gitDir))?.allocatedPorts).toEqual(allocatedPorts);
 
     const cleared = await lifecycle.setWorktreeLabel("feature-label", "");
 
@@ -1516,7 +1504,6 @@ describe("LifecycleService", () => {
     expect(runtime.getWorktreeByBranch("feature-label")?.label).toBeNull();
     expect(await Bun.file(paths.runtimeEnvPath).text()).toBe("runtime-marker\n");
     expect(await Bun.file(paths.controlEnvPath).text()).toBe("control-marker\n");
-    expect((await readWorktreeMeta(gitDir))?.allocatedPorts).toEqual(allocatedPorts);
   });
 
   it("rejects labeling unmanaged worktrees without creating metadata", async () => {
@@ -2229,7 +2216,6 @@ describe("LifecycleService", () => {
     expect(after?.oneshot).toBeUndefined();
     expect(after?.branch).toBe(baseMeta.branch);
     expect(after?.profile).toBe(baseMeta.profile);
-    expect(after?.allocatedPorts).toEqual(baseMeta.allocatedPorts);
     expect(after?.startupEnvValues).toEqual(baseMeta.startupEnvValues);
 
     // Idempotent: a second call returns false because there is nothing to clear.

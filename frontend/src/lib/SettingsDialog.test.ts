@@ -58,7 +58,6 @@ function createAgentSummary(overrides: Partial<AgentSummary> = {}): AgentSummary
 function createConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
     name: "repo",
-    services: [],
     profiles: [{ name: "default" }],
     agents: [],
     defaultProfileName: "default",

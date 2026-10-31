@@ -19,11 +19,9 @@ import type {
   PaneTemplate,
   ProfileConfig,
   ProjectConfig,
-  ServiceSpec,
 } from "../domain/config";
 
 export type { CustomAgentConfig, LinkedRepoConfig, MountSpec, PaneTemplate, ProfileConfig, ProjectConfig };
-export type ServiceConfig = ServiceSpec;
 export type DockerProfileConfig = ProfileConfig & { runtime: "docker"; image: string };
 
 interface LoadConfigOptions {
@@ -73,7 +71,6 @@ const DEFAULT_CONFIG: ProjectConfig = {
     },
   },
   agents: {},
-  services: [],
   startupEnvs: {},
   integrations: {
     github: { linkedRepos: [], autoRemoveOnMerge: false },
@@ -257,21 +254,6 @@ function parseCustomAgents(raw: unknown): Record<AgentId, CustomAgentConfig> {
   }, {});
 }
 
-function parseServices(raw: unknown): ServiceSpec[] {
-  if (!Array.isArray(raw)) return [];
-
-  return raw
-    .filter(isRecord)
-    .filter((entry) => typeof entry.name === "string" && typeof entry.portEnv === "string")
-    .map((entry) => ({
-      name: entry.name as string,
-      portEnv: entry.portEnv as string,
-      ...(typeof entry.portStart === "number" && Number.isFinite(entry.portStart) ? { portStart: entry.portStart } : {}),
-      ...(typeof entry.portStep === "number" && Number.isFinite(entry.portStep) ? { portStep: entry.portStep } : {}),
-      ...(typeof entry.urlTemplate === "string" && entry.urlTemplate.length > 0 ? { urlTemplate: entry.urlTemplate } : {}),
-    }));
-}
-
 function parseStartupEnvs(raw: unknown): Record<string, string | boolean> {
   if (!isRecord(raw)) return {};
 
@@ -372,6 +354,10 @@ function parseConfigDocument(text: string): Record<string, unknown> {
 }
 
 function parseProjectConfig(parsed: Record<string, unknown>): ProjectConfig {
+  if (parsed.services !== undefined) {
+    log.warn("[config] `services` is no longer supported; use `webmux port`");
+  }
+
   return {
     name: typeof parsed.name === "string" && parsed.name.trim() ? parsed.name.trim() : DEFAULT_CONFIG.name,
     workspace: {
@@ -393,7 +379,6 @@ function parseProjectConfig(parsed: Record<string, unknown>): ProjectConfig {
     },
     profiles: parseProfiles(parsed.profiles, true),
     agents: {},
-    services: parseServices(parsed.services),
     startupEnvs: parseStartupEnvs(parsed.startupEnvs),
     integrations: {
       github: {

@@ -39,7 +39,6 @@ function makeMeta(): WorktreeMeta {
     agent: "claude",
     runtime: "host",
     startupEnvValues: {},
-    allocatedPorts: {},
   };
 }
 

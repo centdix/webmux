@@ -34,7 +34,7 @@ import {
   updateTab,
   withTabs,
 } from "./tab-logic";
-import { allocateServicePorts, isValidBranchName, isValidEnvKey } from "../domain/policies";
+import { isValidBranchName, isValidEnvKey } from "../domain/policies";
 import type { AutoNameGenerator } from "./auto-name-service";
 import {
   type AgentLaunchMode,
@@ -922,11 +922,6 @@ export class LifecycleService {
     return startupEnvValues;
   }
 
-  private async allocatePorts(): Promise<Record<string, number>> {
-    const metas = await this.readManagedMetas();
-    return allocateServicePorts(metas, this.deps.config.services);
-  }
-
   private resolveWorktreePath(branch: string): string {
     return resolve(this.deps.projectRoot, this.deps.config.workspace.worktreeRoot, branch);
   }
@@ -955,17 +950,6 @@ export class LifecycleService {
     return this.deps.git.listLiveWorktrees(projectRoot).filter((entry) =>
       !entry.bare && resolve(entry.path) !== projectRoot
     );
-  }
-
-  private async readManagedMetas(): Promise<WorktreeMeta[]> {
-    const metas = await Promise.all(
-      this.listProjectWorktrees().map(async (entry) => {
-        const gitDir = this.deps.git.resolveWorktreeGitDir(entry.path);
-        return readWorktreeMeta(gitDir);
-      }),
-    );
-
-    return metas.filter((meta): meta is WorktreeMeta => meta !== null);
   }
 
   private async resolveExistingWorktree(branch: string): Promise<ResolvedLifecycleWorktree> {
@@ -1004,7 +988,6 @@ export class LifecycleService {
       agent: this.deps.config.workspace.defaultAgent,
       runtime: profile.runtime,
       startupEnvValues: await this.buildStartupEnvValues(undefined),
-      allocatedPorts: await this.allocatePorts(),
       runtimeEnvExtras: { WEBMUX_WORKTREE_PATH: resolved.entry.path },
       dotenvValues,
       ...(await this.controlEnvFields()),
@@ -1432,7 +1415,6 @@ export class LifecycleService {
           agent: agent.id,
           runtime: profile.runtime,
           startupEnvValues: await this.buildStartupEnvValues(input.envOverrides),
-          allocatedPorts: await this.allocatePorts(),
           runtimeEnvExtras: { WEBMUX_WORKTREE_PATH: worktreePath },
           ...(await this.controlEnvFields()),
           deleteBranchOnRollback,

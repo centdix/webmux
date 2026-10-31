@@ -60,7 +60,6 @@ export type {
   ProjectSummary,
   ProjectWorktreeSnapshot,
   PullMainResult,
-  ServiceConfig,
   UpsertCustomAgentRequest,
   ServiceStatus,
   SetWorktreeArchivedRequest,

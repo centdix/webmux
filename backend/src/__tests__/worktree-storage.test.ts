@@ -222,10 +222,6 @@ function makeMeta(): WorktreeMeta {
     startupEnvValues: {
       NODE_ENV: "development",
     },
-    allocatedPorts: {
-      PORT: 5111,
-      FRONTEND_PORT: 3010,
-    },
   };
 }
 
@@ -319,8 +315,6 @@ describe("worktree env maps", () => {
       WEBMUX_WORKTREE_PATH: "/tmp/worktree",
     });
 
-    expect(env.FRONTEND_PORT).toBe("3010");
-    expect(env.PORT).toBe("5111");
     expect(env.NODE_ENV).toBe("development");
     expect(env.WEBMUX_WORKTREE_PATH).toBe("/tmp/worktree");
     expect(env.WEBMUX_BRANCH).toBe("feature/search-panel");
@@ -331,7 +325,6 @@ describe("worktree env maps", () => {
     const dotenv = {
       NODE_ENV: "production",
       CUSTOM_VAR: "from-dotenv",
-      FRONTEND_PORT: "9999",
     };
     const env = buildRuntimeEnvMap(makeMeta(), {
       WEBMUX_WORKTREE_PATH: "/tmp/worktree",
@@ -339,7 +332,6 @@ describe("worktree env maps", () => {
 
     expect(env.CUSTOM_VAR).toBe("from-dotenv");
     expect(env.NODE_ENV).toBe("development");
-    expect(env.FRONTEND_PORT).toBe("3010");
   });
 
 });
@@ -376,7 +368,6 @@ describe("initializeManagedWorktree", () => {
       agent: "claude",
       runtime: "host",
       startupEnvValues: { NODE_ENV: "development" },
-      allocatedPorts: { FRONTEND_PORT: 3010, PORT: 5111 },
       runtimeEnvExtras: { WEBMUX_WORKTREE_PATH: worktreePath },
       controlUrl: "http://127.0.0.1:5111",
       controlToken: "secret-token",
@@ -393,9 +384,8 @@ describe("initializeManagedWorktree", () => {
     expect(meta).not.toBeNull();
     expect(meta?.worktreeId).toBe("wt_test");
     expect(meta?.baseBranch).toBe("main");
-    expect(meta?.allocatedPorts.FRONTEND_PORT).toBe(3010);
 
-    expect(runtimeEnvText).toContain("FRONTEND_PORT=3010");
+    expect(runtimeEnvText).toContain("NODE_ENV=development");
     expect(runtimeEnvText).toContain("WEBMUX_BRANCH=feature/search-panel");
     expect(runtimeEnvText).toContain(`WEBMUX_WORKTREE_PATH=${worktreePath}`);
 
@@ -441,6 +431,21 @@ describe("initializeManagedWorktree", () => {
       activeTabId: "root",
       forkCounter: 0,
     });
+  });
+
+  it("loads old metadata that still carries allocatedPorts and drops the key", async () => {
+    gitDir = await mkdtemp(join(tmpdir(), "webmux-meta-ports-"));
+
+    const paths = getWorktreeStoragePaths(gitDir);
+    await mkdir(paths.webmuxDir, { recursive: true });
+    await Bun.write(paths.metaPath, JSON.stringify({
+      ...makeMeta(),
+      allocatedPorts: { FRONTEND_PORT: 3010, PORT: 5111 },
+    }, null, 2));
+
+    const meta = await readWorktreeMeta(gitDir);
+    expect(meta?.worktreeId).toBe("wt_test");
+    expect(meta).not.toHaveProperty("allocatedPorts");
   });
 
   it("normalizes blank labels out of worktree metadata", async () => {
@@ -546,7 +551,6 @@ describe("initializeManagedWorktree", () => {
         agent: "claude",
         runtime: "host",
         startupEnvValues: { NODE_ENV: "development" },
-        allocatedPorts: { FRONTEND_PORT: 3010 },
         controlUrl: "http://127.0.0.1:5111",
         controlToken: "secret-token",
         worktreeId: "wt_test",

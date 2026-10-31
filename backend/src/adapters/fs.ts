@@ -20,11 +20,6 @@ import { conversationSessionId, OPEN_SESSIONS_STATE_VERSION, ROOT_TAB_ID, WORKTR
 const SAFE_ENV_VALUE_RE = /^[A-Za-z0-9_./:@%+=,-]+$/;
 const DOTENV_LINE_RE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)/;
 
-function stringifyAllocatedPorts(ports: Record<string, number>): Record<string, string> {
-  const entries = Object.entries(ports).map(([key, value]) => [key, String(value)]);
-  return Object.fromEntries(entries);
-}
-
 function quoteEnvValue(value: string): string {
   if (value.length > 0 && SAFE_ENV_VALUE_RE.test(value)) return value;
   return `'${value.replaceAll("'", "'\\''")}'`;
@@ -88,7 +83,9 @@ export async function ensureWorktreeStorageDirs(gitDir: string): Promise<Worktre
 export async function readWorktreeMeta(gitDir: string): Promise<WorktreeMeta | null> {
   const { metaPath } = getWorktreeStoragePaths(gitDir);
   try {
-    const raw = await Bun.file(metaPath).json() as WorktreeMeta;
+    const raw = await Bun.file(metaPath).json() as WorktreeMeta & { allocatedPorts?: unknown };
+    // Left over from the removed `services` config; dropped so it is not written back.
+    delete raw.allocatedPorts;
     return normalizeWorktreeMeta(raw);
   } catch {
     return null;
@@ -187,7 +184,6 @@ export function buildRuntimeEnvMap(
   return {
     ...dotenvValues,
     ...meta.startupEnvValues,
-    ...stringifyAllocatedPorts(meta.allocatedPorts),
     ...extraEnv,
     WEBMUX_WORKTREE_ID: meta.worktreeId,
     WEBMUX_BRANCH: meta.branch,

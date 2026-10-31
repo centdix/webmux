@@ -11,7 +11,7 @@ import type { WorktreeCreationPhase } from "../../backend/src/domain/model";
 import { compareWorktreeOrder, isValidWorktreeName } from "../../backend/src/domain/policies";
 import { isValidPortLabel } from "../../backend/src/domain/port-registrations";
 import { buildArchivedWorktreePathSet } from "../../backend/src/services/archive-service";
-import { createWebmuxRuntime } from "../../backend/src/runtime";
+import { createPortRegistrationService, createWebmuxRuntime } from "../../backend/src/runtime";
 import type { CreateLifecycleWorktreeInput, CreateLifecycleWorktreesInput, CreateLifecycleWorktreesResult, CreateWorktreeProgress, PruneWorktreesResult } from "../../backend/src/services/lifecycle-service";
 
 const PHASE_LABELS: Record<WorktreeCreationPhase, string> = {
@@ -999,7 +999,8 @@ export async function runWorktreeCommand(
   context: WorktreeCommandContext,
   deps: WorktreeCommandDependencies = {},
 ): Promise<number> {
-  const createRuntime = deps.createRuntime ?? ((options) => createWebmuxRuntime(options));
+  const createRuntime = deps.createRuntime
+    ?? ((options) => createWebmuxRuntime({ ...options, portRegistrations: createPortRegistrationService() }));
   const stdout = deps.stdout ?? ((message: string) => console.log(message));
   const stderr = deps.stderr ?? ((message: string) => console.error(message));
   const resolveBaseUrl = deps.resolveBaseUrl ?? resolveProjectBaseUrl;

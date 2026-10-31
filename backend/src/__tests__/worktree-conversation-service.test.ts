@@ -155,7 +155,6 @@ function makeMeta(): WorktreeMeta {
     agent: "codex",
     runtime: "host",
     startupEnvValues: {},
-    allocatedPorts: {},
   };
 }
 

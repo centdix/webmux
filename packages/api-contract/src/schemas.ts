@@ -537,11 +537,6 @@ export const WorktreeDiffResponseSchema = z.object({
   unpushedCommits: z.array(UnpushedCommitSchema),
 });
 
-export const ServiceConfigSchema = z.object({
-  name: z.string(),
-  portEnv: z.string(),
-});
-
 export const ProfileConfigSchema = z.object({
   name: z.string(),
   systemPrompt: z.string().optional(),
@@ -554,7 +549,6 @@ export const LinkedRepoInfoSchema = z.object({
 
 export const AppConfigSchema = z.object({
   name: z.string(),
-  services: z.array(ServiceConfigSchema),
   profiles: z.array(ProfileConfigSchema),
   agents: z.array(AgentSummarySchema),
   defaultProfileName: z.string(),
@@ -796,7 +790,6 @@ export type AgentsUiConversationEvent = z.infer<typeof AgentsUiConversationEvent
 export type WorktreeListResponse = z.infer<typeof WorktreeListResponseSchema>;
 export type UnpushedCommit = z.infer<typeof UnpushedCommitSchema>;
 export type WorktreeDiffResponse = z.infer<typeof WorktreeDiffResponseSchema>;
-export type ServiceConfig = z.infer<typeof ServiceConfigSchema>;
 export type ProfileConfig = z.infer<typeof ProfileConfigSchema>;
 export type LinkedRepoInfo = z.infer<typeof LinkedRepoInfoSchema>;
 export type AppConfig = z.infer<typeof AppConfigSchema>;

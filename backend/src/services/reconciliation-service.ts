@@ -1,5 +1,4 @@
 import { basename, resolve } from "node:path";
-import { expandTemplate } from "../adapters/config";
 import type { GitGateway, GitWorktreeEntry } from "../adapters/git";
 import type { PortProbe } from "../adapters/port-probe";
 import {
@@ -12,8 +11,8 @@ import {
   type TmuxWindowRole,
   type TmuxWindowSummary,
 } from "../adapters/tmux";
-import { buildRuntimeEnvMap, readWorktreeMeta, readWorktreePrs } from "../adapters/fs";
-import type { AgentId, ProjectConfig } from "../domain/config";
+import { readWorktreeMeta, readWorktreePrs } from "../adapters/fs";
+import type { AgentId } from "../domain/config";
 import type { OneshotMeta, PrEntry, ServiceRuntimeState, WorktreeSource, WorktreeTab } from "../domain/model";
 import { mapWithConcurrency } from "../lib/async";
 import type { RegisteredPort } from "./port-registration-service";
@@ -23,61 +22,19 @@ export function makeUnmanagedWorktreeId(path: string): string {
   return `unmanaged:${resolve(path)}`;
 }
 
-function isValidPort(port: number | null): port is number {
-  return port !== null && Number.isInteger(port) && port >= 1 && port <= 65535;
-}
-
 async function buildServiceStates(
-  deps: Pick<ReconciliationServiceDependencies, "config" | "portProbe" | "portRegistrations">,
-  input: {
-    repoRoot: string;
-    allocatedPorts: Record<string, number>;
-    startupEnvValues: Record<string, string>;
-    worktreeId: string;
-    branch: string;
-    profile: string;
-    agent: AgentId;
-    runtime: "host" | "docker";
-  },
+  deps: Pick<ReconciliationServiceDependencies, "portProbe" | "portRegistrations">,
+  repoRoot: string,
+  worktreeId: string,
 ): Promise<ServiceRuntimeState[]> {
-  const runtimeEnv = buildRuntimeEnvMap({
-    schemaVersion: 1,
-    worktreeId: input.worktreeId,
-    branch: input.branch,
-    createdAt: "",
-    profile: input.profile,
-    agent: input.agent,
-    runtime: input.runtime,
-    startupEnvValues: input.startupEnvValues,
-    allocatedPorts: input.allocatedPorts,
-  });
-
-  const configured = await Promise.all(deps.config.services.map(async (service) => {
-    const port = input.allocatedPorts[service.portEnv] ?? null;
-    const running = isValidPort(port)
-      ? await deps.portProbe.isListening(port)
-      : false;
-    return {
-      name: service.name,
-      port,
-      running,
-      url: port !== null && service.urlTemplate
-        ? expandTemplate(service.urlTemplate, runtimeEnv)
-        : null,
-    };
-  }));
-
-  const configuredNames = new Set(configured.map((service) => service.name));
-  const registered = (deps.portRegistrations?.list(input.repoRoot, input.worktreeId) ?? [])
-    .filter((entry) => !configuredNames.has(entry.label));
-  const registeredStates = await Promise.all(registered.map(async (entry) => ({
+  const registered = await Promise.all(deps.portRegistrations.list(repoRoot, worktreeId).map(async (entry) => ({
     name: entry.label,
     port: entry.port,
     running: await deps.portProbe.isListening(entry.port),
     // No server-side URL: the dashboard links to its own hostname, which also works remotely.
     url: null,
   })));
-  return [...configured, ...registeredStates.filter((service) => service.running)];
+  return registered.filter((service) => service.running);
 }
 
 /** Locate a worktree's window by its stable id anchor, falling back to the legacy name match for
@@ -114,13 +71,12 @@ function resolveBranch(entry: GitWorktreeEntry, metaBranch: string | null): stri
 }
 
 export interface ReconciliationServiceDependencies {
-  config: ProjectConfig;
   git: GitGateway;
   tmux: TmuxGateway;
   portProbe: PortProbe;
   runtime: ProjectRuntime;
   /** Agent-registered ports (`webmux port`); only the running ones are surfaced. */
-  portRegistrations?: { list(projectDir: string, worktreeId: string): RegisteredPort[] };
+  portRegistrations: { list(projectDir: string, worktreeId: string): RegisteredPort[] };
 }
 
 export interface ReconciliationServiceOptions {
@@ -255,16 +211,7 @@ export class ReconciliationService {
           parking: parkingWindow,
         },
         services: meta
-          ? await buildServiceStates(this.deps, {
-              repoRoot: normalizedRepoRoot,
-              allocatedPorts: meta.allocatedPorts,
-              startupEnvValues: meta.startupEnvValues,
-              worktreeId: meta.worktreeId,
-              branch,
-              profile: meta.profile,
-              agent: meta.agent,
-              runtime: meta.runtime,
-            })
+          ? await buildServiceStates(this.deps, normalizedRepoRoot, meta.worktreeId)
           : [],
         prs: await readWorktreePrs(gitDir),
       } satisfies ReconciledWorktreeState;
