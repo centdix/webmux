@@ -195,7 +195,7 @@
           ? "success"
           : "info",
       message: notification.message,
-      ...(notification.url ? { detail: notification.url } : {}),
+      ...(notification.url ? { url: notification.url } : {}),
       branch: notification.branch,
     })),
     ...uiToasts,
