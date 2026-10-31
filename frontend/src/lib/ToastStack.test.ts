@@ -17,7 +17,7 @@ function createToast(
     notificationId: 1,
     tone: "info",
     message: "Notification text",
-    detail: "https://example.com/notifications/1",
+    url: "https://example.com/notifications/1",
     branch: "feature/toast-sizing",
     ...overrides,
   };
@@ -101,6 +101,26 @@ describe("ToastStack", () => {
 
     expect(onselect).toHaveBeenCalledWith("notification:1");
     expect(ondismiss).toHaveBeenCalledWith("notification:1");
+  });
+
+  it("renders the notification url as a link that opens in a new tab", async () => {
+    const onselect = vi.fn();
+
+    render(ToastStack, {
+      props: {
+        toasts: [createToast()],
+        ondismiss: vi.fn(),
+        onselect,
+      },
+    });
+
+    const link = screen.getByRole("link", { name: "https://example.com/notifications/1" });
+    expect(link.getAttribute("href")).toBe("https://example.com/notifications/1");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.closest("button")).toBeNull();
+
+    await fireEvent.click(link);
+    expect(onselect).not.toHaveBeenCalled();
   });
 });
 

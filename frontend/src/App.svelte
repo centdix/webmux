@@ -110,7 +110,6 @@
   let hasLoadedWorktrees = $state(false);
   let favoriteBranches = $state<Set<string>>(loadFavoriteWorktrees(activePrefix));
   let removeBranch = $state<string | null>(null);
-  let mergeBranch = $state<string | null>(null);
   let postToLinearBranch = $state<string | null>(null);
   let postToLinkedConfirm = $state<{ branch: string; issueId: string } | null>(null);
   let postingLinearBranches = $state<Set<string>>(new Set());
@@ -195,7 +194,7 @@
           ? "success"
           : "info",
       message: notification.message,
-      ...(notification.url ? { detail: notification.url } : {}),
+      ...(notification.url ? { url: notification.url } : {}),
       branch: notification.branch,
     })),
     ...uiToasts,
@@ -755,26 +754,6 @@
     }
   }
 
-  async function handleMerge() {
-    const branch = mergeBranch;
-    if (!branch) return;
-    mergeBranch = null;
-    selectNeighborOf(branch);
-
-    removingBranches = new Set([...removingBranches, branch]);
-    try {
-      await api.mergeWorktree({ params: { name: branch } });
-      invalidateBranchCaches();
-      await refresh();
-    } catch (err) {
-      showToast({ tone: "error", message: `Failed to merge: ${errorMessage(err)}` });
-    } finally {
-      removingBranches = new Set(
-        [...removingBranches].filter((b) => b !== branch),
-      );
-    }
-  }
-
   function openLabelDialog(): void {
     if (!selectedWorktree) return;
     labelBranch = selectedWorktree.branch;
@@ -1064,7 +1043,7 @@
 
   function handleKeydown(e: KeyboardEvent) {
     // Ignore shortcuts when a dialog is open (let dialog handle its own keys)
-    if (showCreateDialog || removeBranch || mergeBranch || pullMainConfirm || pullLinkedRepoAlias || postToLinkedConfirm) return;
+    if (showCreateDialog || removeBranch || pullMainConfirm || pullLinkedRepoAlias || postToLinkedConfirm) return;
 
     const mod = e.metaKey || e.ctrlKey;
     if (!mod) return;
@@ -1078,9 +1057,6 @@
     } else if (e.key === "k" || e.key === "K") {
       e.preventDefault();
       openCreateDialog();
-    } else if (e.key === "m" || e.key === "M") {
-      e.preventDefault();
-      if (selectedBranch) mergeBranch = selectedBranch;
     } else if (e.key === "d" || e.key === "D") {
       e.preventDefault();
       if (selectedBranch) removeBranch = selectedBranch;
@@ -1280,9 +1256,6 @@
         onselect={handleSelectWorktree}
         onclose={closeWorktree}
         onarchive={toggleWorktreeArchived}
-        onmerge={(branch) => {
-          mergeBranch = branch;
-        }}
         onremove={(b) => (removeBranch = b)}
         oneditprofile={openProfileDialog}
         oncreatesubworktree={openSubworktreeDialog}
@@ -1322,9 +1295,6 @@
             <span>New worktree</span><kbd class="opacity-60">Cmd+K</kbd>
           </div>
           <div class="flex justify-between">
-            <span>Merge</span><kbd class="opacity-60">Cmd+M</kbd>
-          </div>
-          <div class="flex justify-between">
             <span>Remove</span><kbd class="opacity-60">Cmd+D</kbd>
           </div>
         </div>
@@ -1362,9 +1332,6 @@
       ontogglesidebar={() => (sidebarOpen = !sidebarOpen)}
       onclose={handleClose}
       onarchive={handleArchiveToggle}
-      onmerge={() => {
-        if (selectedBranch) mergeBranch = selectedBranch;
-      }}
       onremove={() => {
         if (selectedBranch) removeBranch = selectedBranch;
       }}
@@ -1530,16 +1497,6 @@
     message={`Remove worktree "${removeBranch}"? This action cannot be undone.`}
     onconfirm={handleRemove}
     oncancel={() => (removeBranch = null)}
-  />
-{/if}
-
-{#if mergeBranch}
-  <ConfirmDialog
-    message={`Merge worktree "${mergeBranch}" into main? The worktree will be removed after merging.`}
-    confirmLabel="Merge"
-    variant="accent"
-    onconfirm={handleMerge}
-    oncancel={() => (mergeBranch = null)}
   />
 {/if}
 

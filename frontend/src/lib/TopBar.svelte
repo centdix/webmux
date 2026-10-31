@@ -24,7 +24,6 @@
     ontogglesidebar,
     onclose,
     onarchive,
-    onmerge,
     onremove,
     oneditlabel,
     onsettings,
@@ -46,7 +45,6 @@
     ontogglesidebar?: () => void;
     onclose: () => void;
     onarchive: () => void;
-    onmerge: () => void;
     onremove: () => void;
     oneditlabel?: () => void;
     onsettings: () => void;
@@ -234,9 +232,6 @@
       >
         {isMobile ? (worktree.archived ? "Re" : "A") : (worktree.archived ? "Restore" : "Archive")}
       </Btn>
-      <Btn variant="accent-outline" onclick={onmerge} title="Merge worktree"
-        >{isMobile ? "M" : "Merge"}</Btn
-      >
       <Btn variant="danger-outline" onclick={onremove} title="Remove worktree"
         >{isMobile ? "R" : "Remove"}</Btn
       >
@@ -337,6 +332,7 @@
                     type="button"
                     class="w-full px-3 py-2 text-left bg-transparent border-none text-inherit cursor-pointer hover:bg-hover flex items-center gap-2"
                     onclick={() => {
+                      if (n.url) window.open(n.url, "_blank", "noopener,noreferrer");
                       onnotificationselect?.(n.branch);
                       bellOpen = false;
                     }}

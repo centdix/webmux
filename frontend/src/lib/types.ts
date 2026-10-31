@@ -155,6 +155,7 @@ export interface NotificationToastItem extends ToastInput {
   source: "notification";
   notificationId: number;
   branch: string;
+  url?: string;
 }
 
 export type ToastItem = UiToastItem | NotificationToastItem;
