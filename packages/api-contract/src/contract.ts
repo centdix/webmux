@@ -48,6 +48,7 @@ import {
   AutoNameConfigResponseSchema,
   InstancesResponseSchema,
   ProjectsResponseSchema,
+  AllProjectWorktreesResponseSchema,
   AddProjectRequestSchema,
   AddProjectResponseSchema,
   ProjectInitsResponseSchema,
@@ -103,6 +104,7 @@ export const apiPaths = {
   fetchProjects: "/api/projects",
   addProject: "/api/projects",
   projectInits: "/api/projects/init",
+  fetchAllProjectWorktrees: "/api/projects/worktrees",
   migrateProjects: "/api/projects/migrate",
   removeProject: "/api/projects/:prefix",
 } as const;
@@ -524,6 +526,14 @@ export const apiContract = c.router({
     responses: {
       200: AddProjectResponseSchema,
       400: ErrorResponseSchema,
+      500: ErrorResponseSchema,
+    },
+  },
+  fetchAllProjectWorktrees: {
+    method: "GET",
+    path: apiPaths.fetchAllProjectWorktrees,
+    responses: {
+      200: AllProjectWorktreesResponseSchema,
       500: ErrorResponseSchema,
     },
   },

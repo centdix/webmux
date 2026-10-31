@@ -644,6 +644,19 @@ export const ProjectsResponseSchema = z.object({
   projects: z.array(ProjectSummarySchema),
 });
 
+/** One project's worktrees, as returned by the hub's all-projects listing.
+ *  `error` is set (and `worktrees` empty) when that project's snapshot failed. */
+export const ProjectWorktreesSchema = z.object({
+  prefix: z.string(),
+  name: z.string(),
+  worktrees: z.array(ProjectWorktreeSnapshotSchema),
+  error: z.string().nullable(),
+});
+
+export const AllProjectWorktreesResponseSchema = z.object({
+  projects: z.array(ProjectWorktreesSchema),
+});
+
 export const AddProjectRequestSchema = z.object({
   path: z.string().min(1),
 });
@@ -700,6 +713,8 @@ export const MigrateProjectsResponseSchema = z.object({
 
 export type ProjectSummary = z.infer<typeof ProjectSummarySchema>;
 export type ProjectsResponse = z.infer<typeof ProjectsResponseSchema>;
+export type ProjectWorktrees = z.infer<typeof ProjectWorktreesSchema>;
+export type AllProjectWorktreesResponse = z.infer<typeof AllProjectWorktreesResponseSchema>;
 export type AddProjectRequest = z.infer<typeof AddProjectRequestSchema>;
 export type AddProjectResponse = z.infer<typeof AddProjectResponseSchema>;
 export type ProjectInitPhase = z.infer<typeof ProjectInitPhaseSchema>;

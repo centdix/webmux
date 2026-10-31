@@ -122,6 +122,7 @@ import {
 } from "./services/agents-ui-stream-service";
 import { classifyAgentsTerminalWorktreeError } from "./services/agents-ui-action-service";
 import { buildProjectSnapshot } from "./services/snapshot-service";
+import { collectAllProjectWorktrees } from "./services/all-projects-worktrees-service";
 import {
   ClaudeConversationService,
   isPendingClaudeConversationId,
@@ -213,6 +214,7 @@ interface ProjectApp {
   prefix: string;
   routes: ProjectRoutes;
   wsHandlers: WsHandlers;
+  readWorktrees(): Promise<WorktreeSnapshot[]>;
   startLight(): void;
   stopLight(): void;
 }
@@ -2460,7 +2462,11 @@ function parseAgentIdParam(params: Record<string, string>):
     stopSessionSnapshot = null;
   }
 
-  return { prefix: instancePrefix, routes, wsHandlers, startLight, stopLight };
+  async function readWorktrees(): Promise<WorktreeSnapshot[]> {
+    return (await readProjectSnapshot()).worktrees;
+  }
+
+  return { prefix: instancePrefix, routes, wsHandlers, readWorktrees, startLight, stopLight };
 }
 
 function actualPort(server: Server<WsData>, requested: number): number {
@@ -2500,6 +2506,16 @@ function toProjectSummary(p: ManagedProject): { prefix: string; name: string; pa
 
 function apiListProjects(): Response {
   return jsonResponse({ projects: manager.list().map(toProjectSummary) });
+}
+
+/** Worktrees of every served project, for the cross-project sidebar. Does not
+ *  touch dashboard activity: listing must not mark other projects as viewed. */
+async function apiListAllProjectWorktrees(): Promise<Response> {
+  const sources = manager.list().flatMap((p) => {
+    const app = apps.get(p.prefix);
+    return app ? [{ prefix: p.prefix, name: p.entry.name, readWorktrees: app.readWorktrees }] : [];
+  });
+  return jsonResponse({ projects: await collectAllProjectWorktrees(sources) });
 }
 
 /** A repo is a webmux project once it has a config file. */
@@ -2675,6 +2691,9 @@ function buildServeRoutes(): ProjectRoutes {
     },
     [apiPaths.projectInits]: {
       GET: () => apiListProjectInits(),
+    },
+    [apiPaths.fetchAllProjectWorktrees]: {
+      GET: () => catchingRoute("GET /api/projects/worktrees", () => apiListAllProjectWorktrees()),
     },
     [apiPaths.migrateProjects]: {
       POST: (req) => catchingRoute("POST /api/projects/migrate", () => apiMigrateProjects(req)),
