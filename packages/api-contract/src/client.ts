@@ -28,7 +28,7 @@ type UnwrappedClient<TClient> = {
 };
 
 type RouteCall = (...args: unknown[]) => Promise<unknown>;
-type RouteResponse = { status: number; body: unknown };
+type RouteResponse = { status: number; body: unknown; headers?: unknown };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -47,6 +47,11 @@ function unwrapResponse(response: unknown): unknown {
   }
   if (response.status < 200 || response.status >= 300) {
     throw new Error(errorMessageFromResponse(response.body, response.status));
+  }
+  // No route returns HTML: a 2xx `text/html` is a server without this route
+  // serving its SPA fallback (CLI/server version skew), not a success.
+  if (response.headers instanceof Headers && response.headers.get("content-type")?.includes("text/html")) {
+    throw new Error(`HTTP ${response.status}: expected JSON, got HTML (is the webmux server up to date?)`);
   }
   return response.body;
 }

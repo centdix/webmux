@@ -146,7 +146,7 @@ import type {
 } from "./domain/agents-ui";
 import type { OneshotMeta, ProjectSnapshot, WorktreeSnapshot } from "./domain/model";
 import { isValidBranchName, isValidWorktreeName } from "./domain/policies";
-import { mountProjectRoutes } from "./domain/project-routes";
+import { assembleServeRoutes, isApiPath } from "./domain/project-routes";
 import { createPortRegistrationService, createWebmuxRuntime, type WebmuxRuntime } from "./runtime";
 import { createInstanceRegistry, type InstanceEntry } from "./adapters/instance-registry";
 import { createProjectsRegistry } from "./adapters/projects-registry";
@@ -2695,7 +2695,7 @@ function apiListInstances(): Response {
  *  re-keyed under `/api/projects/${prefix}`. Rebuilt (via `server.reload`) on
  *  every add/remove so newly known projects are served immediately. */
 function buildServeRoutes(): ProjectRoutes {
-  const routes: ProjectRoutes = {
+  const hubRoutes: ProjectRoutes = {
     [hubApiPaths.fetchProjects]: {
       GET: () => apiListProjects(),
       POST: (req) => catchingRoute("POST /api/projects", () => apiAddProject(req)),
@@ -2716,14 +2716,15 @@ function buildServeRoutes(): ProjectRoutes {
       GET: () => apiListInstances(),
     },
   };
-  for (const app of apps.values()) {
-    Object.assign(routes, mountProjectRoutes(app.prefix, app.routes));
-  }
-  return routes;
+  return assembleServeRoutes(hubRoutes, apps.values());
 }
 
 async function globalFetch(req: Request): Promise<Response> {
   const url = new URL(req.url);
+
+  if (isApiPath(url.pathname)) {
+    return errorResponse(`No route for ${req.method} ${url.pathname}`, 404);
+  }
 
   // Static frontend files in production mode (fallback for unmatched routes)
   if (STATIC_DIR) {

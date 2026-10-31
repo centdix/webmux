@@ -50,6 +50,19 @@ describe("createProjectApi", () => {
     ]);
   });
 
+  it("rejects a 2xx HTML response (SPA fallback of a server without the route)", async () => {
+    const api = createProjectApi("myproject", {
+      origin: "https://example.com",
+      api: async () => ({
+        status: 200,
+        body: "<!doctype html><html></html>",
+        headers: new Headers({ "content-type": "text/html;charset=utf-8" }),
+      }),
+    });
+
+    await expect(api.fetchWorktrees()).rejects.toThrow("expected JSON, got HTML");
+  });
+
   it("throws API error messages from json error bodies", async () => {
     const api = createProjectApi("myproject", {
       origin: "https://example.com",

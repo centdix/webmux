@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { projectApiPaths } from "@webmux/api-contract";
-import { legacyRuntimeEventsPath, mountProjectRoutes } from "../domain/project-routes";
+import { hubApiPaths, projectApiBasePath, projectApiPaths } from "@webmux/api-contract";
+import { assembleServeRoutes, isApiPath, legacyRuntimeEventsPath, mountProjectRoutes } from "../domain/project-routes";
 
 describe("mountProjectRoutes", () => {
   it("mounts every project route under /api/projects/<prefix>, WebSockets included", () => {
@@ -28,5 +28,42 @@ describe("mountProjectRoutes", () => {
 
   it("adds no legacy alias when the project has no runtime-events route", () => {
     expect(Object.keys(mountProjectRoutes("webmux", { "/config": 1 }))).toEqual(["/api/projects/webmux/config"]);
+  });
+});
+
+describe("assembleServeRoutes", () => {
+  const allProjectRoutes = Object.fromEntries(Object.values(projectApiPaths).map((path) => [path, "project"]));
+  const hubRoutes = Object.fromEntries(Object.values(hubApiPaths).map((path) => [path, "hub"]));
+  const prefixes = ["webmux", "init", "worktrees", "migrate"];
+
+  it("keeps every hub route alongside the mounted project routes", () => {
+    const routes = assembleServeRoutes(hubRoutes, prefixes.map((prefix) => ({ prefix, routes: allProjectRoutes })));
+
+    for (const path of Object.values(hubApiPaths)) expect(routes[path]).toBe("hub");
+    expect(routes["/api/projects/webmux/worktrees"]).toBe("project");
+  });
+
+  it("never mounts a project route on a hub path or on the bare project base path", () => {
+    const hubPaths = new Set<string>(Object.values(hubApiPaths));
+    for (const prefix of prefixes) {
+      for (const path of Object.keys(mountProjectRoutes(prefix, allProjectRoutes))) {
+        expect(hubPaths.has(path)).toBe(false);
+        expect(path).not.toBe(projectApiBasePath(prefix));
+      }
+    }
+  });
+});
+
+describe("isApiPath", () => {
+  it("matches /api, /api/... and legacy /<prefix>/api(/...) paths", () => {
+    for (const path of ["/api", "/api/", "/api/nope", "/api/projects/webmux/x", "/webmux/api", "/webmux/api/worktrees"]) {
+      expect(isApiPath(path)).toBe(true);
+    }
+  });
+
+  it("leaves SPA and static asset paths alone", () => {
+    for (const path of ["/", "/webmux", "/webmux/", "/apis", "/assets/api.js", "/webmux/apiary", "/a/b/api"]) {
+      expect(isApiPath(path)).toBe(false);
+    }
   });
 });

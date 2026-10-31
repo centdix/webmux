@@ -20,3 +20,22 @@ export function mountProjectRoutes<TEntry>(prefix: string, routes: Record<string
   if (runtimeEvents !== undefined) mounted[legacyRuntimeEventsPath(prefix)] = runtimeEvents;
   return mounted;
 }
+
+/** True for `/api`, `/api/...` and legacy `/<prefix>/api(/...)` paths: requests that
+ *  reach the fallback handler there must 404 as JSON, not fall through to the SPA. */
+export function isApiPath(pathname: string): boolean {
+  return /^(\/[^/]+)?\/api(\/|$)/.test(pathname);
+}
+
+/** Merge the hub routes with every project's mounted routes. Hub entries are
+ *  applied last so a project route can never replace one. */
+export function assembleServeRoutes<TEntry>(
+  hubRoutes: Record<string, TEntry>,
+  projects: Iterable<{ prefix: string; routes: Record<string, TEntry> }>,
+): Record<string, TEntry> {
+  const routes: Record<string, TEntry> = {};
+  for (const project of projects) {
+    Object.assign(routes, mountProjectRoutes(project.prefix, project.routes));
+  }
+  return Object.assign(routes, hubRoutes);
+}
