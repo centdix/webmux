@@ -127,4 +127,15 @@ describe("NotificationHub", () => {
     await reader.cancel();
     expect(hub.clientCount()).toBe(0);
   });
+
+  it("keeps a quiet SSE stream alive with ping comments", async () => {
+    const hub = new NotificationHub(5);
+    const reader = hub.stream().body!.getReader();
+
+    expect(await readChunk(reader)).toBe(": ping\n\n");
+    expect(await readChunk(reader)).toBe(": ping\n\n");
+
+    await reader.cancel();
+    expect(hub.clientCount()).toBe(0);
+  });
 });

@@ -23,6 +23,10 @@ export class NotificationHub {
   private readonly sources = new Map<string, { source: NotificationSource; unsubscribe: () => void }>();
   private readonly clients = new Set<NotificationHubClient>();
 
+  /** `keepaliveMs`: interval of the SSE `: ping` comment that keeps quiet
+   *  streams under Bun's idle timeout (a reconnect would replay every `initial`). */
+  constructor(private readonly keepaliveMs = 30_000) {}
+
   addSource(source: NotificationSource): void {
     this.removeSource(source.project);
     const unsubscribe = source.subscribe((event) => this.broadcast(event));
@@ -67,19 +71,24 @@ export class NotificationHub {
   stream(): Response {
     const encoder = new TextEncoder();
     let unsubscribe: (() => void) | null = null;
+    let keepalive: ReturnType<typeof setInterval> | null = null;
+    const close = (): void => {
+      unsubscribe?.();
+      if (keepalive) clearInterval(keepalive);
+    };
     const body = new ReadableStream<Uint8Array>({
       start: (controller) => {
-        unsubscribe = this.subscribe(({ event, data }) => {
+        const send = (chunk: string): void => {
           try {
-            controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+            controller.enqueue(encoder.encode(chunk));
           } catch {
-            unsubscribe?.();
+            close();
           }
-        });
+        };
+        unsubscribe = this.subscribe(({ event, data }) => send(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        keepalive = setInterval(() => send(": ping\n\n"), this.keepaliveMs);
       },
-      cancel: () => {
-        unsubscribe?.();
-      },
+      cancel: close,
     });
 
     return new Response(body, {
