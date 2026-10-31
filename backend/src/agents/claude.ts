@@ -252,7 +252,7 @@ export const claudeAdapter: AgentAdapter = {
   chatProvider: "claude",
   supportsPinnedSessionId: true,
   buildCommand: buildClaudeInvocation,
-  generatedArtifactExcludes: [],
+  generatedArtifactExcludes: [".claude/settings.local.json"],
   writeRuntimeArtifacts: writeClaudeRuntimeArtifacts,
   listSessionIds: listClaudeSessionIds,
   buildInitCommand: buildClaudeInitCommand,
