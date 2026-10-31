@@ -134,6 +134,23 @@ describe("terminal adapter", () => {
     expect(afterSecondDetach).toHaveLength(0);
   });
 
+  it("hides the tmux status bar in the dashboard's grouped session only", async () => {
+    let attachCommand = "";
+    setTerminalAdapterDependenciesForTests({
+      spawnPtyProcess: (args) => {
+        attachCommand = args.join(" ");
+        return createFakePtyProcess(1000, () => {});
+      },
+      spawnSyncCommand: () => ({ exitCode: 0, stdout: encode(""), stderr: encode("") }),
+    });
+
+    await attach("attach-a", { ownerSessionName: "owner", windowName: "wm-feature/search" }, 80, 24);
+    const groupedSessionName = extractGroupedSessionName(attachCommand.split(" "));
+
+    expect(attachCommand).toContain(`tmux set-option -t "${groupedSessionName}" status off`);
+    expect(attachCommand).not.toContain(`tmux set-option -t "owner" status off`);
+  });
+
   it("sends ctrl-c to the target pane when interrupting a prompt", async () => {
     const tmuxCalls: string[][] = [];
 

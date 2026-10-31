@@ -157,6 +157,8 @@ function buildAttachCmd(opts: AttachCmdOptions): string {
     `tmux set-option -t "${opts.ownerSessionName}" window-size latest`,
     `tmux set-option -t "${opts.gName}" mouse on`,
     `tmux set-option -t "${opts.gName}" set-clipboard on`,
+    // The dashboard shows windows in its own UI; the tmux status bar only takes a row
+    `tmux set-option -t "${opts.gName}" status off`,
     `tmux select-window -t "${opts.gName}:${opts.windowName}"`,
     // Unzoom if a previous session left a pane zoomed (zoom state is shared across grouped sessions)
     `if [ "$(tmux display-message -t '${opts.gName}:${opts.windowName}' -p '#{window_zoomed_flag}')" = "1" ]; then tmux resize-pane -Z -t '${opts.gName}:${opts.windowName}'; fi`,
