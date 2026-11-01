@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import tailwindcss from "@tailwindcss/vite";
 
@@ -14,8 +14,39 @@ const proxy = {
   },
 };
 
+// Dev stand-in for the backend's old `/<project>` bookmark redirect: a page
+// path Vite has nothing for is asked of the backend, and its redirect forwarded.
+function legacyProjectRedirect(): Plugin {
+  return {
+    name: "webmux-legacy-project-redirect",
+    configureServer(server) {
+      return () => {
+        server.middlewares.use(async (req, res, next) => {
+          const path = (req.url ?? "/").split("?")[0];
+          const lastSegment = path.split("/").pop() ?? "";
+          if ((req.method !== "GET" && req.method !== "HEAD") || lastSegment.includes(".") || /^\/(@|api(\/|$)|src\/|node_modules\/)/.test(path)) {
+            next();
+            return;
+          }
+          try {
+            const backend = await fetch(`${backendUrl}${path}`, { redirect: "manual" });
+            const location = backend.headers.get("location");
+            if (backend.status === 302 && location) {
+              res.writeHead(302, { Location: location }).end();
+              return;
+            }
+          } catch {
+            // Backend not up: fall through to Vite's 404.
+          }
+          next();
+        });
+      };
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [svelte(), tailwindcss()],
+  plugins: [svelte(), tailwindcss(), legacyProjectRedirect()],
   // No SPA fallback: the app only lives at `/`, any other HTML path 404s
   // (matches the backend's static serving).
   appType: "mpa",
