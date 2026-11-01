@@ -4,7 +4,7 @@ import { basename, join } from "node:path";
 import { homedir } from "node:os";
 import { run, getGitRoot, detectProjectName } from "./shared.ts";
 import type { RunResult } from "./shared.ts";
-import { createProjectsRegistry, type ProjectsRegistry } from "../../backend/src/adapters/projects-registry";
+import { createProjectsRegistry } from "../../backend/src/adapters/projects-registry";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -47,8 +47,7 @@ function resolveWebmuxPath(): string | null {
 /** Decide whether a repo should be persisted to projects.json. webmux is a
  *  single machine-wide service that serves everything in projects.json, so a
  *  webmux project that isn't registered yet is registered the same way
- *  `webmux project add` would. Used both by `service install` (the current repo)
- *  and by the update/reinstall migration of a unit's previously-served repo.
+ *  `webmux project add` would. Used by `service install` (the current repo).
  *  Skipped when there's no path, when it has no webmux config, or when it is
  *  already registered. */
 export function shouldPersistProject(
@@ -65,16 +64,6 @@ function hasWebmuxConfig(root: string): boolean {
   return existsSync(join(root, ".webmux.yaml")) || existsSync(join(root, ".webmux.local.yaml"));
 }
 
-/** Register `root` as a project when eligible; returns the path if newly added,
- *  else null. The registry is injectable so the migration is unit-testable. */
-function persistProject(root: string | null, registry: ProjectsRegistry): string | null {
-  if (!root) return null;
-  const existingPaths = registry.list().map((entry) => entry.path);
-  if (!shouldPersistProject(root, hasWebmuxConfig(root), existingPaths)) return null;
-  registry.add({ path: root, name: detectProjectName(root), addedAt: Date.now() });
-  return root;
-}
-
 /** I/O wrapper: the current repo when `service install` should register it,
  *  else null. Decided ahead of the confirmation prompt for the plan preview;
  *  the actual write happens after confirmation. */
@@ -83,21 +72,6 @@ function cwdProjectToPersist(): string | null {
   if (!gitRoot) return null;
   const existingPaths = createProjectsRegistry().list().map((entry) => entry.path);
   return shouldPersistProject(gitRoot, hasWebmuxConfig(gitRoot), existingPaths) ? gitRoot : null;
-}
-
-/** Carry a unit's previously-served repo forward into projects.json before the
- *  unit is regenerated. Older units served one repo implicitly via
- *  `WEBMUX_PROJECT_DIR` (added only ephemerally by the server), which the new
- *  unit template drops — without this, that repo would silently vanish from the
- *  dashboard on `webmux update` / reinstall. Idempotent: a regenerated unit's
- *  `WorkingDirectory=$HOME` has no webmux config, and an already-registered repo
- *  is skipped. Returns the migrated path, or null when there's nothing to do. */
-export function migrateServedRepoFromUnit(
-  filePath: string,
-  platform: Platform,
-  registry: ProjectsRegistry = createProjectsRegistry(),
-): string | null {
-  return persistProject(readWorkingDirFromUnit(filePath, platform), registry);
 }
 
 function formatCommand([bin, args]: Command): string {
@@ -210,28 +184,11 @@ export function generateServiceFile(config: ServiceConfig): string {
   return generateLaunchdPlist(config);
 }
 
-const SYSTEMD_WORKDIR_RE = /^WorkingDirectory=(.+)$/m;
-const LAUNCHD_WORKDIR_RE = /<key>WorkingDirectory<\/key>\s*<string>([^<]+)<\/string>/;
 const SYSTEMD_PORT_RE = /--port\s+(\d+)/;
 const LAUNCHD_PORT_RE = /<string>--port<\/string>\s*<string>(\d+)<\/string>/;
 const SYSTEMD_ENV_RE = /^Environment=([A-Za-z_][A-Za-z0-9_]*)=(.*)$/gm;
 const LAUNCHD_ENV_DICT_RE = /<key>EnvironmentVariables<\/key>\s*<dict>([\s\S]*?)<\/dict>/;
 const LAUNCHD_ENV_ENTRY_RE = /<key>([^<]+)<\/key>\s*<string>([^<]*)<\/string>/g;
-
-/** Read the `WorkingDirectory` an installed unit points at. Old units set this
- *  to the served repo; new units set it to `$HOME`. Used to migrate a unit's
- *  previously-served repo into projects.json before the unit is regenerated. */
-function readWorkingDirFromUnit(filePath: string, platform: Platform): string | null {
-  let text: string;
-  try {
-    text = readFileSync(filePath, "utf8");
-  } catch {
-    return null;
-  }
-  const regex = platform === "linux" ? SYSTEMD_WORKDIR_RE : LAUNCHD_WORKDIR_RE;
-  const match = regex.exec(text);
-  return match ? match[1].trim() : null;
-}
 
 /** Parse the `--port N` value out of an installed unit file (systemd or
  *  launchd). Used to keep a reinstall idempotent (reuse the running port) and
@@ -494,9 +451,8 @@ async function install(
 
   // Pick the port for the unit. An explicit `--port` wins; otherwise, on
   // reinstall, reuse the existing unit's port so a bare re-run is idempotent;
-  // otherwise the default. webmux is one service per machine now — there's no
-  // other-instance scan. If the port is taken at start it's because another
-  // webmux is already running, which is the cue to `webmux project migrate`.
+  // otherwise the default. webmux is one service per machine — there's no
+  // other-instance scan.
   const requestedPort = config.port;
   let chosenPort = requestedPort;
   let portNote: string | null = null;
@@ -561,13 +517,6 @@ async function install(
   }
 
   if (alreadyInstalled) {
-    // Carry forward any repo the old unit served implicitly via
-    // WEBMUX_PROJECT_DIR before we overwrite it — the new template drops that
-    // env var, so otherwise the repo would silently vanish from the dashboard.
-    const migrated = migrateServedRepoFromUnit(filePath, config.platform);
-    if (migrated) {
-      p.log.success(`Migrated previously-served project ${detectProjectName(migrated)} (${migrated})`);
-    }
     // Tear the old unit down only once we're committed to reinstalling.
     for (const cmd of uninstallCommands(config)) {
       runCommand(cmd);
@@ -812,9 +761,7 @@ export default async function service(args: string[]): Promise<void> {
     return;
   }
 
-  // One multi-project service per machine, under a fixed name. (Older versions
-  // installed one service per project as `webmux-<project>`; `webmux project
-  // migrate` consolidates those into this single service.)
+  // One multi-project service per machine, under a fixed name.
   const serviceName = "webmux";
 
   let envVars: Record<string, string> = {};

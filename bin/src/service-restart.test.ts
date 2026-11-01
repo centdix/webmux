@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -55,10 +54,10 @@ async function makeTempDir(): Promise<string> {
 }
 
 describe("listInstalledServices", () => {
-  it("picks up systemd units and strips the .service suffix", async () => {
+  it("picks up the webmux systemd unit and strips the .service suffix", async () => {
     const systemdDir = await makeTempDir();
+    await writeFile(join(systemdDir, "webmux.service"), "[Service]\nExecStart=/bin/x\n");
     await writeFile(join(systemdDir, "webmux-alpha.service"), "[Service]\nExecStart=/bin/x\n");
-    await writeFile(join(systemdDir, "webmux-beta.service"), "[Service]\nExecStart=/bin/x\n");
     await writeFile(join(systemdDir, "unrelated.service"), "[Service]\nExecStart=/bin/x\n");
 
     const services = listInstalledServices({
@@ -66,12 +65,13 @@ describe("listInstalledServices", () => {
       launchdDir: "/no/such/dir",
     });
 
-    expect(services.map((s) => s.name).sort()).toEqual(["webmux-alpha", "webmux-beta"]);
-    for (const svc of services) expect(svc.platform).toBe("linux");
+    expect(services.map((s) => s.name)).toEqual(["webmux"]);
+    expect(services[0].platform).toBe("linux");
   });
 
-  it("picks up launchd plists and keeps the full label", async () => {
+  it("picks up the webmux launchd plist and keeps the full label", async () => {
     const launchdDir = await makeTempDir();
+    await writeFile(join(launchdDir, "com.webmux.webmux.plist"), "<plist></plist>");
     await writeFile(join(launchdDir, "com.webmux.alpha.plist"), "<plist></plist>");
     await writeFile(join(launchdDir, "com.other.thing.plist"), "<plist></plist>");
 
@@ -80,7 +80,7 @@ describe("listInstalledServices", () => {
       launchdDir,
     });
 
-    expect(services.map((s) => s.name)).toEqual(["com.webmux.alpha"]);
+    expect(services.map((s) => s.name)).toEqual(["com.webmux.webmux"]);
     expect(services[0].platform).toBe("darwin");
   });
 
@@ -230,41 +230,6 @@ describe("updateInstalledService", () => {
       { bin: "systemctl", args: ["--user", "restart", "webmux-orch"] },
     ]);
     expect(await Bun.file(service.filePath).text()).toContain("/new/path/webmux");
-  });
-
-  it("migrates the old unit's served repo before regenerating, and surfaces it", async () => {
-    const { service, dir } = await setupSystemdService();
-    const servedRepo = join(dir, "served-repo");
-    // Rewrite the on-disk unit to the OLD format that pinned a served repo via
-    // WEBMUX_PROJECT_DIR, so regeneration drops it.
-    await writeFile(
-      service.filePath,
-      [
-        "[Unit]",
-        "Description=webmux dashboard — served",
-        "",
-        "[Service]",
-        "ExecStart=/old/path/webmux serve --port 5500",
-        `WorkingDirectory=${servedRepo}`,
-        `Environment=WEBMUX_PROJECT_DIR=${servedRepo}`,
-        "",
-      ].join("\n"),
-    );
-    const { runner } = makeRecorder(() => okResult);
-    let contentAtMigrate: string | undefined;
-    const migrate = (filePath: string): string | null => {
-      contentAtMigrate = readFileSync(filePath, "utf8");
-      return servedRepo;
-    };
-
-    const outcome = await updateInstalledService(service, "/new/path/webmux", runner, migrate);
-
-    expect(outcome.regenerated).toBe(true);
-    expect(outcome.migratedProject).toBe(servedRepo);
-    // Migration ran against the OLD content, before the rewrite.
-    expect(contentAtMigrate).toContain(`WEBMUX_PROJECT_DIR=${servedRepo}`);
-    // The regenerated unit no longer pins the repo.
-    expect(await Bun.file(service.filePath).text()).not.toContain("WEBMUX_PROJECT_DIR");
   });
 
   it("does not attempt a restart when daemon-reload fails", async () => {
