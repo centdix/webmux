@@ -251,7 +251,7 @@ describe("updateInstalledService", () => {
       ].join("\n"),
     );
     const { runner } = makeRecorder(() => okResult);
-    let contentAtMigrate: string | null = null;
+    let contentAtMigrate: string | undefined;
     const migrate = (filePath: string): string | null => {
       contentAtMigrate = readFileSync(filePath, "utf8");
       return servedRepo;

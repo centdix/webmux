@@ -23,5 +23,8 @@ jobs:
         run: bun run check
         working-directory: frontend
 
+      - name: CLI type check
+        run: bun run check:bin
+
       - name: Build distribution
         run: bun run build
