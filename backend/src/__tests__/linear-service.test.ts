@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, setSystemTime } from "bun:test";
 import {
   buildLinearIssuesResponse,
   createLinearIssue,
@@ -342,6 +342,70 @@ describe("Linear issue creation", () => {
       data: [expect.objectContaining({ identifier: "ENG-2" })],
     });
     expect(callCount).toBe(5);
+  });
+});
+
+describe("fetchAssignedIssues caching", () => {
+  let callCount = 0;
+  let releaseResponses: () => void = () => {};
+
+  beforeEach(() => {
+    resetLinearCaches();
+    Bun.env.LINEAR_API_KEY = "test-linear-key";
+    process.env.LINEAR_API_KEY = "test-linear-key";
+    callCount = 0;
+    const gate = new Promise<void>((resolve) => {
+      releaseResponses = resolve;
+    });
+    globalThis.fetch = Object.assign(
+      async function fetchMock(): Promise<Response> {
+        callCount += 1;
+        await gate;
+        return jsonResponse({
+          data: { viewer: { assignedIssues: { nodes: [createIssueNode("ENG-1", "user/eng-1")] } } },
+        });
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+  });
+
+  afterEach(() => {
+    setSystemTime();
+    resetLinearCaches();
+    globalThis.fetch = originalFetch;
+    if (originalLinearApiKey === undefined) {
+      delete Bun.env.LINEAR_API_KEY;
+      delete process.env.LINEAR_API_KEY;
+      return;
+    }
+    Bun.env.LINEAR_API_KEY = originalLinearApiKey;
+    process.env.LINEAR_API_KEY = originalLinearApiKey;
+  });
+
+  it("shares one in-flight request between concurrent callers on a cold cache", async () => {
+    const first = fetchAssignedIssues();
+    const second = fetchAssignedIssues({ maxAgeMs: 0 });
+    releaseResponses();
+
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(callCount).toBe(1);
+    expect(secondResult).toEqual(firstResult);
+    expect(firstResult.ok).toBe(true);
+  });
+
+  it("refetches only when the cached result is older than maxAgeMs", async () => {
+    releaseResponses();
+    setSystemTime(new Date("2026-11-01T10:00:00.000Z"));
+    await fetchAssignedIssues();
+
+    setSystemTime(new Date("2026-11-01T10:00:50.000Z"));
+    await fetchAssignedIssues({ maxAgeMs: 55_000 });
+    expect(callCount).toBe(1);
+
+    setSystemTime(new Date("2026-11-01T10:01:00.000Z"));
+    await fetchAssignedIssues({ maxAgeMs: 55_000 });
+    expect(callCount).toBe(2);
   });
 });
 

@@ -5,6 +5,14 @@ import type { CreateLifecycleWorktreeInput } from "./lifecycle-service";
 import type { GitGateway } from "../adapters/git";
 
 export const LINEAR_AUTO_CREATE_POLL_INTERVAL_MS = 60_000;
+/** Slack between the poll interval and the accepted issue age, so a result
+ *  fetched by another project's tick in the current interval is reused while
+ *  this project's previous tick result is not. */
+const ISSUE_MAX_AGE_MARGIN_MS = 5_000;
+
+function issueMaxAgeForInterval(pollIntervalMs: number): number {
+  return Math.max(0, pollIntervalMs - ISSUE_MAX_AGE_MARGIN_MS);
+}
 
 export interface LinearAutoCreateLifecycleService {
   createWorktree(input: CreateLifecycleWorktreeInput): Promise<{
@@ -17,6 +25,10 @@ export interface LinearAutoCreateDependencies {
   lifecycleService: LinearAutoCreateLifecycleService;
   git: Pick<GitGateway, "listWorktrees">;
   projectRoot: string;
+  /** Issue IDs this project's poller has already acted on (create OR oneshot).
+   *  Prevents duplicate triggers across poll cycles. Owned by the project: an
+   *  issue that matches several projects' filters triggers once in each. */
+  processedIssueIds: Set<string>;
   fetchIssues?: typeof fetchAssignedIssues;
   /** Optional handler for the `webmux_oneshot` label variant. Must return the actual
    *  working branch — the oneshot seed may resolve to `attachmentPayload.branch ??
@@ -41,10 +53,6 @@ export interface LinearAutoCreateMonitorOptions {
   pollIntervalMs?: number;
 }
 
-/** Issue IDs the poller has already acted on. Prevents duplicate triggers
- *  (create OR oneshot) across poll cycles. */
-const processedIssueIds = new Set<string>();
-
 const AUTO_CREATE_LABEL = "webmux";
 const AUTO_ONESHOT_LABEL = "webmux_oneshot";
 
@@ -66,7 +74,8 @@ function filterTriggerableIssues(
   issues: LinearIssue[],
   existingBranches: string[],
   matchesLabelRule: (issue: LinearIssue) => boolean,
-  watchTeamKeys?: string[],
+  watchTeamKeys: string[] | undefined,
+  processedIssueIds: ReadonlySet<string>,
 ): LinearIssue[] {
   return issues.filter((issue) => {
     if (issue.state.name !== "Todo") return false;
@@ -83,12 +92,14 @@ export function filterAutoCreateIssues(
   issues: LinearIssue[],
   existingBranches: string[],
   watchTeamKeys?: string[],
+  processedIssueIds: ReadonlySet<string> = new Set(),
 ): LinearIssue[] {
   return filterTriggerableIssues(
     issues,
     existingBranches,
     (issue) => hasLabel(issue, AUTO_CREATE_LABEL) && !hasLabel(issue, AUTO_ONESHOT_LABEL),
     watchTeamKeys,
+    processedIssueIds,
   );
 }
 
@@ -99,18 +110,27 @@ export function filterAutoOneshotIssues(
   issues: LinearIssue[],
   existingBranches: string[],
   watchTeamKeys?: string[],
+  processedIssueIds: ReadonlySet<string> = new Set(),
 ): LinearIssue[] {
   return filterTriggerableIssues(
     issues,
     existingBranches,
     (issue) => hasLabel(issue, AUTO_ONESHOT_LABEL),
     watchTeamKeys,
+    processedIssueIds,
   );
 }
 
-export async function runLinearAutoCreateOnce(deps: LinearAutoCreateDependencies): Promise<void> {
+/** One poll for one project. The assigned-issues query is the same for every
+ *  project, so projects share one cached result: it is reused while younger
+ *  than `maxIssueAgeMs`, and concurrent ticks share one in-flight request. */
+export async function runLinearAutoCreateOnce(
+  deps: LinearAutoCreateDependencies,
+  options: { maxIssueAgeMs?: number } = {},
+): Promise<void> {
   const fetchIssues = deps.fetchIssues ?? fetchAssignedIssues;
-  const result = await fetchIssues({ skipCache: true });
+  const maxAgeMs = options.maxIssueAgeMs ?? issueMaxAgeForInterval(LINEAR_AUTO_CREATE_POLL_INTERVAL_MS);
+  const result = await fetchIssues({ maxAgeMs });
   if (!result.ok) {
     log.error(`[linear-auto-create] failed to fetch issues: ${result.error}`);
     return;
@@ -129,6 +149,7 @@ export async function runLinearAutoCreateOnce(deps: LinearAutoCreateDependencies
       )
       .map((issue) => issue.id),
   );
+  const { processedIssueIds } = deps;
   for (const id of processedIssueIds) {
     if (!eligibleIssueIds.has(id)) processedIssueIds.delete(id);
   }
@@ -143,9 +164,9 @@ export async function runLinearAutoCreateOnce(deps: LinearAutoCreateDependencies
     .map((entry) => entry.branch as string);
 
   const oneshotIssues = deps.runOneshotForIssue
-    ? filterAutoOneshotIssues(result.data, existingBranches, deps.watchTeamKeys)
+    ? filterAutoOneshotIssues(result.data, existingBranches, deps.watchTeamKeys, processedIssueIds)
     : [];
-  const createIssues = filterAutoCreateIssues(result.data, existingBranches, deps.watchTeamKeys);
+  const createIssues = filterAutoCreateIssues(result.data, existingBranches, deps.watchTeamKeys, processedIssueIds);
 
   if (oneshotIssues.length === 0 && createIssues.length === 0) {
     log.debug(`[linear-auto-create] no new labeled issues (${result.data.length} assigned, ${existingBranches.length} worktrees)`);
@@ -221,14 +242,10 @@ export function startLinearAutoCreateMonitor(
 ): () => void {
   const pollIntervalMs = options.pollIntervalMs ?? LINEAR_AUTO_CREATE_POLL_INTERVAL_MS;
   log.info(`[linear-auto-create] monitor started (interval: ${pollIntervalMs}ms)`);
+  const maxIssueAgeMs = issueMaxAgeForInterval(pollIntervalMs);
   return startSerializedInterval<unknown>(
-    () => runLinearAutoCreateOnce(deps),
+    () => runLinearAutoCreateOnce(deps, { maxIssueAgeMs }),
     pollIntervalMs,
     options.intervalDeps,
   );
-}
-
-/** Clear the processed issue IDs set. Useful for testing or when re-enabling. */
-export function resetProcessedIssues(): void {
-  processedIssueIds.clear();
 }

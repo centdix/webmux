@@ -107,7 +107,6 @@ import {
 } from "./services/pr-service";
 import {
   startLinearAutoCreateMonitor,
-  resetProcessedIssues,
   LINEAR_AUTO_CREATE_POLL_INTERVAL_MS,
 } from "./services/linear-auto-create-service";
 import { startOneshotWatcher } from "./services/oneshot-watcher-service";
@@ -248,6 +247,7 @@ const mutatingTabBranches = new Set<string>();
 const lifecycleService = runtime.lifecycleService;
 let linearAutoCreateEnabled = config.integrations.linear.autoCreateWorktrees;
 let stopLinearAutoCreate: (() => void) | null = null;
+const linearProcessedIssueIds = new Set<string>();
 let autoRemoveOnMergeEnabled = config.integrations.github.autoRemoveOnMerge;
 let stopPrMonitor: (() => void) | null = null;
 let stopAutoRemoveMonitor: (() => void) | null = null;
@@ -300,6 +300,7 @@ function startLinearAutoCreate(): void {
       lifecycleService,
       git,
       projectRoot: PROJECT_DIR,
+      processedIssueIds: linearProcessedIssueIds,
       runOneshotForIssue,
       onOneshotPickedUp: postLinearOneshotPickupComment,
       ...(watchTeamKeys && watchTeamKeys.length > 0 ? { watchTeamKeys } : {}),
@@ -1605,7 +1606,7 @@ async function apiSetLinearAutoCreate(req: Request): Promise<Response> {
 
   linearAutoCreateEnabled = body.enabled;
   if (linearAutoCreateEnabled) {
-    resetProcessedIssues();
+    linearProcessedIssueIds.clear();
     startLinearAutoCreate();
     log.info("[config] Linear auto-create worktrees enabled");
   } else {
