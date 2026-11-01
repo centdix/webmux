@@ -948,6 +948,25 @@ describe("App create selection", () => {
     await waitFor(() => expect(window.location.hash).toBe("#images/feature/img"));
   });
 
+  it("leaves Cmd+Shift+Up/Down to text fields, but not to the terminal's", async () => {
+    useThreeProjects();
+    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "feature/web");
+
+    renderApp();
+    await screen.findByTitle("feature/web");
+
+    const search = screen.getByLabelText("Search worktrees");
+    expect(await fireEvent.keyDown(search, { key: "ArrowDown", metaKey: true, shiftKey: true })).toBe(true);
+    expect(window.location.hash).toBe(`#${PROJECT}/feature/web`);
+
+    const terminalInput = document.createElement("textarea");
+    terminalInput.className = "xterm-helper-textarea";
+    document.body.appendChild(terminalInput);
+    expect(await fireEvent.keyDown(terminalInput, { key: "ArrowDown", metaKey: true, shiftKey: true })).toBe(false);
+    await waitFor(() => expect(window.location.hash).toBe("#images/main"));
+    terminalInput.remove();
+  });
+
   it("searches the chosen project's worktrees", async () => {
     useThreeProjects();
 

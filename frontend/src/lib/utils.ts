@@ -214,6 +214,16 @@ export function applyTheme(key: ThemeKey): void {
   localStorage.setItem(THEME_STORAGE_KEY, key);
 }
 
+/** A text field keeping its own editing keys: inputs, textareas and
+ *  contenteditable, except the terminal's hidden input. */
+export function isTextEntryTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    !target.classList.contains("xterm-helper-textarea") &&
+    (target.isContentEditable || target.matches("input, textarea"))
+  );
+}
+
 export function clampSidebarWidth(width: number): number {
   return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width));
 }

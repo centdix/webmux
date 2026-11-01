@@ -46,6 +46,7 @@
     loadSavedSidebarWidth,
     saveSidebarWidth,
     clampSidebarWidth,
+    isTextEntryTarget,
     MIN_SIDEBAR_WIDTH,
     MAX_SIDEBAR_WIDTH,
     loadUseWebChatUi,
@@ -780,6 +781,8 @@
     if (!mod) return;
 
     if ((e.key === "ArrowUp" || e.key === "ArrowDown") && e.shiftKey) {
+      // Select to the start/end of a text field.
+      if (isTextEntryTarget(e.target)) return;
       e.preventDefault();
       const prefixes = railItems.map((item) => item.prefix);
       const next = stepBranch(prefixes, activeProject, e.key === "ArrowUp" ? -1 : 1);
