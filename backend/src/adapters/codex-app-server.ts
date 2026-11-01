@@ -212,6 +212,11 @@ export interface CodexAppServerThreadReadResponse {
   thread: CodexAppServerThread;
 }
 
+export interface CodexAppServerThreadLoadedListResponse {
+  data: string[];
+  nextCursor: string | null;
+}
+
 export interface CodexAppServerThreadContext {
   thread: CodexAppServerThread;
   model: string;
@@ -271,7 +276,10 @@ export interface CodexAppServerNotification {
 }
 
 export interface CodexAppServerGateway {
+  /** Whether this connection already receives the thread's item/turn notifications. */
+  isSubscribed(threadId: string): boolean;
   threadList(params: CodexAppServerThreadListParams): Promise<CodexAppServerThreadListResponse>;
+  threadLoadedList(): Promise<CodexAppServerThreadLoadedListResponse>;
   threadRead(threadId: string, includeTurns: boolean): Promise<CodexAppServerThreadReadResponse>;
   threadResume(params: CodexAppServerThreadResumeParams): Promise<CodexAppServerThreadContext>;
   threadStart(params: CodexAppServerThreadStartParams): Promise<CodexAppServerThreadContext>;
@@ -289,8 +297,6 @@ interface PendingRequest {
   reject: (reason?: unknown) => void;
   resolve: (value: unknown) => void;
 }
-
-type PipedCodexAppServerProcess = Bun.Subprocess<"pipe", "pipe", "pipe">;
 
 const CodexAppServerApprovalPolicySchema = z.enum(["untrusted", "on-failure", "on-request", "never"]);
 const UnknownValueSchema = z.custom<unknown>(() => true);
@@ -493,6 +499,10 @@ const CodexAppServerThreadListResponseSchema: z.ZodType<CodexAppServerThreadList
 const CodexAppServerThreadReadResponseSchema: z.ZodType<CodexAppServerThreadReadResponse, z.ZodTypeDef, unknown> = z.object({
   thread: CodexAppServerThreadSchema,
 });
+const CodexAppServerThreadLoadedListResponseSchema: z.ZodType<CodexAppServerThreadLoadedListResponse, z.ZodTypeDef, unknown> = z.object({
+  data: z.array(z.string()),
+  nextCursor: z.string().nullable(),
+});
 const CodexAppServerThreadContextSchema: z.ZodType<CodexAppServerThreadContext, z.ZodTypeDef, unknown> = z.object({
   thread: CodexAppServerThreadSchema,
   model: z.string(),
@@ -516,36 +526,6 @@ const CodexAppServerInitializeResponseSchema = z.object({
   platformOs: z.string(),
 });
 
-export function readCodexAppServerStdoutLines(input: {
-  decoder: TextDecoder;
-  buffer: string;
-  chunk?: Uint8Array;
-}): {
-  buffer: string;
-  lines: string[];
-} {
-  let buffer = input.buffer + (
-    input.chunk ? input.decoder.decode(input.chunk, { stream: true }) : input.decoder.decode()
-  );
-  const lines: string[] = [];
-
-  while (true) {
-    const newlineIndex = buffer.indexOf("\n");
-    if (newlineIndex === -1) break;
-    const line = buffer.slice(0, newlineIndex).trim();
-    buffer = buffer.slice(newlineIndex + 1);
-    if (line.length > 0) lines.push(line);
-  }
-
-  if (!input.chunk) {
-    const finalLine = buffer.trim();
-    buffer = "";
-    if (finalLine.length > 0) lines.push(finalLine);
-  }
-
-  return { buffer, lines };
-}
-
 export function parseCodexAppServerThreadItem(raw: unknown): CodexAppServerThreadItem | null {
   const parsed = CodexAppServerThreadItemSchema.safeParse(raw);
   return parsed.success ? parsed.data : null;
@@ -566,21 +546,29 @@ export class CodexAppServerRequestError extends Error {
   }
 }
 
+// The default libs include lib.dom, whose WebSocket constructor typing hides Bun's
+// options overload (`perMessageDeflate`, `ws+unix://` URLs are Bun runtime features).
+const BunWebSocket = WebSocket as unknown as new (url: string, options: Bun.WebSocketOptions) => WebSocket;
+
+/** JSON-RPC client for one worktree's `codex app-server`, which listens on a unix socket
+ *  and speaks WebSocket over it (one JSON-RPC message per text frame). The interactive
+ *  Codex TUI is attached to the same server with `--remote`, so turns started here show up
+ *  live in the terminal and TUI turns stream here. Connects lazily, and reconnects on the
+ *  next request after the server goes away. */
 export class CodexAppServerClient implements CodexAppServerGateway {
-  private readonly encoder = new TextEncoder();
   private readonly listeners = new Set<(notification: CodexAppServerNotification) => void>();
+  private readonly disconnectListeners = new Set<() => void>();
   private readonly pending = new Map<number, PendingRequest>();
+  private readonly subscribedThreadIds = new Set<string>();
   private nextId = 1;
-  private proc: PipedCodexAppServerProcess | null = null;
+  private socket: WebSocket | null = null;
   private readyPromise: Promise<void> | null = null;
 
   constructor(
     private readonly opts: {
+      socketPath: string;
       clientName: string;
       clientVersion: string;
-    } = {
-      clientName: "webmux-agents",
-      clientVersion: "0.0.0",
     },
   ) {}
 
@@ -591,8 +579,23 @@ export class CodexAppServerClient implements CodexAppServerGateway {
     };
   }
 
+  onDisconnect(listener: () => void): () => void {
+    this.disconnectListeners.add(listener);
+    return () => {
+      this.disconnectListeners.delete(listener);
+    };
+  }
+
+  isSubscribed(threadId: string): boolean {
+    return this.subscribedThreadIds.has(threadId);
+  }
+
   async threadList(params: CodexAppServerThreadListParams): Promise<CodexAppServerThreadListResponse> {
     return await this.request("thread/list", CodexAppServerThreadListResponseSchema, params);
+  }
+
+  async threadLoadedList(): Promise<CodexAppServerThreadLoadedListResponse> {
+    return await this.request("thread/loaded/list", CodexAppServerThreadLoadedListResponseSchema, {});
   }
 
   async threadRead(threadId: string, includeTurns: boolean): Promise<CodexAppServerThreadReadResponse> {
@@ -600,11 +603,15 @@ export class CodexAppServerClient implements CodexAppServerGateway {
   }
 
   async threadResume(params: CodexAppServerThreadResumeParams): Promise<CodexAppServerThreadContext> {
-    return await this.request("thread/resume", CodexAppServerThreadContextSchema, params);
+    const context = await this.request("thread/resume", CodexAppServerThreadContextSchema, params);
+    this.subscribedThreadIds.add(context.thread.id);
+    return context;
   }
 
   async threadStart(params: CodexAppServerThreadStartParams): Promise<CodexAppServerThreadContext> {
-    return await this.request("thread/start", CodexAppServerThreadContextSchema, params);
+    const context = await this.request("thread/start", CodexAppServerThreadContextSchema, params);
+    this.subscribedThreadIds.add(context.thread.id);
+    return context;
   }
 
   async turnStart(params: CodexAppServerTurnStartParams): Promise<CodexAppServerTurnStartResponse> {
@@ -626,7 +633,7 @@ export class CodexAppServerClient implements CodexAppServerGateway {
     }
 
     this.readyPromise = (async () => {
-      this.startProcess();
+      await this.connect();
       await this.requestInternal("initialize", CodexAppServerInitializeResponseSchema, {
         clientInfo: {
           name: this.opts.clientName,
@@ -641,103 +648,53 @@ export class CodexAppServerClient implements CodexAppServerGateway {
         params: {},
       });
     })().catch((error) => {
-      this.resetProcess();
+      const socket = this.socket;
+      this.resetConnection();
+      socket?.close();
       throw error;
     });
 
     return await this.readyPromise;
   }
 
-  private startProcess(): void {
-    if (this.proc) return;
+  private async connect(): Promise<void> {
+    // codex app-server drops the connection when permessage-deflate is offered.
+    const socket = new BunWebSocket(`ws+unix://${this.opts.socketPath}`, { perMessageDeflate: false });
+    this.socket = socket;
 
-    const proc: PipedCodexAppServerProcess = Bun.spawn(["codex", "app-server"], {
-      stdin: "pipe",
-      stdout: "pipe",
-      stderr: "pipe",
-      env: Bun.env,
+    await new Promise<void>((resolve, reject) => {
+      socket.onopen = () => resolve();
+      socket.onerror = () => reject(new Error(
+        `Codex app-server is not reachable at ${this.opts.socketPath}. Open the worktree to start it.`,
+      ));
     });
 
-    this.proc = proc;
-    this.startStdoutLoop(proc);
-    this.startStderrLoop(proc);
-    proc.exited.then((exitCode) => {
-      const message = `codex app-server exited with code ${exitCode}`;
-      log.warn(`[agents] ${message}`);
-      this.rejectPending(new Error(message));
-      this.resetProcess();
-    });
-  }
-
-  private startStdoutLoop(proc: PipedCodexAppServerProcess): void {
-    (async () => {
-      const reader = proc.stdout.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          const decoded = readCodexAppServerStdoutLines({
-            decoder,
-            buffer,
-            chunk: value,
-          });
-          buffer = decoded.buffer;
-          for (const line of decoded.lines) {
-            this.handleStdoutLine(line);
-          }
-        }
-
-        const decoded = readCodexAppServerStdoutLines({
-          decoder,
-          buffer,
-        });
-        for (const line of decoded.lines) {
-          this.handleStdoutLine(line);
-        }
-      } catch (error) {
-        if (this.proc === proc) {
-          log.error("[agents] codex app-server stdout reader failed", error);
-        }
+    socket.onerror = null;
+    socket.onmessage = (event) => {
+      if (typeof event.data === "string") this.handleMessage(event.data);
+    };
+    socket.onclose = () => {
+      if (this.socket !== socket) return;
+      log.warn(`[agents] codex app-server connection closed socket=${this.opts.socketPath}`);
+      this.rejectPending(new Error("codex app-server connection closed"));
+      this.resetConnection();
+      for (const listener of this.disconnectListeners) {
+        listener();
       }
-    })();
+    };
   }
 
-  private startStderrLoop(proc: PipedCodexAppServerProcess): void {
-    (async () => {
-      const reader = proc.stderr.getReader();
-      const decoder = new TextDecoder();
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const chunk = decoder.decode(value, { stream: true }).trim();
-          if (chunk.length > 0) {
-            log.debug(`[agents] codex app-server stderr: ${chunk}`);
-          }
-        }
-      } catch (error) {
-        if (this.proc === proc) {
-          log.error("[agents] codex app-server stderr reader failed", error);
-        }
-      }
-    })();
-  }
-
-  private handleStdoutLine(line: string): void {
+  private handleMessage(message: string): void {
     let parsed: unknown;
     try {
-      parsed = JSON.parse(line);
+      parsed = JSON.parse(message);
     } catch (error) {
-      log.error(`[agents] failed to parse codex app-server line: ${line}`, error);
+      log.error(`[agents] failed to parse codex app-server message: ${message}`, error);
       return;
     }
 
     if (!isRecord(parsed)) {
-      log.warn(`[agents] unexpected codex app-server payload: ${line}`);
+      log.warn(`[agents] unexpected codex app-server payload: ${message}`);
       return;
     }
 
@@ -749,7 +706,7 @@ export class CodexAppServerClient implements CodexAppServerGateway {
 
     const notification = this.readNotification(parsed);
     if (!notification) {
-      log.warn(`[agents] unexpected codex app-server message: ${line}`);
+      log.warn(`[agents] unexpected codex app-server message: ${message}`);
       return;
     }
 
@@ -793,10 +750,6 @@ export class CodexAppServerClient implements CodexAppServerGateway {
     schema: z.ZodType<T, z.ZodTypeDef, unknown>,
     params?: unknown,
   ): Promise<T> {
-    if (!this.proc) {
-      throw new Error("codex app-server process is not available");
-    }
-
     const id = this.nextId;
     this.nextId += 1;
 
@@ -827,13 +780,12 @@ export class CodexAppServerClient implements CodexAppServerGateway {
   }
 
   private send(payload: unknown): void {
-    const proc = this.proc;
-    if (!proc) {
-      throw new Error("codex app-server process is not available");
+    const socket = this.socket;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      throw new Error("codex app-server connection is not open");
     }
 
-    proc.stdin.write(this.encoder.encode(JSON.stringify(payload) + "\n"));
-    proc.stdin.flush();
+    socket.send(JSON.stringify(payload));
   }
 
   private rejectPending(error: Error): void {
@@ -844,9 +796,10 @@ export class CodexAppServerClient implements CodexAppServerGateway {
     }
   }
 
-  private resetProcess(): void {
-    this.proc = null;
+  private resetConnection(): void {
+    this.socket = null;
     this.readyPromise = null;
+    this.subscribedThreadIds.clear();
   }
 
   private readResponseError(raw: Record<string, unknown>): CodexAppServerJsonRpcError | null {
@@ -860,3 +813,4 @@ export class CodexAppServerClient implements CodexAppServerGateway {
       : null;
   }
 }
+

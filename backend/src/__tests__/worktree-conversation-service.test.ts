@@ -1,17 +1,19 @@
 import { describe, expect, it } from "bun:test";
-import type {
-  CodexAppServerGateway,
-  CodexAppServerThread,
-  CodexAppServerThreadContext,
-  CodexAppServerThreadListParams,
-  CodexAppServerThreadListResponse,
-  CodexAppServerThreadReadResponse,
-  CodexAppServerThreadResumeParams,
-  CodexAppServerThreadStartParams,
-  CodexAppServerTurn,
-  CodexAppServerTurnInterruptParams,
-  CodexAppServerTurnStartParams,
-  CodexAppServerTurnStartResponse,
+import {
+  CodexAppServerRequestError,
+  type CodexAppServerGateway,
+  type CodexAppServerThread,
+  type CodexAppServerThreadContext,
+  type CodexAppServerThreadListParams,
+  type CodexAppServerThreadListResponse,
+  type CodexAppServerThreadLoadedListResponse,
+  type CodexAppServerThreadReadResponse,
+  type CodexAppServerThreadResumeParams,
+  type CodexAppServerThreadStartParams,
+  type CodexAppServerTurn,
+  type CodexAppServerTurnInterruptParams,
+  type CodexAppServerTurnStartParams,
+  type CodexAppServerTurnStartResponse,
 } from "../adapters/codex-app-server";
 import type { ProfileConfig } from "../domain/config";
 import type { WorktreeMeta, WorktreeSnapshot } from "../domain/model";
@@ -35,9 +37,24 @@ class FakeCodexAppServer implements CodexAppServerGateway {
   readonly threadStartParams: CodexAppServerThreadStartParams[] = [];
   readonly turnStartParams: CodexAppServerTurnStartParams[] = [];
   listedThreads: CodexAppServerThread[] = [];
+  loadedThreadIds: string[] = [];
+  readonly subscribedThreadIds = new Set<string>();
+  /** Threads the TUI opened but nothing was sent on yet: codex can't resume them or read their turns. */
+  readonly unmaterializedThreadIds = new Set<string>();
+  /** How long after `turn/start` codex takes to persist the turn so the thread becomes resumable. */
+  materializeDelayMs = 0;
   readonly threads = new Map<string, CodexAppServerThread>();
   nextStartedThreadId = "thread-created";
   nextStartedTurnId = "turn-created";
+
+  isSubscribed(threadId: string): boolean {
+    return this.subscribedThreadIds.has(threadId);
+  }
+
+  async threadLoadedList(): Promise<CodexAppServerThreadLoadedListResponse> {
+    this.calls.push("threadLoadedList");
+    return { data: [...this.loadedThreadIds], nextCursor: null };
+  }
 
   async threadList(_params: CodexAppServerThreadListParams): Promise<CodexAppServerThreadListResponse> {
     this.calls.push("threadList");
@@ -51,6 +68,9 @@ class FakeCodexAppServer implements CodexAppServerGateway {
     this.calls.push(`threadRead:${threadId}:${includeTurns}`);
     const thread = this.threads.get(threadId);
     if (!thread) throw new Error(`Thread not found: ${threadId}`);
+    if (includeTurns && this.unmaterializedThreadIds.has(threadId)) {
+      throw new CodexAppServerRequestError(`thread ${threadId} is not materialized yet; includeTurns is unavailable before first user message`, -32600);
+    }
 
     return {
       thread: includeTurns
@@ -65,8 +85,12 @@ class FakeCodexAppServer implements CodexAppServerGateway {
   async threadResume(params: CodexAppServerThreadResumeParams): Promise<CodexAppServerThreadContext> {
     this.calls.push(`threadResume:${params.threadId}`);
     this.threadResumeParams.push(structuredClone(params));
+    if (this.unmaterializedThreadIds.has(params.threadId)) {
+      throw new CodexAppServerRequestError(`no rollout found for thread id ${params.threadId}`, -32600);
+    }
     const thread = this.requireThread(params.threadId);
-    thread.status = { type: "idle" };
+    if (thread.status.type === "notLoaded") thread.status = { type: "idle" };
+    this.subscribedThreadIds.add(thread.id);
     return this.buildContext(thread);
   }
 
@@ -83,6 +107,7 @@ class FakeCodexAppServer implements CodexAppServerGateway {
     });
     this.threads.set(thread.id, thread);
     this.listedThreads = [thread, ...this.listedThreads];
+    this.subscribedThreadIds.add(thread.id);
     return this.buildContext(thread);
   }
 
@@ -105,6 +130,11 @@ class FakeCodexAppServer implements CodexAppServerGateway {
     });
     thread.status = { type: "active", activeFlags: [] };
     thread.turns = [...thread.turns, turn];
+    if (this.materializeDelayMs === 0) {
+      this.unmaterializedThreadIds.delete(thread.id);
+    } else {
+      setTimeout(() => this.unmaterializedThreadIds.delete(thread.id), this.materializeDelayMs);
+    }
     return {
       turn: structuredClone(turn),
     };
@@ -847,7 +877,7 @@ describe("WorktreeConversationService", () => {
     appServer.threads.set(newestThread.id, structuredClone(newestThread));
 
     const service = new WorktreeConversationService({
-      appServer,
+      appServerFor: () => appServer,
       git: new FakeGitGateway(),
       resolveLaunchContext: allowCodexLaunchContext,
       now: () => new Date("2026-04-14T12:00:00.000Z"),
@@ -864,6 +894,7 @@ describe("WorktreeConversationService", () => {
     expect(result.data.worktree.conversation?.conversationId).toBe("thread-new");
     expect(result.data.conversation.messages).toHaveLength(2);
     expect(appServer.calls).toEqual([
+      "threadLoadedList",
       "threadList",
       "threadRead:thread-new:false",
       "threadResume:thread-new",
@@ -914,7 +945,7 @@ describe("WorktreeConversationService", () => {
     appServer.threads.set(thread.id, structuredClone(thread));
 
     const service = new WorktreeConversationService({
-      appServer,
+      appServerFor: () => appServer,
       git: new FakeGitGateway(),
       resolveLaunchContext: allowCodexLaunchContext,
       readSessionMessages: async () => [
@@ -965,6 +996,126 @@ describe("WorktreeConversationService", () => {
     ]);
   });
 
+  it("attaches to the thread the TUI has loaded and subscribes without overriding its settings", async () => {
+    const metaStore = new Map<string, WorktreeMeta>();
+    const worktree = makeWorktree();
+    const gitDir = `${worktree.path}/.git`;
+    metaStore.set(gitDir, makeMeta());
+
+    const tuiThread = makeThread({ id: "thread-tui", cwd: worktree.path, updatedAt: 250, statusType: "idle", source: "vscode", turns: [] });
+    const appServer = new FakeCodexAppServer();
+    appServer.loadedThreadIds = [tuiThread.id];
+    appServer.threads.set(tuiThread.id, structuredClone(tuiThread));
+    const requestedWorktreeIds: string[] = [];
+
+    const service = new WorktreeConversationService({
+      appServerFor: (worktreeId) => {
+        requestedWorktreeIds.push(worktreeId);
+        return appServer;
+      },
+      git: new FakeGitGateway(),
+      resolveLaunchContext: allowCodexLaunchContext,
+      now: () => new Date("2026-04-14T12:00:00.000Z"),
+      readMeta: async (path) => structuredClone(metaStore.get(path) ?? null),
+      writeMeta: async (path, meta) => {
+        metaStore.set(path, structuredClone(meta));
+      },
+    });
+
+    const first = await service.attachWorktreeConversation(worktree);
+    expect(first.ok && first.data.conversation.conversationId).toBe("thread-tui");
+    await service.readWorktreeConversation(worktree);
+
+    expect(requestedWorktreeIds).toEqual(["wt-123", "wt-123"]);
+    expect(appServer.calls).toEqual([
+      "threadLoadedList",
+      "threadResume:thread-tui",
+      "threadRead:thread-tui:true",
+      "threadLoadedList",
+      "threadRead:thread-tui:true",
+    ]);
+    expect(appServer.threadResumeParams).toEqual([{ threadId: "thread-tui" }]);
+    expect(metaStore.get(gitDir)?.conversation).toEqual(
+      makeCodexConversationMeta("thread-tui", worktree.path, "2026-04-14T12:00:00.000Z"),
+    );
+  });
+
+  it("prefers the saved thread among loaded ones, otherwise the most recently updated", async () => {
+    const worktree = makeWorktree();
+    const gitDir = `${worktree.path}/.git`;
+    const older = makeThread({ id: "thread-older", cwd: worktree.path, updatedAt: 100, statusType: "idle", source: "vscode", turns: [] });
+    const newer = makeThread({ id: "thread-newer", cwd: worktree.path, updatedAt: 300, statusType: "idle", source: "vscode", turns: [] });
+
+    async function resolveWith(meta: WorktreeMeta): Promise<string | null> {
+      const metaStore = new Map<string, WorktreeMeta>([[gitDir, meta]]);
+      const appServer = new FakeCodexAppServer();
+      appServer.loadedThreadIds = [older.id, newer.id];
+      appServer.threads.set(older.id, structuredClone(older));
+      appServer.threads.set(newer.id, structuredClone(newer));
+      const service = new WorktreeConversationService({
+        appServerFor: () => appServer,
+        git: new FakeGitGateway(),
+        resolveLaunchContext: allowCodexLaunchContext,
+        readMeta: async (path) => structuredClone(metaStore.get(path) ?? null),
+        writeMeta: async (path, nextMeta) => {
+          metaStore.set(path, structuredClone(nextMeta));
+        },
+      });
+      const result = await service.readWorktreeConversation(worktree);
+      return result.ok ? result.data.conversation.conversationId : null;
+    }
+
+    expect(await resolveWith({ ...makeMeta(), conversation: makeCodexConversationMeta("thread-older", worktree.path) })).toBe("thread-older");
+    expect(await resolveWith({ ...makeMeta(), conversation: makeCodexConversationMeta("thread-gone", worktree.path) })).toBe("thread-newer");
+    expect(await resolveWith(makeMeta())).toBe("thread-newer");
+  });
+
+  it("drives a TUI thread with no message yet and subscribes once the turn persists it", async () => {
+    const metaStore = new Map<string, WorktreeMeta>();
+    const worktree = makeWorktree();
+    const gitDir = `${worktree.path}/.git`;
+    metaStore.set(gitDir, makeMeta());
+
+    const freshThread = makeThread({ id: "thread-fresh", cwd: worktree.path, updatedAt: 250, statusType: "idle", source: "vscode", turns: [] });
+    const appServer = new FakeCodexAppServer();
+    appServer.loadedThreadIds = [freshThread.id];
+    appServer.unmaterializedThreadIds.add(freshThread.id);
+    appServer.materializeDelayMs = 150;
+    appServer.threads.set(freshThread.id, structuredClone(freshThread));
+
+    const service = new WorktreeConversationService({
+      appServerFor: () => appServer,
+      git: new FakeGitGateway(),
+      resolveLaunchContext: allowCodexLaunchContext,
+      readMeta: async (path) => structuredClone(metaStore.get(path) ?? null),
+      writeMeta: async (path, meta) => {
+        metaStore.set(path, structuredClone(meta));
+      },
+    });
+
+    const attached = await service.attachWorktreeConversation(worktree);
+    expect(attached.ok && attached.data.conversation).toMatchObject({ conversationId: "thread-fresh", messages: [] });
+
+    const sent = await service.sendWorktreeConversationMessage(worktree, "Hello");
+    expect(sent.ok && sent.data.conversationId).toBe("thread-fresh");
+    expect(appServer.isSubscribed("thread-fresh")).toBe(false);
+    await Bun.sleep(400);
+    expect(appServer.isSubscribed("thread-fresh")).toBe(true);
+    expect(appServer.calls.slice(0, 10)).toEqual([
+      "threadLoadedList",
+      "threadResume:thread-fresh",
+      "threadRead:thread-fresh:true",
+      "threadRead:thread-fresh:false",
+      "threadLoadedList",
+      "threadResume:thread-fresh",
+      "threadRead:thread-fresh:true",
+      "threadRead:thread-fresh:false",
+      "turnStart:thread-fresh:Hello",
+      "threadResume:thread-fresh",
+    ]);
+    expect(appServer.threadStartParams).toEqual([]);
+  });
+
   it("creates a new thread on attach when none can be resolved", async () => {
     const metaStore = new Map<string, WorktreeMeta>();
     const worktree = makeWorktree();
@@ -973,7 +1124,7 @@ describe("WorktreeConversationService", () => {
 
     const appServer = new FakeCodexAppServer();
     const service = new WorktreeConversationService({
-      appServer,
+      appServerFor: () => appServer,
       git: new FakeGitGateway(),
       resolveLaunchContext: allowCodexLaunchContext,
       now: () => new Date("2026-04-14T12:10:00.000Z"),
@@ -989,6 +1140,7 @@ describe("WorktreeConversationService", () => {
 
     expect(result.data.worktree.conversation?.conversationId).toBe("thread-created");
     expect(appServer.calls).toEqual([
+      "threadLoadedList",
       "threadList",
       "threadStart:/tmp/worktrees/codex-feature",
     ]);
@@ -1024,7 +1176,7 @@ describe("WorktreeConversationService", () => {
     appServer.threads.set(thread.id, structuredClone(thread));
 
     const service = new WorktreeConversationService({
-      appServer,
+      appServerFor: () => appServer,
       git: new FakeGitGateway(),
       resolveLaunchContext: allowCodexLaunchContext,
       readMeta: async (path) => structuredClone(metaStore.get(path) ?? null),
@@ -1044,9 +1196,11 @@ describe("WorktreeConversationService", () => {
       },
     });
     expect(appServer.calls).toEqual([
+      "threadLoadedList",
       "threadRead:thread-existing:false",
       "threadRead:thread-existing:true",
       "turnStart:thread-existing:Ship it",
+      "threadResume:thread-existing",
     ]);
     expect(appServer.turnStartParams[0]).toEqual({
       threadId: "thread-existing",
@@ -1068,7 +1222,7 @@ describe("WorktreeConversationService", () => {
 
     const appServer = new FakeCodexAppServer();
     const service = new WorktreeConversationService({
-      appServer,
+      appServerFor: () => appServer,
       git: new FakeGitGateway(),
       resolveLaunchContext: ({ worktree: resolvedWorktree, meta }) =>
         resolveCodexAppServerLaunchContext({
@@ -1125,7 +1279,7 @@ describe("WorktreeConversationService", () => {
     appServer.threads.set(thread.id, structuredClone(thread));
 
     const service = new WorktreeConversationService({
-      appServer,
+      appServerFor: () => appServer,
       git: new FakeGitGateway(),
       resolveLaunchContext: allowCodexLaunchContext,
       readMeta: async (path) => structuredClone(metaStore.get(path) ?? null),
@@ -1218,7 +1372,7 @@ describe("WorktreeConversationService", () => {
     appServer.threads.set(newestThread.id, structuredClone(newestThread));
 
     const service = new WorktreeConversationService({
-      appServer,
+      appServerFor: () => appServer,
       git: new FakeGitGateway(),
       resolveLaunchContext: allowCodexLaunchContext,
       now: () => new Date("2026-04-16T09:00:00.000Z"),
@@ -1235,6 +1389,7 @@ describe("WorktreeConversationService", () => {
     expect(result.data.worktree.conversation?.conversationId).toBe("thread-old");
     expect(result.data.conversation.messages.at(-1)?.text).toBe("Old reply");
     expect(appServer.calls).toEqual([
+      "threadLoadedList",
       "threadRead:thread-old:false",
       "threadRead:thread-old:true",
     ]);
@@ -1251,7 +1406,7 @@ describe("WorktreeConversationService", () => {
 
     const appServer = new FakeCodexAppServer();
     const service = new WorktreeConversationService({
-      appServer,
+      appServerFor: () => appServer,
       git: new FakeGitGateway(),
       resolveLaunchContext: allowCodexLaunchContext,
       readMeta: async (path) => structuredClone(metaStore.get(path) ?? null),
@@ -1267,6 +1422,7 @@ describe("WorktreeConversationService", () => {
       error: "No Codex thread could be resolved for this worktree",
     });
     expect(appServer.calls).toEqual([
+      "threadLoadedList",
       "threadList",
     ]);
     expect(metaStore.get(gitDir)?.conversation).toBeUndefined();

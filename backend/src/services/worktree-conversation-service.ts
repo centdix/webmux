@@ -1,24 +1,26 @@
 import { readWorktreeMeta, writeWorktreeMeta } from "../adapters/fs";
-import type {
-  CodexAppServerAgentMessageItem,
-  CodexAppServerApprovalPolicy,
-  CodexAppServerCommandExecutionItem,
-  CodexAppServerDynamicToolCallStatus,
-  CodexAppServerDynamicToolCallContentItem,
-  CodexAppServerDynamicToolCallItem,
-  CodexAppServerFileChangeItem,
-  CodexAppServerFileUpdateChange,
-  CodexAppServerMcpToolCallItem,
-  CodexAppServerMcpToolCallStatus,
-  CodexAppServerPatchApplyStatus,
-  CodexAppServerPersonality,
-  CodexAppServerSandboxMode,
-  CodexAppServerThread,
-  CodexAppServerThreadItem,
-  CodexAppServerThreadListResponse,
-  CodexAppServerTurn,
-  CodexAppServerUserMessageItem,
-  CodexAppServerWebSearchItem,
+import {
+  CodexAppServerRequestError,
+  type CodexAppServerAgentMessageItem,
+  type CodexAppServerApprovalPolicy,
+  type CodexAppServerCommandExecutionItem,
+  type CodexAppServerDynamicToolCallStatus,
+  type CodexAppServerDynamicToolCallContentItem,
+  type CodexAppServerDynamicToolCallItem,
+  type CodexAppServerFileChangeItem,
+  type CodexAppServerFileUpdateChange,
+  type CodexAppServerMcpToolCallItem,
+  type CodexAppServerMcpToolCallStatus,
+  type CodexAppServerPatchApplyStatus,
+  type CodexAppServerPersonality,
+  type CodexAppServerSandboxMode,
+  type CodexAppServerThread,
+  type CodexAppServerThreadItem,
+  type CodexAppServerThreadListResponse,
+  type CodexAppServerTurn,
+  type CodexAppServerUserMessageItem,
+  type CodexAppServerWebSearchItem,
+  type CodexAppServerGateway,
 } from "../adapters/codex-app-server";
 import type { GitGateway } from "../adapters/git";
 import type { ProfileConfig } from "../domain/config";
@@ -52,8 +54,14 @@ export interface ResolveCodexAppServerLaunchContextInput {
   meta: WorktreeMeta;
 }
 
+export type WorktreeConversationAppServer = Pick<
+  CodexAppServerGateway,
+  "isSubscribed" | "threadList" | "threadLoadedList" | "threadRead" | "threadResume" | "threadStart" | "turnStart" | "turnInterrupt"
+>;
+
 export interface WorktreeConversationServiceDependencies {
-  appServer: Pick<import("../adapters/codex-app-server").CodexAppServerGateway, "threadList" | "threadRead" | "threadResume" | "threadStart" | "turnStart" | "turnInterrupt">;
+  /** The app-server of one worktree (the one its Codex TUI is attached to). */
+  appServerFor: (worktreeId: string) => WorktreeConversationAppServer;
   git: Pick<GitGateway, "resolveWorktreeGitDir">;
   resolveLaunchContext: (
     input: ResolveCodexAppServerLaunchContextInput,
@@ -65,6 +73,7 @@ export interface WorktreeConversationServiceDependencies {
 }
 
 interface ResolvedConversation {
+  appServer: WorktreeConversationAppServer;
   gitDir: string;
   meta: WorktreeMeta;
   thread: CodexAppServerThread;
@@ -630,12 +639,17 @@ export class WorktreeConversationService {
     worktree: WorktreeSnapshot,
     text: string,
   ): Promise<WorktreeConversationResult<AgentsUiSendMessageResponse>> {
-    return await this.withResolvedConversation(worktree, true, async ({ thread, launchContext }) => {
-      const started = await this.deps.appServer.turnStart({
+    return await this.withResolvedConversation(worktree, true, async ({ appServer, thread, launchContext }) => {
+      const started = await appServer.turnStart({
         threadId: thread.id,
         cwd: worktree.path,
         approvalPolicy: launchContext.approvalPolicy,
         input: [{ type: "text", text }],
+      });
+      // A TUI thread with no message yet can't be resumed until codex persists this turn's
+      // first item, so keep trying in the background to stream the rest of the turn.
+      void subscribeOnceMaterialized(appServer, thread.id).catch((error: unknown) => {
+        log.warn(`[agents] codex thread subscribe failed threadId=${thread.id}: ${error instanceof Error ? error.message : String(error)}`);
       });
       return ok({
         conversationId: thread.id,
@@ -649,14 +663,14 @@ export class WorktreeConversationService {
   async interruptWorktreeConversation(
     worktree: WorktreeSnapshot,
   ): Promise<WorktreeConversationResult<AgentsUiInterruptResponse>> {
-    return await this.withResolvedConversation(worktree, false, async ({ thread }) => {
+    return await this.withResolvedConversation(worktree, false, async ({ appServer, thread }) => {
       const conversation = buildConversationState(thread);
       const turnId = conversation.activeTurnId;
       if (!turnId) {
         return err(409, "No active Codex turn to interrupt");
       }
 
-      await this.deps.appServer.turnInterrupt({
+      await appServer.turnInterrupt({
         threadId: thread.id,
         turnId,
       });
@@ -702,8 +716,9 @@ export class WorktreeConversationService {
     if (!launchContextResult.ok) return launchContextResult;
     const launchContext = launchContextResult.data;
 
+    const appServer = this.deps.appServerFor(meta.worktreeId);
     const now = this.now();
-    const thread = await this.resolveThread(meta, worktree.path, allowCreate, launchContext);
+    const thread = await this.resolveThread(appServer, meta, worktree.path, allowCreate, launchContext);
     if (!thread) {
       return err(404, "No Codex thread could be resolved for this worktree");
     }
@@ -718,6 +733,7 @@ export class WorktreeConversationService {
     }
 
     return ok({
+      appServer,
       gitDir,
       meta: nextMeta,
       thread,
@@ -727,6 +743,7 @@ export class WorktreeConversationService {
   }
 
   private async resolveThread(
+    appServer: WorktreeConversationAppServer,
     meta: WorktreeMeta,
     cwd: string,
     allowCreate: boolean,
@@ -735,24 +752,29 @@ export class WorktreeConversationService {
     const savedThreadId = isCodexConversationMeta(meta.conversation)
       ? meta.conversation.threadId
       : null;
+
+    // The thread the TUI has open, so the chat and the terminal show the same live session.
+    const loadedThread = await this.findLoadedThread(appServer, savedThreadId);
+    if (loadedThread) return loadedThread;
+
     if (savedThreadId) {
-      const savedThread = await this.tryLoadThread(savedThreadId, cwd, launchContext);
+      const savedThread = await this.tryLoadThread(appServer, savedThreadId, cwd, launchContext);
       if (savedThread) return savedThread;
       log.warn(`[agents] saved codex thread missing, starting fresh conversation cwd=${cwd} threadId=${savedThreadId}`);
     } else {
-      const discoveredThread = selectDiscoveredThread((await this.deps.appServer.threadList({
+      const discoveredThread = selectDiscoveredThread((await appServer.threadList({
         cwd,
         limit: 20,
         sortKey: "updated_at",
       })).data);
       if (discoveredThread) {
-        return await this.ensureThreadLoaded(discoveredThread.id, cwd, launchContext);
+        return await this.ensureThreadLoaded(appServer, discoveredThread.id, cwd, launchContext);
       }
     }
 
     if (!allowCreate) return null;
 
-    const started = await this.deps.appServer.threadStart({
+    const started = await appServer.threadStart({
       cwd,
       approvalPolicy: launchContext.approvalPolicy,
       personality: launchContext.personality,
@@ -761,26 +783,46 @@ export class WorktreeConversationService {
     return started.thread;
   }
 
+  private async findLoadedThread(
+    appServer: WorktreeConversationAppServer,
+    savedThreadId: string | null,
+  ): Promise<CodexAppServerThread | null> {
+    const loadedIds = (await appServer.threadLoadedList()).data;
+    if (loadedIds.length === 0) return null;
+
+    const threadId = savedThreadId && loadedIds.includes(savedThreadId)
+      ? savedThreadId
+      : loadedIds.length === 1 ? loadedIds[0] : selectDiscoveredThread(await Promise.all(
+          loadedIds.map(async (id) => (await appServer.threadRead(id, false)).thread),
+        ))?.id;
+    if (!threadId) return null;
+
+    await subscribeToThread(appServer, threadId);
+    return await readThreadWithTurns(appServer, threadId);
+  }
+
   private async tryLoadThread(
+    appServer: WorktreeConversationAppServer,
     threadId: string,
     cwd: string,
     launchContext: CodexAppServerLaunchContext,
   ): Promise<CodexAppServerThread | null> {
     try {
-      return await this.ensureThreadLoaded(threadId, cwd, launchContext);
+      return await this.ensureThreadLoaded(appServer, threadId, cwd, launchContext);
     } catch {
       return null;
     }
   }
 
   private async ensureThreadLoaded(
+    appServer: WorktreeConversationAppServer,
     threadId: string,
     cwd: string,
     launchContext: CodexAppServerLaunchContext,
   ): Promise<CodexAppServerThread> {
-    const initial = await this.deps.appServer.threadRead(threadId, false);
+    const initial = await appServer.threadRead(threadId, false);
     if (initial.thread.status.type === "notLoaded") {
-      await this.deps.appServer.threadResume({
+      await appServer.threadResume({
         threadId,
         cwd,
         approvalPolicy: launchContext.approvalPolicy,
@@ -789,6 +831,46 @@ export class WorktreeConversationService {
       });
     }
 
-    return (await this.deps.appServer.threadRead(threadId, true)).thread;
+    return (await appServer.threadRead(threadId, true)).thread;
+  }
+}
+
+/** codex rejects resuming a thread that has nothing persisted yet (a TUI session before
+ *  its first message), and reading its turns. */
+function isUnmaterializedThreadError(error: unknown): boolean {
+  return error instanceof CodexAppServerRequestError
+    && (error.message.includes("not materialized") || error.message.includes("no rollout found"));
+}
+
+/** Rejoin a running thread (no overrides, so the TUI's settings stay) so this connection
+ *  receives its item/turn notifications. */
+async function subscribeToThread(appServer: WorktreeConversationAppServer, threadId: string): Promise<void> {
+  if (appServer.isSubscribed(threadId)) return;
+  try {
+    await appServer.threadResume({ threadId });
+  } catch (error) {
+    if (!isUnmaterializedThreadError(error)) throw error;
+  }
+}
+
+const SUBSCRIBE_RETRY_DELAY_MS = 100;
+const SUBSCRIBE_RETRY_ATTEMPTS = 50;
+
+async function subscribeOnceMaterialized(appServer: WorktreeConversationAppServer, threadId: string): Promise<void> {
+  for (let attempt = 0; attempt < SUBSCRIBE_RETRY_ATTEMPTS && !appServer.isSubscribed(threadId); attempt += 1) {
+    if (attempt > 0) await Bun.sleep(SUBSCRIBE_RETRY_DELAY_MS);
+    await subscribeToThread(appServer, threadId);
+  }
+}
+
+async function readThreadWithTurns(
+  appServer: WorktreeConversationAppServer,
+  threadId: string,
+): Promise<CodexAppServerThread> {
+  try {
+    return (await appServer.threadRead(threadId, true)).thread;
+  } catch (error) {
+    if (!isUnmaterializedThreadError(error)) throw error;
+    return (await appServer.threadRead(threadId, false)).thread;
   }
 }
