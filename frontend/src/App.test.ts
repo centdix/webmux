@@ -640,6 +640,42 @@ describe("App create selection", () => {
     expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("feature/saved");
   });
 
+  it("drops the pending auto-select of a create once the user switches project", async () => {
+    otherProjects.list = [{
+      prefix: "images",
+      name: "images",
+      worktrees: [createWorktree("feature/img", { project: "images" })],
+      error: null,
+    }];
+    vi.mocked(fetchProjects).mockResolvedValue([
+      { prefix: PROJECT, name: PROJECT, path: "/repos/webmux", active: true },
+      { prefix: "images", name: "images", path: "/repos/images", active: false },
+    ]);
+    const creatingWorktree = createWorktree("feature/new", { creating: true, creationPhase: "creating_worktree" });
+    const createResult = deferred<{ primaryBranch: string; branches: string[] }>();
+    vi.mocked(fetchWorktrees)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([creatingWorktree])
+      .mockResolvedValue([createWorktree("feature/new")]);
+    vi.mocked(api.createWorktree).mockReturnValueOnce(createResult.promise);
+
+    renderApp();
+    await screen.findByText("Select a worktree");
+    await openCreateDialogAndSubmit("feature/new");
+    await waitFor(() => expect(fetchWorktrees).toHaveBeenCalledTimes(2));
+
+    await fireEvent.click(screen.getByTitle("Switch project"));
+    await fireEvent.click(await screen.findByRole("menuitem", { name: /^images/ }));
+    expect(await screen.findByTitle("feature/img")).toBeInTheDocument();
+
+    createResult.resolve({ primaryBranch: "feature/new", branches: ["feature/new"] });
+    await waitFor(() => expect(fetchWorktrees).toHaveBeenCalledTimes(3));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(screen.getByTitle("feature/img")).toBeInTheDocument();
+    expect(window.location.hash).toBe("#images/feature/img");
+  });
+
   it("keeps the current selection when a new worktree is created from an existing selection", async () => {
     const existingWorktree = createWorktree("main");
     const creatingWorktree = createWorktree("feature/new", {

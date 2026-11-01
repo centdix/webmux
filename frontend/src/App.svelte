@@ -591,7 +591,7 @@
       const createPromise = projectApi(targetProject).createWorktree({ body: finalRequest });
       void store.refresh();
       const result = await createPromise;
-      if (shouldAutoSelectCreatedWorktree) {
+      if (shouldAutoSelectCreatedWorktree && requestId === latestAutoSelectCreateId) {
         pendingCreate = { project: targetProject, branchHint: result.primaryBranch };
       }
       invalidateBranchCaches();
@@ -612,6 +612,12 @@
         latestAutoSelectCreateId = -1;
       }
     }
+  }
+
+  /** The user moved elsewhere: a create in flight no longer steals the selection. */
+  function cancelCreateAutoSelect(): void {
+    pendingCreate = null;
+    latestAutoSelectCreateId = -1;
   }
 
   function selectNeighborOf(ref: WorktreeRef): void {
@@ -643,6 +649,7 @@
    *  becomes current, without remounting anything. */
   function selectWorktree(ref: WorktreeRef): void {
     const target = { project: ref.project, branch: ref.branch };
+    if (pendingCreate && pendingCreate.project !== target.project) cancelCreateAutoSelect();
     revealWorktreeInFilters(target);
     selection.select(target);
     notifications.markRead(target);
@@ -660,6 +667,7 @@
     }
     // A project the store hasn't seen yet (just added) loads in the background.
     if (!store.hasProject(next)) void store.refresh();
+    if (next !== project) cancelCreateAutoSelect();
     selection.switchProject(next);
   }
 
