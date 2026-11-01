@@ -33,21 +33,21 @@ describe("project-scoped network calls", () => {
   }
 
   it("targets each project's own base path through the same module (no hidden global)", async () => {
-    const fetchMock = vi.fn(async (_input: string | URL | Request) => jsonResponse({ agents: [] }));
+    const fetchMock = vi.fn(async (_input: string | URL | Request) => jsonResponse({ worktrees: [] }));
     vi.stubGlobal("fetch", fetchMock);
     const urls = stubWebSocket();
 
     const api = await loadApi();
-    await api.fetchAgents("alpha");
-    await api.fetchAgents("beta");
-    await api.fetchAgents("alpha");
+    await api.projectApi("alpha").fetchWorktrees();
+    await api.projectApi("beta").fetchWorktrees();
+    await api.projectApi("alpha").fetchWorktrees();
     api.connectWorktreeConversationStream("beta", "feat/x", { onEvent: () => {}, onError: () => {} });
     api.connectWorktreeConversationStream("alpha", "feat/x", { onEvent: () => {}, onError: () => {} });
 
     expect(fetchMock.mock.calls.map(([input]) => urlOf(input))).toEqual([
-      "/api/projects/alpha/agents",
-      "/api/projects/beta/agents",
-      "/api/projects/alpha/agents",
+      "/api/projects/alpha/worktrees",
+      "/api/projects/beta/worktrees",
+      "/api/projects/alpha/worktrees",
     ]);
     expect(urls).toEqual([
       `ws://${window.location.host}/api/projects/beta/ws/agents/worktrees/feat%2Fx`,
@@ -56,6 +56,16 @@ describe("project-scoped network calls", () => {
     expect(api.projectApi("alpha")).toBe(api.projectApi("alpha"));
     expect(api.projectApi("alpha")).not.toBe(api.projectApi("beta"));
     expect(window.location.pathname).toBe("/");
+  });
+
+  it("sends custom agent calls to the global hub routes, not a project", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request) => jsonResponse({ agents: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const api = await loadApi();
+    await api.fetchAgents();
+
+    expect(fetchMock.mock.calls.map(([input]) => urlOf(input))).toEqual(["/api/agents"]);
   });
 
   it("terminalSocketUrl points at the project's terminal socket", async () => {

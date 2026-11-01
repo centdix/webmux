@@ -83,6 +83,22 @@ describe("ProjectCache", () => {
     expect(cache.get("alpha")).toEqual({ agents: 5 });
   });
 
+  it("reloads only the projects already loaded", async () => {
+    let version = 1;
+    const load = vi.fn(async (project: string) => `${project} v${version}`);
+    const cache = new ProjectCache(load, { maxAgeMs: Infinity });
+    cache.ensure("alpha");
+    await flush();
+
+    version = 2;
+    cache.reloadLoaded();
+    await flush();
+
+    expect(load.mock.calls.map(([project]) => project)).toEqual(["alpha", "alpha"]);
+    expect(cache.get("alpha")).toBe("alpha v2");
+    expect(cache.get("beta")).toBeUndefined();
+  });
+
   it("updates a loaded value in place", async () => {
     const cache = new ProjectCache(async () => ({ agents: 1 }), { maxAgeMs: Infinity });
     cache.update("alpha", (value) => ({ agents: value.agents + 1 }));
