@@ -31,7 +31,7 @@ export function isValidEnvKey(key: string): boolean {
 
 /** Path segments a derived project prefix must never take. `api`, `ws` and
  *  `assets` are owned at the root (the SPA still lives under `/<prefix>/`);
- *  `init`, `worktrees` and `migrate` are static hub routes under
+ *  `init` and `worktrees` are static hub routes under
  *  `/api/projects/`, where every project's routes are mounted. */
 export const RESERVED_PROJECT_PREFIXES: ReadonlySet<string> = new Set([
   "api",
@@ -39,7 +39,6 @@ export const RESERVED_PROJECT_PREFIXES: ReadonlySet<string> = new Set([
   "assets",
   "init",
   "worktrees",
-  "migrate",
 ]);
 
 /** Sanitize a string into a URL-path-friendly prefix: lowercase, hyphenated,

@@ -113,7 +113,7 @@ function wrapClient<TClient extends Record<string, unknown>>(client: TClient): U
 export type HubApi = UnwrappedClient<ReturnType<typeof createClient<typeof hubContract>>>;
 export type ProjectApi = UnwrappedClient<ReturnType<typeof createClient<typeof projectContract>>>;
 
-/** Client for the global hub routes (project registry, instances). */
+/** Client for the global hub routes (project registry). */
 export function createHubApi({ origin = "", ...options }: ApiClientOptions = {}): HubApi {
   return wrapClient(createClient(hubContract, origin, options));
 }
