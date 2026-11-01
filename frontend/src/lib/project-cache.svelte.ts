@@ -45,9 +45,9 @@ export class ProjectCache<T> {
     this.#attemptedAt.delete(project);
   }
 
-  /** Load every already-loaded project again, e.g. after a change shared by all of them. */
+  /** Load every loaded (or loading) project again, e.g. after a change shared by all of them. */
   reloadLoaded(): void {
-    for (const project of Object.keys(this.#values)) {
+    for (const project of new Set([...Object.keys(this.#values), ...this.#latestLoad.keys()])) {
       this.invalidate(project);
       this.ensure(project);
     }

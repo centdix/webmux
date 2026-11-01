@@ -119,8 +119,10 @@
       await deleteAgent(deleteCandidate.id);
       await loadAgentList();
       configs.reloadLoaded();
-      deleteCandidate = null;
+    } catch (err) {
+      agentsError = errorMessage(err);
     } finally {
+      deleteCandidate = null;
       deletingAgentId = null;
     }
   }
@@ -200,7 +202,7 @@
 
 {#if deleteCandidate}
   <ConfirmDialog
-    message={`Delete agent "${deleteCandidate.label}"?`}
+    message={`Delete agent "${deleteCandidate.label}"? It is shared by all projects.`}
     onconfirm={() => {
       void handleDeleteAgent();
     }}
