@@ -647,6 +647,35 @@ async function refreshStalePrData(
   );
 }
 
+/** Record a PR the agent just opened (known only by its URL) on the worktree, so the
+ *  badge shows before the next sync. Needs no `gh` call; the sync fills in the rest.
+ *  Returns false when the URL is not a PR URL or the PR is already recorded. */
+export async function linkOpenedPr(
+  gitDir: string,
+  url: string,
+  linkedRepos: LinkedRepoConfig[],
+): Promise<boolean> {
+  const ref = parsePrUrl(url);
+  if (!ref) return false;
+  const existing = await readWorktreePrs(gitDir);
+  const key = `${ref.host}/${ref.owner}/${ref.name}#${ref.number}`;
+  if (existing.some((entry) => prKey(entry) === key)) return false;
+  const slug = `${ref.owner}/${ref.name}`.toLowerCase();
+  const entry: PrEntry = {
+    repo: linkedRepos.find((lr) => lr.repo.toLowerCase() === slug)?.alias ?? "",
+    number: ref.number,
+    state: "open",
+    isDraft: false,
+    url,
+    updatedAt: "",
+    ciStatus: "none",
+    ciChecks: [],
+    comments: [],
+  };
+  await writeWorktreePrs(gitDir, [entry, ...existing]);
+  return true;
+}
+
 /** Sync PR status into per-worktree webmux storage for all worktrees that have open PRs.
  *  `state` holds this project's caches and backoff and must not be shared with
  *  another project. */
