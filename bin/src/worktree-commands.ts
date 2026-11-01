@@ -7,7 +7,7 @@ import { CommandUsageError, resolveProjectPrefix, resolveServedProjectPrefix, ru
 import { readOpenSessionsState, readWorktreeArchiveState, readWorktreeMeta, readWorktreePrs } from "../../backend/src/adapters/fs";
 import type { OpenSessionsState, PrEntry } from "../../backend/src/domain/model";
 import { buildProjectSessionName, buildWorktreeWindowName } from "../../backend/src/adapters/tmux";
-import type { AgentId } from "../../backend/src/domain/config";
+import type { AgentId, AutoNameConfig } from "../../backend/src/domain/config";
 import type { WorktreeCreationPhase } from "../../backend/src/domain/model";
 import { compareWorktreeOrder, isValidWorktreeName } from "../../backend/src/domain/policies";
 import { isValidPortLabel } from "../../backend/src/domain/port-registrations";
@@ -43,12 +43,13 @@ interface LifecycleServiceLike {
   pruneWorktrees(): Promise<PruneWorktreesResult>;
 }
 
-interface WorktreeRuntimeLike {
+export interface WorktreeRuntimeLike {
   projectDir: string;
   config: {
     workspace: {
       mainBranch: string;
     };
+    autoName: AutoNameConfig | null;
   };
   git: {
     listWorktrees(cwd: string): Array<{ path: string; branch: string | null; bare: boolean }>;
@@ -1075,7 +1076,7 @@ export async function runWorktreeCommand(
   context: WorktreeCommandContext,
   deps: WorktreeCommandDependencies = {},
 ): Promise<number> {
-  const createRuntime = deps.createRuntime
+  const createRuntime: NonNullable<WorktreeCommandDependencies["createRuntime"]> = deps.createRuntime
     ?? ((options) => createWebmuxRuntime({ ...options, portRegistrations: createPortRegistrationService() }));
   const stdout = deps.stdout ?? ((message: string) => console.log(message));
   const stderr = deps.stderr ?? ((message: string) => console.error(message));

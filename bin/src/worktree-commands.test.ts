@@ -18,6 +18,7 @@ import {
   type ParsedAddCommand,
   type ListedWorktreeRow,
   type ParsedSendCommand,
+  type WorktreeRuntimeLike,
 } from "./worktree-commands";
 
 function stubLifecycleService(calls: Array<{ method: string; value: unknown }>) {
@@ -81,22 +82,35 @@ function stubTmux(windows: Array<{ sessionName: string; windowName: string }> = 
   return { listWindows: () => windows };
 }
 
+function stubConfig(mainBranch = "main"): WorktreeRuntimeLike["config"] {
+  return { workspace: { mainBranch }, autoName: null };
+}
+
+function stubRuntime(overrides: Partial<WorktreeRuntimeLike> = {}): WorktreeRuntimeLike {
+  return {
+    projectDir: "/repo",
+    config: stubConfig(),
+    git: stubGit(),
+    tmux: stubTmux(),
+    lifecycleService: stubLifecycleService([]),
+    ...overrides,
+  };
+}
+
+/** Replace `globalThis.fetch`, keeping Bun's `fetch.preconnect` so the stub is a full `typeof fetch`. */
+function stubFetch(impl: (input: string | URL | Request, init?: RequestInit) => Promise<Response>): void {
+  globalThis.fetch = Object.assign(impl, { preconnect: globalThis.fetch.preconnect });
+}
+
 function makeRuntime() {
   const calls: Array<{ method: string; value: unknown }> = [];
 
   return {
     calls,
-    runtime: {
-      projectDir: "/repo",
-      config: {
-        workspace: {
-          mainBranch: "develop",
-        },
-      },
-      git: stubGit(),
-      tmux: stubTmux(),
+    runtime: stubRuntime({
+      config: stubConfig("develop"),
       lifecycleService: stubLifecycleService(calls),
-    },
+    }),
   };
 }
 
@@ -891,45 +905,11 @@ describe("runWorktreeCommand", () => {
         port: 5111,
       },
       {
-        createRuntime: () => ({
-          projectDir: "/repo",
-          config: {
-            workspace: {
-              mainBranch: "main",
-            },
-          },
-          git: stubGit(),
-          tmux: stubTmux(),
+        createRuntime: () => stubRuntime({
           lifecycleService: {
-            async createWorktree(): Promise<{ branch: string; worktreeId: string }> {
-              throw new Error("not used");
-            },
-            async createWorktrees(): Promise<{ primaryBranch: string; branches: string[] }> {
-              throw new Error("not used");
-            },
-            async openWorktree(): Promise<{ branch: string; worktreeId: string }> {
-              throw new Error("not used");
-            },
-            async closeWorktree(): Promise<void> {
-              throw new Error("not used");
-            },
-            async setWorktreeArchived(): Promise<void> {
-              throw new Error("not used");
-            },
-            async setWorktreeLabel(): Promise<{ label: string | null }> {
-              throw new Error("not used");
-            },
-            async setWorktreeProfile(): Promise<{ profile: string; restarted: boolean }> {
-              throw new Error("not used");
-            },
+            ...stubLifecycleService([]),
             async removeWorktree(): Promise<void> {
               throw new Error("Worktree has uncommitted changes: feature/search");
-            },
-            async mergeWorktree(): Promise<void> {
-              throw new Error("not used");
-            },
-            async pruneWorktrees(): Promise<{ removedBranches: string[] }> {
-              throw new Error("not used");
             },
           },
         }),
@@ -975,9 +955,7 @@ describe("runWorktreeCommand", () => {
     const exitCode = await runWorktreeCommand(
       { command: "list", args: [], projectDir: "/repo", port: 5111 },
       {
-        createRuntime: () => ({
-          projectDir: "/repo",
-          config: { workspace: { mainBranch: "main" } },
+        createRuntime: () => stubRuntime({
           git: stubGit([
             { path: "/repo", branch: "main", bare: false },
             { path: "/repo/.worktrees/fix-bug", branch: "fix-bug", bare: false },
@@ -986,7 +964,6 @@ describe("runWorktreeCommand", () => {
           tmux: stubTmux([
             { sessionName, windowName: buildWorktreeWindowName("my-feature") },
           ]),
-          lifecycleService: stubLifecycleService([]),
         }),
         stdout: (msg) => stdout.push(msg),
       },
@@ -1023,15 +1000,12 @@ describe("runWorktreeCommand", () => {
       const exitCode = await runWorktreeCommand(
         { command: "list", args: ["--search", "ranking"], projectDir, port: 5111 },
         {
-          createRuntime: () => ({
+          createRuntime: () => stubRuntime({
             projectDir,
-            config: { workspace: { mainBranch: "main" } },
             git: stubGit([
               { path: projectDir, branch: "main", bare: false },
               { path: worktreePath, branch: "random-name", bare: false },
             ]),
-            tmux: stubTmux(),
-            lifecycleService: stubLifecycleService([]),
           }),
           stdout: (msg) => stdout.push(msg),
         },
@@ -1051,12 +1025,8 @@ describe("runWorktreeCommand", () => {
     const exitCode = await runWorktreeCommand(
       { command: "list", args: [], projectDir: "/repo", port: 5111 },
       {
-        createRuntime: () => ({
-          projectDir: "/repo",
-          config: { workspace: { mainBranch: "main" } },
+        createRuntime: () => stubRuntime({
           git: stubGit([{ path: "/repo", branch: "main", bare: false }]),
-          tmux: stubTmux(),
-          lifecycleService: stubLifecycleService([]),
         }),
         stdout: (msg) => stdout.push(msg),
       },
@@ -1109,10 +1079,9 @@ describe("runWorktreeCommand", () => {
       await rm(tempDir, { recursive: true, force: true });
     });
 
-    function projectRuntime(projectDir: string, branches: string[]) {
-      return {
+    function projectRuntime(projectDir: string, branches: string[]): WorktreeRuntimeLike {
+      return stubRuntime({
         projectDir,
-        config: { workspace: { mainBranch: "main" } },
         git: stubGit([
           { path: projectDir, branch: "main", bare: false },
           ...branches.map((branch) => ({ path: `${projectDir}/.worktrees/${branch}`, branch, bare: false })),
@@ -1126,8 +1095,7 @@ describe("runWorktreeCommand", () => {
             }));
           },
         },
-        lifecycleService: stubLifecycleService([]),
-      };
+      });
     }
 
     function projects(): Array<{ path: string; name: string; addedAt: number }> {
@@ -1296,10 +1264,10 @@ describe("runWorktreeCommand", () => {
 
     it("sends the correct HTTP request to the server", async () => {
       const fetchCalls: Array<{ url: string; init: RequestInit }> = [];
-      globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      stubFetch(async (input: string | URL | Request, init?: RequestInit) => {
         fetchCalls.push({ url: String(input), init: init! });
         return new Response(JSON.stringify({ ok: true }), { status: 200 });
-      }) as typeof fetch;
+      });
 
       const stdout: string[] = [];
       const exitCode = await runWorktreeCommand(
@@ -1328,12 +1296,12 @@ describe("runWorktreeCommand", () => {
     });
 
     it("reports server errors with the error message", async () => {
-      globalThis.fetch = (async () => {
+      stubFetch(async () => {
         return new Response(JSON.stringify({ error: "Worktree not found: no-such" }), {
           status: 404,
           headers: { "Content-Type": "application/json" },
         });
-      }) as typeof fetch;
+      });
 
       const stderr: string[] = [];
       const exitCode = await runWorktreeCommand(
@@ -1355,9 +1323,9 @@ describe("runWorktreeCommand", () => {
     });
 
     it("shows a friendly message when the server is unreachable", async () => {
-      globalThis.fetch = (async () => {
+      stubFetch(async () => {
         throw new TypeError("fetch failed");
-      }) as typeof fetch;
+      });
 
       const stderr: string[] = [];
       const exitCode = await runWorktreeCommand(
@@ -1380,10 +1348,10 @@ describe("runWorktreeCommand", () => {
 
     it("prints send help without making a request", async () => {
       let fetchCalled = false;
-      globalThis.fetch = (async () => {
+      stubFetch(async () => {
         fetchCalled = true;
         return new Response("", { status: 200 });
-      }) as typeof fetch;
+      });
 
       const stdout: string[] = [];
       const exitCode = await runWorktreeCommand(
@@ -1417,22 +1385,18 @@ describe("runWorktreeCommand restore", () => {
     const opened: string[] = [];
     return {
       opened,
-      runtime: {
-        projectDir: "/repo",
-        config: { workspace: { mainBranch: "main" } },
-        git: {
-          listWorktrees: () => options.worktrees ?? [],
-          resolveWorktreeGitDir: (cwd: string) => `${cwd}/.git`,
-        },
-        tmux: { listWindows: () => options.windows ?? [] },
+      runtime: stubRuntime({
+        git: stubGit(options.worktrees),
+        tmux: stubTmux(options.windows),
         lifecycleService: {
+          ...stubLifecycleService([]),
           async openWorktree(branch: string): Promise<{ branch: string; worktreeId: string }> {
             if (options.openWorktree) return options.openWorktree(branch);
             opened.push(branch);
             return { branch, worktreeId: `wt-${branch}` };
           },
         },
-      },
+      }),
     };
   }
 
@@ -1603,10 +1567,10 @@ describe("runWorktreeCommand port", () => {
 
   it("prints only the allocated port so it can be captured with $(...)", async () => {
     const fetchCalls: Array<{ url: string; init: RequestInit }> = [];
-    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    stubFetch(async (input: string | URL | Request, init?: RequestInit) => {
       fetchCalls.push({ url: String(input), init: init! });
       return Response.json({ label: "web", port: 4100, keep: false });
-    }) as typeof fetch;
+    });
 
     const stdout: string[] = [];
     const exitCode = await runWorktreeCommand(
@@ -1628,10 +1592,10 @@ describe("runWorktreeCommand port", () => {
 
   it("sends keep when registering with --keep", async () => {
     const bodies: unknown[] = [];
-    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    stubFetch(async (_input: string | URL | Request, init?: RequestInit) => {
       bodies.push(JSON.parse(init!.body as string));
       return Response.json({ label: "web", port: 4100, keep: true });
-    }) as typeof fetch;
+    });
 
     const stdout: string[] = [];
     const exitCode = await runWorktreeCommand(
@@ -1650,13 +1614,13 @@ describe("runWorktreeCommand port", () => {
   });
 
   it("lists registrations with their status", async () => {
-    globalThis.fetch = (async () => Response.json({
+    stubFetch(async () => Response.json({
       ports: [
         { label: "web", port: 4100, keep: false, running: true },
         { label: "api", port: 4101, keep: false, running: false },
         { label: "oauth", port: 4102, keep: true, running: false },
       ],
-    })) as typeof fetch;
+    }));
 
     const stdout: string[] = [];
     const exitCode = await runWorktreeCommand(

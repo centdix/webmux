@@ -1,5 +1,7 @@
 # Full Lifecycle Implementation Steps
 
+> Routes have since moved: project routes now live under `/api/projects/<prefix>/...` (see `packages/api-contract/src/contract.ts`); the `/api/...` paths below are historical.
+
 This is the concrete implementation order for moving `webmux` to full lifecycle ownership.
 
 For the current hard-cutover direction, follow `docs/full-lifecycle-cutover-plan.md`.

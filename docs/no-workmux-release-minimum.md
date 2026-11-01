@@ -1,5 +1,7 @@
 # No-`workmux` Release: Minimum Surface
 
+> Routes have since moved: project routes now live under `/api/projects/<prefix>/...` (see `packages/api-contract/src/contract.ts`); the `/api/...` paths below are historical.
+
 This document defines the minimum scope required for a `webmux` release that does **not** require the `workmux` binary to be installed.
 
 Checked against the current codebase on March 5, 2026.

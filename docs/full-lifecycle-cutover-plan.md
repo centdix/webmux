@@ -1,5 +1,7 @@
 # Full Lifecycle Hard-Cutover Plan
 
+> Routes have since moved: project routes now live under `/api/projects/<prefix>/...` (see `packages/api-contract/src/contract.ts`); the `/api/...` paths below are historical.
+
 This document replaces the migration-first next steps in the current refactor notes.
 
 Use this plan if the goal is:

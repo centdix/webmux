@@ -2410,8 +2410,10 @@ function parseAgentIdParam(params: Record<string, string>):
   };
 
   // Light-tier loops run for every known project (PR/CI poll, Linear
-  // auto-create, oneshot watcher, auto-pull). Heavy work (reconciliation,
-  // terminal attach) is on-demand and therefore already active-only.
+  // auto-create, oneshot watcher, auto-pull). Heavy work is on-demand:
+  // reconciliation runs when a project is read (idle projects in the hub's
+  // cross-project listing only on a 30 s staleness window, see
+  // `hubReconcileOptions`) and terminals attach only when a client opens one.
   function startLight(): void {
     // Display sync (PR/CI status shown in the dashboard) is gated on dashboard
     // activity -- fast for the project being viewed, slow for the others,

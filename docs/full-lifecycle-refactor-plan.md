@@ -1,5 +1,7 @@
 # `webmux` Full-Lifecycle Refactor Plan
 
+> Routes have since moved: project routes now live under `/api/projects/<prefix>/...` (see `packages/api-contract/src/contract.ts`); the `/api/...` paths below are historical.
+
 This plan assumes a clean rewrite of the lifecycle layer.
 
 Constraints for this plan:
