@@ -107,7 +107,8 @@ function createDeps(input: {
           })),
       },
       projectRoot: "/repo",
-      processedIssueIds: new Set<string>(),
+      claimedIssueIds: new Set<string>(),
+      failedIssueIds: new Set<string>(),
       fetchIssues: async (options) => {
         fetchOptions.push(options);
         input.onFetch?.(options);
@@ -257,7 +258,8 @@ describe("runLinearAutoCreateOnce", () => {
       },
       git: { listWorktrees: () => [] },
       projectRoot: "/repo",
-      processedIssueIds: new Set<string>(),
+      claimedIssueIds: new Set<string>(),
+      failedIssueIds: new Set<string>(),
       fetchIssues: async () => ({ ok: true, data: [issue] }),
     };
 
@@ -279,7 +281,8 @@ describe("runLinearAutoCreateOnce", () => {
       },
       git: { listWorktrees: () => [] },
       projectRoot: "/repo",
-      processedIssueIds: new Set<string>(),
+      claimedIssueIds: new Set<string>(),
+      failedIssueIds: new Set<string>(),
       fetchIssues: async () => ({ ok: true, data: [issue] }),
       runOneshotForIssue: async () => {
         oneshotCalls += 1;
@@ -413,7 +416,8 @@ describe("runLinearAutoCreateOnce", () => {
       },
       git: { listWorktrees: () => [] },
       projectRoot: "/repo",
-      processedIssueIds: new Set<string>(),
+      claimedIssueIds: new Set<string>(),
+      failedIssueIds: new Set<string>(),
       fetchIssues: async () => ({ ok: true, data: [oneshotIssue] }),
       runOneshotForIssue: async () => { throw new Error("server unreachable"); },
       onOneshotPickedUp: async ({ issue: picked }) => {
@@ -463,24 +467,36 @@ describe("runLinearAutoCreateOnce", () => {
   });
 });
 
-function createProjectDeps(projectRoot: string, created: string[], fetchIssues?: LinearAutoCreateDependencies["fetchIssues"]): LinearAutoCreateDependencies {
+interface ProjectDepsInput {
+  projectRoot: string;
+  created: string[];
+  claimedIssueIds: Set<string>;
+  fetchIssues?: LinearAutoCreateDependencies["fetchIssues"];
+  failCreate?: () => boolean;
+}
+
+function createProjectDeps(input: ProjectDepsInput): LinearAutoCreateDependencies {
   return {
     lifecycleService: {
       async createWorktree(worktreeInput): Promise<{ branch: string; worktreeId: string }> {
-        created.push(`${projectRoot}:${worktreeInput.branch}`);
-        return { branch: worktreeInput.branch ?? "generated-branch", worktreeId: `wt-${created.length}` };
+        if (input.failCreate?.()) throw new Error("Branch already exists");
+        input.created.push(`${input.projectRoot}:${worktreeInput.branch}`);
+        return { branch: worktreeInput.branch ?? "generated-branch", worktreeId: `wt-${input.created.length}` };
       },
     },
     git: { listWorktrees: () => [] },
-    projectRoot,
-    processedIssueIds: new Set<string>(),
-    ...(fetchIssues ? { fetchIssues } : {}),
+    projectRoot: input.projectRoot,
+    claimedIssueIds: input.claimedIssueIds,
+    failedIssueIds: new Set<string>(),
+    ...(input.fetchIssues ? { fetchIssues: input.fetchIssues } : {}),
   };
 }
 
 describe("linear auto-create across projects", () => {
   const originalFetch = globalThis.fetch;
   const originalLinearApiKey = Bun.env.LINEAR_API_KEY;
+  const issue = createIssue();
+  const fetchIssues: LinearAutoCreateDependencies["fetchIssues"] = async () => ({ ok: true, data: [issue] });
 
   afterEach(() => {
     setSystemTime();
@@ -493,19 +509,71 @@ describe("linear auto-create across projects", () => {
     Bun.env.LINEAR_API_KEY = originalLinearApiKey;
   });
 
-  it("scopes processed issues per project so one project does not claim an issue for the others", async () => {
-    const issue = createIssue();
+  it("creates exactly one worktree for an issue that matches two projects", async () => {
     const created: string[] = [];
-    const fetchIssues: LinearAutoCreateDependencies["fetchIssues"] = async () => ({ ok: true, data: [issue] });
-    const projectA = createProjectDeps("/repo-a", created, fetchIssues);
-    const projectB = createProjectDeps("/repo-b", created, fetchIssues);
+    const claimedIssueIds = new Set<string>();
+    const projectA = createProjectDeps({ projectRoot: "/repo-a", created, claimedIssueIds, fetchIssues });
+    const projectB = createProjectDeps({ projectRoot: "/repo-b", created, claimedIssueIds, fetchIssues });
+
+    await Promise.all([runLinearAutoCreateOnce(projectA), runLinearAutoCreateOnce(projectB)]);
+    await runLinearAutoCreateOnce(projectA);
+    await runLinearAutoCreateOnce(projectB);
+
+    expect(created).toEqual([`/repo-a:${issue.branchName}`]);
+  });
+
+  it("lets another project pick up an issue after a failure in the first, without the first retrying", async () => {
+    const created: string[] = [];
+    const claimedIssueIds = new Set<string>();
+    let projectAAttempts = 0;
+    const projectA = createProjectDeps({
+      projectRoot: "/repo-a",
+      created,
+      claimedIssueIds,
+      fetchIssues,
+      failCreate: () => {
+        projectAAttempts += 1;
+        return true;
+      },
+    });
+    const projectB = createProjectDeps({ projectRoot: "/repo-b", created, claimedIssueIds, fetchIssues });
 
     await runLinearAutoCreateOnce(projectA);
     await runLinearAutoCreateOnce(projectB);
     await runLinearAutoCreateOnce(projectA);
+
+    expect(projectAAttempts).toBe(1);
+    expect(created).toEqual([`/repo-b:${issue.branchName}`]);
+  });
+
+  it("clearing one project's failures on enable does not clear another project's state", async () => {
+    const claimedIssueIds = new Set<string>();
+    const attempts: string[] = [];
+    const failingProject = (projectRoot: string): LinearAutoCreateDependencies =>
+      createProjectDeps({
+        projectRoot,
+        created: [],
+        claimedIssueIds,
+        fetchIssues,
+        failCreate: () => {
+          attempts.push(projectRoot);
+          return true;
+        },
+      });
+    const projectA = failingProject("/repo-a");
+    const projectB = failingProject("/repo-b");
+
+    await runLinearAutoCreateOnce(projectA);
+    await runLinearAutoCreateOnce(projectB);
+    expect(attempts).toEqual(["/repo-a", "/repo-b"]);
+
+    // What enabling auto-create in project A does (server.ts apiSetLinearAutoCreate).
+    projectA.failedIssueIds.clear();
+    await runLinearAutoCreateOnce(projectA);
     await runLinearAutoCreateOnce(projectB);
 
-    expect(created).toEqual([`/repo-a:${issue.branchName}`, `/repo-b:${issue.branchName}`]);
+    expect(attempts).toEqual(["/repo-a", "/repo-b", "/repo-a"]);
+    expect(projectB.failedIssueIds.has(issue.id)).toBe(true);
   });
 
   it("issues one Linear request per poll interval for N projects", async () => {
@@ -523,7 +591,10 @@ describe("linear auto-create across projects", () => {
       { preconnect: originalFetch.preconnect },
     );
     const created: string[] = [];
-    const projects = ["/repo-a", "/repo-b", "/repo-c", "/repo-d"].map((root) => createProjectDeps(root, created));
+    const claimedIssueIds = new Set<string>();
+    const projects = ["/repo-a", "/repo-b", "/repo-c", "/repo-d"].map((projectRoot) =>
+      createProjectDeps({ projectRoot, created, claimedIssueIds }),
+    );
 
     setSystemTime(new Date("2026-11-01T10:00:00.000Z"));
     await Promise.all(projects.map((deps) => runLinearAutoCreateOnce(deps)));

@@ -216,7 +216,7 @@ const ASSIGNED_ISSUES_QUERY = `
           updatedAt
           state { name color type }
           team { name key }
-          labels(first: 10) { nodes { name color } }
+          labels { nodes { name color } }
           project { name }
         }
       }

@@ -153,6 +153,9 @@ const PORT = parseInt(Bun.env.PORT || "5111", 10);
 const portRegistrationService = createPortRegistrationService();
 portRegistrationService.restartTtls();
 const STATIC_DIR = Bun.env.WEBMUX_STATIC_DIR || "";
+/** Process-wide: Linear issues claimed by some project's auto-create, so an
+ *  issue matching several projects gets one worktree. */
+const linearClaimedIssueIds = new Set<string>();
 /** Strict check: is `dir` itself inside a git work tree? Unlike
  *  git.resolveRepoRoot it never scans child directories, so a non-repo path is
  *  rejected rather than silently resolving to an unrelated nested repo. */
@@ -247,7 +250,7 @@ const mutatingTabBranches = new Set<string>();
 const lifecycleService = runtime.lifecycleService;
 let linearAutoCreateEnabled = config.integrations.linear.autoCreateWorktrees;
 let stopLinearAutoCreate: (() => void) | null = null;
-const linearProcessedIssueIds = new Set<string>();
+const linearFailedIssueIds = new Set<string>();
 let autoRemoveOnMergeEnabled = config.integrations.github.autoRemoveOnMerge;
 let stopPrMonitor: (() => void) | null = null;
 let stopAutoRemoveMonitor: (() => void) | null = null;
@@ -300,7 +303,8 @@ function startLinearAutoCreate(): void {
       lifecycleService,
       git,
       projectRoot: PROJECT_DIR,
-      processedIssueIds: linearProcessedIssueIds,
+      claimedIssueIds: linearClaimedIssueIds,
+      failedIssueIds: linearFailedIssueIds,
       runOneshotForIssue,
       onOneshotPickedUp: postLinearOneshotPickupComment,
       ...(watchTeamKeys && watchTeamKeys.length > 0 ? { watchTeamKeys } : {}),
@@ -1606,7 +1610,7 @@ async function apiSetLinearAutoCreate(req: Request): Promise<Response> {
 
   linearAutoCreateEnabled = body.enabled;
   if (linearAutoCreateEnabled) {
-    linearProcessedIssueIds.clear();
+    linearFailedIssueIds.clear();
     startLinearAutoCreate();
     log.info("[config] Linear auto-create worktrees enabled");
   } else {
