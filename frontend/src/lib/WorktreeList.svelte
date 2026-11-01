@@ -15,7 +15,7 @@
     keysWithAgentStatus,
     type OverflowStatusBarStatus,
   } from "./worktree-list";
-  import { actionablePr, attentionLabel, attentionOf, type Attention } from "./worktree-status";
+  import { attentionLabel, attentionOf, rowPr, type Attention } from "./worktree-status";
   import { worktreeKey } from "./worktree-ref";
 
   type RowPosition = "above" | "visible" | "below";
@@ -336,7 +336,7 @@
   {@const isBusy = removing.has(key) || isInitializing}
   {@const attention = isInitializing ? "creating" : attentionOf(wt, notified)}
   {@const dim = attention === "closed" || attention === "creating" || wt.archived}
-  {@const pr = actionablePr(wt)}
+  {@const pr = rowPr(wt)}
   <li
     data-worktree-key={key}
     class="group relative rounded-md {isActive ? 'bg-active shadow-[inset_2px_0_0_var(--color-accent)]' : 'hover:bg-hover'} {isBusy

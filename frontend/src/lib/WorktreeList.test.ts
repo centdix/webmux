@@ -328,18 +328,20 @@ describe("WorktreeList", () => {
     expect(attentions).toEqual(["waiting", "unread", "closed", "creating"]);
   });
 
-  it("marks a PR only when it asks for action or can be cleaned up", () => {
+  it("marks every PR with its state only", () => {
     renderList({
       rows: rowsOf([
         { ...createWorktree("feature/failing"), prs: [createPr({ ciStatus: "failed" })] },
         { ...createWorktree("feature/draft"), prs: [createPr({ isDraft: true })] },
         { ...createWorktree("feature/merged"), prs: [createPr({ state: "merged" })] },
+        createWorktree("feature/none"),
       ]),
     });
 
-    expect(row("feature/failing").querySelector("[data-pr-signal]")).toHaveAttribute("data-pr-signal", "ci-failed");
-    expect(row("feature/draft").querySelector("[data-pr-signal]")).toBeNull();
-    expect(row("feature/merged").querySelector("[data-pr-signal]")).toHaveAttribute("data-pr-signal", "merged");
+    expect(row("feature/failing").querySelector("[data-pr-state]")).toHaveAttribute("data-pr-state", "open");
+    expect(row("feature/draft").querySelector("[data-pr-state]")).toHaveAttribute("data-pr-state", "draft");
+    expect(row("feature/merged").querySelector("[data-pr-state]")).toHaveAttribute("data-pr-state", "merged");
+    expect(row("feature/none").querySelector("[data-pr-state]")).toBeNull();
   });
 
   it("nests sub-worktrees under their parent", () => {

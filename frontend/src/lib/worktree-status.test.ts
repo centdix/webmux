@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PrEntry, WorktreeInfo } from "./types";
-import { actionablePr, attentionLabel, attentionOf, prSignalLabel, prSignalOf } from "./worktree-status";
+import { attentionLabel, attentionOf, prStateLabel, prStateOf, rowPr } from "./worktree-status";
 
 function createWorktree(overrides: Partial<WorktreeInfo> = {}): WorktreeInfo {
   return {
@@ -69,25 +69,26 @@ describe("attentionOf", () => {
   });
 });
 
-describe("PR signals", () => {
-  it("ranks what a PR asks of you", () => {
-    expect(prSignalOf(createPr({ state: "merged" }))).toBe("merged");
-    expect(prSignalOf(createPr({ state: "closed" }))).toBe("closed");
-    expect(prSignalOf(createPr({ ciStatus: "failed", isDraft: true }))).toBe("ci-failed");
-    expect(prSignalOf(createPr({ comments: [{ type: "comment", author: "a", body: "b", createdAt: "" }] }))).toBe("comments");
-    expect(prSignalOf(createPr({ isDraft: true }))).toBe("draft");
-    expect(prSignalOf(createPr({ ciStatus: "pending" }))).toBe("ci-pending");
-    expect(prSignalOf(createPr())).toBe("ready");
-    expect(prSignalLabel(createPr({ ciStatus: "failed" }))).toBe("#7 · CI failed");
+describe("PR state", () => {
+  it("reduces a PR to its state", () => {
+    expect(prStateOf(createPr())).toBe("open");
+    expect(prStateOf(createPr({ isDraft: true, ciStatus: "failed" }))).toBe("draft");
+    expect(prStateOf(createPr({ state: "merged" }))).toBe("merged");
+    expect(prStateOf(createPr({ state: "closed", isDraft: true }))).toBe("closed");
   });
 
-  it("marks only the PRs that ask for action or can be cleaned up, preferring the open one", () => {
-    expect(actionablePr(createWorktree())).toBeNull();
-    expect(actionablePr(createWorktree({ prs: [createPr({ isDraft: true })] }))).toBeNull();
-    expect(actionablePr(createWorktree({ prs: [createPr({ ciStatus: "pending" })] }))).toBeNull();
+  it("labels the PR with its number, linked repo and state", () => {
+    expect(prStateLabel(createPr({ ciStatus: "failed" }))).toBe("#7 · Open");
+    expect(prStateLabel(createPr({ repo: "shared", state: "merged" }))).toBe("#7 (shared) · Merged");
+  });
+
+  it("shows every row's PR, preferring the open one", () => {
+    expect(rowPr(createWorktree())).toBeNull();
+    const draft = createPr({ isDraft: true });
+    expect(rowPr(createWorktree({ prs: [draft] }))).toBe(draft);
     const merged = createPr({ number: 1, state: "merged" });
-    const failing = createPr({ number: 2, ciStatus: "failed" });
-    expect(actionablePr(createWorktree({ prs: [merged] }))).toBe(merged);
-    expect(actionablePr(createWorktree({ prs: [merged, failing] }))).toBe(failing);
+    const open = createPr({ number: 2 });
+    expect(rowPr(createWorktree({ prs: [merged] }))).toBe(merged);
+    expect(rowPr(createWorktree({ prs: [merged, open] }))).toBe(open);
   });
 });
