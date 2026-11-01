@@ -1196,10 +1196,11 @@ describe("App create selection", () => {
     expect(dismissNotification).toHaveBeenCalledWith(expect.objectContaining({ project: "images", id: 42 }));
   });
 
-  it("shows a success toast when pulling main succeeds", async () => {
+  it("shows a success toast when pulling a linked repo succeeds", async () => {
     vi.mocked(api.fetchConfig).mockResolvedValue(createConfig({
       projectDir: "/repo",
       mainBranch: "main",
+      linkedRepos: [{ alias: "shared", dir: "/repos/shared" }],
     }));
     vi.mocked(fetchWorktrees).mockResolvedValue([]);
     vi.mocked(api.pullMain).mockResolvedValueOnce({ status: "updated" });
@@ -1208,11 +1209,11 @@ describe("App create selection", () => {
 
     await screen.findByText("Select a worktree");
     await fireEvent.click(await screen.findByRole("button", { name: `Actions for ${PROJECT}` }));
-    await fireEvent.click(screen.getByRole("button", { name: "Pull main" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Pull shared" }));
     await fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Pull" }));
 
-    expect(api.pullMain).toHaveBeenCalledWith({ body: {} });
-    expect(await screen.findByRole("alert")).toHaveTextContent('Pulled latest "main" from remote');
+    expect(api.pullMain).toHaveBeenCalledWith({ body: { repo: "shared" } });
+    expect(await screen.findByRole("alert")).toHaveTextContent('Pulled latest "shared" from remote');
   });
 
   describe("project actions", () => {
@@ -1236,18 +1237,13 @@ describe("App create selection", () => {
       vi.mocked(api.createWorktree).mockResolvedValue({ primaryBranch: "feature/new", branches: ["feature/new"] });
     });
 
-    it("creates a worktree in the chosen project from the header's + button and its menu", async () => {
+    it("creates a worktree in the chosen project from the header's + button", async () => {
       useImagesProject();
       renderApp();
       await chooseProject("images");
 
       await fireEvent.click(await screen.findByRole("button", { name: "New worktree in images" }));
       await submitCreate("feature/plus");
-      expect(projectOfLastCall(api.createWorktree)).toBe("images");
-
-      await openProjectMenu("images");
-      await fireEvent.click(screen.getByRole("button", { name: "New worktree" }));
-      await submitCreate("feature/menu");
       expect(projectOfLastCall(api.createWorktree)).toBe("images");
     });
 
@@ -1289,13 +1285,7 @@ describe("App create selection", () => {
       await openProjectMenu("images");
       expect(await screen.findByRole("link", { name: "Open in Cursor" })).toHaveAttribute("href", "cursor://file/repos/images");
       expect(screen.getByRole("link", { name: "Open shared in Cursor" })).toHaveAttribute("href", "cursor://file/repos/shared");
-      await fireEvent.click(screen.getByRole("button", { name: "Pull trunk" }));
-      await fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Pull" }));
-
-      await waitFor(() => expect(api.pullMain).toHaveBeenCalledWith({ body: {} }));
-      expect(projectOfLastCall(api.pullMain)).toBe("images");
-
-      await openProjectMenu("images");
+      expect(screen.queryByRole("button", { name: "Pull trunk" })).not.toBeInTheDocument();
       await fireEvent.click(screen.getByRole("button", { name: "Pull shared" }));
       await fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Pull" }));
 

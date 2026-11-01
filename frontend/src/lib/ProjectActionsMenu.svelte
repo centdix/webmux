@@ -48,8 +48,7 @@
         class="absolute top-7 right-1 z-20 min-w-40 rounded-md border border-edge bg-surface shadow-lg p-1 font-normal"
         data-popup-menu
       >
-        <MenuItem onclick={() => run(oncreate)}>New worktree</MenuItem>
-        {#each repos as repo (repo.repo)}
+        {#each repos.filter((repo) => repo.repo !== null) as repo (repo.repo)}
           <MenuItem onclick={() => run(() => onpull(repo))}>Pull {repo.label}</MenuItem>
         {/each}
         {#each repos as repo (repo.repo)}

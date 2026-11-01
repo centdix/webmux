@@ -58,9 +58,7 @@ describe("ProjectActionsMenu", () => {
     expect(props.onpull).toHaveBeenCalledWith(linkedRepo);
     expect(screen.queryByRole("button", { name: "Pull main" })).not.toBeInTheDocument();
 
-    await openMenu();
-    await fireEvent.click(screen.getByRole("button", { name: "New worktree" }));
-    expect(props.oncreate).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "New worktree" })).not.toBeInTheDocument();
 
     await openMenu();
     await fireEvent.click(screen.getByRole("button", { name: "Remove project" }));
