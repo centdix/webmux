@@ -4,6 +4,7 @@ import { buildAgentsUiWorktreeSummary } from "../services/agents-ui-service";
 describe("buildAgentsUiWorktreeSummary", () => {
   it("maps worktree snapshots into conversation-aware summary data", () => {
     const summary = buildAgentsUiWorktreeSummary({
+      id: "wt_search",
       branch: "feature/search",
       label: "Search ranking",
       baseBranch: "main",
@@ -95,6 +96,7 @@ describe("buildAgentsUiWorktreeSummary", () => {
 
   it("defaults missing conversation metadata to null", () => {
     const summary = buildAgentsUiWorktreeSummary({
+      id: "wt_idle",
       branch: "feature/idle",
       label: null,
       path: "/repo/__worktrees/feature-idle",

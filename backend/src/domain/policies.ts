@@ -72,18 +72,22 @@ export function deriveProjectPrefix(projectDir: string, takenPrefixes: Iterable<
  *  that render a list (snapshot for the UI, `wt list` for the CLI). */
 export interface WorktreeOrderFields {
   branch: string;
-  /** Has a live session, or is still being created (it is about to have one). */
+  /** Still being created: listed first so it does not move when it gets its name. */
+  creating: boolean;
+  /** Has a live session. */
   open: boolean;
   prStates: readonly PrEntry["state"][];
 }
 
-/** Open worktrees first, then closed ones ranked by how much attention their PR
- *  still needs: an open PR, then a closed/merged one, then no PR at all. */
+/** Worktrees being created first, then open ones, then closed ones ranked by how
+ *  much attention their PR still needs: an open PR, then a closed/merged one, then
+ *  no PR at all. */
 function worktreeOrderRank(worktree: WorktreeOrderFields): number {
-  if (worktree.open) return 0;
-  if (worktree.prStates.includes("open")) return 1;
-  if (worktree.prStates.length > 0) return 2;
-  return 3;
+  if (worktree.creating) return 0;
+  if (worktree.open) return 1;
+  if (worktree.prStates.includes("open")) return 2;
+  if (worktree.prStates.length > 0) return 3;
+  return 4;
 }
 
 export function compareWorktreeOrder(left: WorktreeOrderFields, right: WorktreeOrderFields): number {

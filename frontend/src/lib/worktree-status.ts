@@ -1,4 +1,4 @@
-import type { PrEntry, WorktreeInfo } from "./types";
+import type { PrEntry, WorktreeCreationPhase, WorktreeInfo } from "./types";
 import { worktreeCreationPhaseLabel } from "./utils";
 import { overflowStatusOf } from "./worktree-list";
 
@@ -15,13 +15,18 @@ export function attentionOf(worktree: WorktreeInfo, notified: ReadonlySet<string
   return "idle";
 }
 
+/** A row's name while it is being created: its current phase. */
+export function creatingLabel(phase: WorktreeCreationPhase | null): string {
+  return `${worktreeCreationPhaseLabel(phase)}…`;
+}
+
 export function attentionLabel(attention: Attention, worktree: WorktreeInfo): string {
   switch (attention) {
     case "waiting": return "Waiting for input";
     case "error": return "Agent error";
     case "unread": return "Finished, unread";
     case "working": return "Working";
-    case "creating": return `${worktreeCreationPhaseLabel(worktree.creationPhase)}…`;
+    case "creating": return creatingLabel(worktree.creationPhase);
     case "closed": return "Closed";
     case "idle": return "Idle";
   }

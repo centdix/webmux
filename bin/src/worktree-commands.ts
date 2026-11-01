@@ -19,6 +19,7 @@ import { loadCustomAgentsStore } from "../../backend/src/services/custom-agents-
 import type { CreateLifecycleWorktreeInput, CreateLifecycleWorktreesInput, CreateLifecycleWorktreesResult, CreateWorktreeProgress, PruneWorktreesResult } from "../../backend/src/services/lifecycle-service";
 
 const PHASE_LABELS: Record<WorktreeCreationPhase, string> = {
+  naming_branch: "Naming branch",
   creating_worktree: "Creating worktree",
   running_post_create_hook: "Running post-create hook",
   preparing_runtime: "Preparing runtime",
@@ -977,8 +978,8 @@ export function formatWorktreeList(rows: ListedWorktreeRow[], options: ParsedLis
     .filter((row) => matchesListSearch(row, query))
     .sort((a, b) =>
       compareWorktreeOrder(
-        { branch: a.branch, open: a.isOpen, prStates: a.prStates },
-        { branch: b.branch, open: b.isOpen, prStates: b.prStates },
+        { branch: a.branch, creating: false, open: a.isOpen, prStates: a.prStates },
+        { branch: b.branch, creating: false, open: b.isOpen, prStates: b.prStates },
       )
     );
   const visibleRows = matchingRows.filter((row) => {
@@ -1152,10 +1153,6 @@ export async function runWorktreeCommand(
             ? `${seed.data.conversationMarkdown}\n\n---\n\n${parsed.input.prompt}`
             : seed.data.conversationMarkdown;
         }
-      }
-
-      if (!parsed.input.branch && parsed.input.prompt && runtime.config.autoName) {
-        stdout("Generating branch name...");
       }
 
       const result = await runtime.lifecycleService.createWorktrees(parsed.input);

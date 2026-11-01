@@ -72,6 +72,7 @@ function mapAgentStatus(status: string): string {
 function mapWorktree(snapshot: ProjectWorktreeSnapshot, project: string): WorktreeInfo {
   return {
     project,
+    id: snapshot.id,
     branch: snapshot.branch,
     label: snapshot.label,
     ...(snapshot.baseBranch ? { baseBranch: snapshot.baseBranch } : {}),
@@ -134,6 +135,7 @@ export async function fetchAllProjectWorktrees(focus?: string): Promise<ProjectW
     prefix: project.prefix,
     name: project.name,
     worktrees: project.worktrees.map((worktree) => mapWorktree(worktree, project.prefix)),
+    pendingCreations: project.pendingCreations.map((pending) => ({ ...pending, project: project.prefix })),
     error: project.error,
   }));
 }

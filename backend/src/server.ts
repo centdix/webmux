@@ -222,7 +222,7 @@ interface ProjectApp {
   prefix: string;
   routes: ProjectRoutes;
   wsHandlers: WsHandlers;
-  readWorktrees(reconcileOptions?: ReconcileOptions): Promise<WorktreeSnapshot[]>;
+  readWorktrees(reconcileOptions?: ReconcileOptions): Promise<Pick<ProjectSnapshot, "worktrees" | "pendingCreations">>;
   startLight(): void;
   stopLight(): void;
 }
@@ -545,7 +545,7 @@ function ensureBranchNotRemoving(branch: string): void {
 }
 
 function ensureBranchNotCreating(branch: string): void {
-  if (worktreeCreationTracker.has(branch)) {
+  if (worktreeCreationTracker.hasBranch(branch)) {
     throw new LifecycleError(`Worktree is being created: ${branch}`, 409);
   }
 }
@@ -713,6 +713,7 @@ async function readProjectSnapshot(reconcileOptions: ReconcileOptions = {}): Pro
     mainBranch: config.workspace.mainBranch,
     runtime: projectRuntime,
     creatingWorktrees: worktreeCreationTracker.list(),
+    pendingCreations: worktreeCreationTracker.listPending(),
     notifications: runtimeNotifications.list(),
     isArchived: (path) => archivedPaths.has(normalizeArchivePath(path)),
     findLinearIssue: (branch) => {
@@ -739,7 +740,7 @@ async function apiGetProject(): Promise<Response> {
 }
 
 async function apiGetWorktrees(): Promise<Response> {
-  return jsonResponse({ worktrees: await readWorktrees() });
+  return jsonResponse({ worktrees: (await readWorktrees()).worktrees });
 }
 
 function findSnapshotWorktree(snapshot: ProjectSnapshot, branch: string): WorktreeSnapshot | null {
@@ -1388,7 +1389,7 @@ async function apiCreateWorktree(req: Request): Promise<Response> {
   }
 
   if (resolvedBranch) {
-    const targetBranches = buildCreateWorktreeTargets(resolvedBranch, selectedAgents).map((target) => target.branch);
+    const targetBranches = buildCreateWorktreeTargets(resolvedBranch, selectedAgents.map((agent) => ({ agent }))).map((target) => target.branch);
     for (const targetBranch of targetBranches) {
       ensureBranchNotBusy(targetBranch);
     }
@@ -2364,8 +2365,11 @@ function parseNotificationIdParam(params: Record<string, string>):
     stopSessionSnapshot = null;
   }
 
-  async function readWorktrees(reconcileOptions: ReconcileOptions = {}): Promise<WorktreeSnapshot[]> {
-    return (await readProjectSnapshot(reconcileOptions)).worktrees;
+  async function readWorktrees(
+    reconcileOptions: ReconcileOptions = {},
+  ): Promise<Pick<ProjectSnapshot, "worktrees" | "pendingCreations">> {
+    const snapshot = await readProjectSnapshot(reconcileOptions);
+    return { worktrees: snapshot.worktrees, pendingCreations: snapshot.pendingCreations };
   }
 
   return { prefix: instancePrefix, routes, wsHandlers, readWorktrees, startLight, stopLight };

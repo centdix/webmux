@@ -21,7 +21,7 @@ import { type DockerGateway } from "../adapters/docker";
 import { buildProjectSessionName, buildWorktreeParkingWindowName, buildWorktreeWindowName, type TmuxGateway } from "../adapters/tmux";
 import { captureNewSessionId, type SessionDiscoveryGateway } from "../adapters/session-discovery";
 import type { AgentId, AgentKind, ProfileConfig, ProjectConfig, RuntimeKind } from "../domain/config";
-import { ROOT_TAB_ID, type ControlEnvMap, type OneshotMeta, type WorktreeCreationPhase, type WorktreeMeta, type WorktreeSource, type WorktreeTab } from "../domain/model";
+import { ROOT_TAB_ID, type ControlEnvMap, type OneshotMeta, type WorktreeMeta, type WorktreeSource, type WorktreeTab } from "../domain/model";
 import {
   activeTabId as readActiveTabId,
   appendTab,
@@ -50,6 +50,7 @@ import { makeUnmanagedWorktreeId, type ReconciliationService } from "./reconcili
 import { buildTmuxPaneSystemPrompt, ensureSessionLayout, isWorktreeOpen, planSessionLayout } from "./session-service";
 import { buildPortRegistrationSystemPrompt } from "./port-prompt";
 import { ArchiveStateService } from "./archive-state-service";
+import type { ResolvedWorktreeCreationProgress, WorktreeCreationProgress } from "./worktree-creation-service";
 import {
   createManagedWorktree,
   initializeManagedWorktree,
@@ -105,18 +106,17 @@ export function prefixAgentBranch(agent: AgentId, branch: string): string {
   return `${agent}-${branch}`;
 }
 
-export function buildCreateWorktreeTargets(
+export function buildCreateWorktreeTargets<T extends { agent: AgentId }>(
   branch: string,
-  agentIds: AgentId[],
-): CreateWorktreeTarget[] {
-  if (agentIds.length <= 1) {
-    const agent = agentIds[0];
-    return agent ? [{ branch, agent }] : [];
+  entries: T[],
+): Array<T & CreateWorktreeTarget> {
+  if (entries.length <= 1) {
+    return entries.map((entry) => ({ ...entry, branch }));
   }
 
-  return agentIds.map((agent) => ({
-    branch: prefixAgentBranch(agent, branch),
-    agent,
+  return entries.map((entry) => ({
+    ...entry,
+    branch: prefixAgentBranch(entry.agent, branch),
   }));
 }
 
@@ -126,15 +126,7 @@ interface ResolvedLifecycleWorktree {
   meta: WorktreeMeta | null;
 }
 
-export interface CreateWorktreeProgress {
-  branch: string;
-  baseBranch?: string;
-  path: string;
-  profile: string;
-  agent: AgentId;
-  phase: WorktreeCreationPhase;
-  source: WorktreeSource;
-}
+export type CreateWorktreeProgress = WorktreeCreationProgress;
 
 export interface LifecycleServiceDependencies {
   projectRoot: string;
@@ -156,7 +148,7 @@ export interface LifecycleServiceDependencies {
   hooks: LifecycleHookRunner;
   autoName: AutoNameGenerator;
   onCreateProgress?: (progress: CreateWorktreeProgress) => void | Promise<void>;
-  onCreateFinished?: (branch: string) => void | Promise<void>;
+  onCreateFinished?: (worktreeId: string) => void | Promise<void>;
 }
 
 export interface CreateLifecycleWorktreeInput {
@@ -185,6 +177,7 @@ interface ResolvedCreateLifecycleWorktreeInput extends Omit<CreateLifecycleWorkt
   mode: CreateWorktreeMode;
   branch: string;
   agent: AgentId;
+  worktreeId: string;
 }
 
 export interface PruneWorktreesResult {
@@ -219,32 +212,51 @@ export class LifecycleService {
       throw new LifecycleError("Creating multiple agents is only supported for new worktrees", 400);
     }
 
-    const branch = await this.resolveBranch(input.branch, input.prompt, mode);
-    const targets = buildCreateWorktreeTargets(branch, agentIds);
-    const createdBranches: string[] = [];
-
+    const pendingTargets = agentIds.map((agent) => ({ agent, worktreeId: randomUUID() }));
+    const reported = new Set<string>();
     try {
-      for (const target of targets) {
-        const created = await this.createResolvedWorktree({
-          ...input,
-          mode,
-          branch: target.branch,
-          agent: target.agent,
-        });
-        createdBranches.push(created.branch);
-      }
-    } catch (error) {
-      const rollbackError = await this.rollbackCreatedWorktrees(createdBranches);
-      if (rollbackError) {
-        throw this.wrapOperationError(new Error(`${toErrorMessage(error)}; ${rollbackError}`));
-      }
-      throw this.wrapOperationError(error);
-    }
+      const branch = await this.resolveBranch(
+        input.branch,
+        input.prompt,
+        mode,
+        () => this.reportNamingBranch(reported, pendingTargets, input),
+      );
+      const targets = buildCreateWorktreeTargets(branch, pendingTargets).map((target) => ({
+        ...input,
+        mode,
+        branch: target.branch,
+        agent: target.agent,
+        worktreeId: target.worktreeId,
+      }));
+      const createdBranches: string[] = [];
 
-    return {
-      primaryBranch: createdBranches[0],
-      branches: createdBranches,
-    };
+      try {
+        // Every target shows as a creating row with its branch as soon as the
+        // branch is known, not only once the sequential loop reaches it.
+        for (const target of targets) {
+          reported.add(target.worktreeId);
+          await this.reportCreateProgress({ ...this.createProgressBase(target), phase: "creating_worktree" });
+        }
+        for (const target of targets) {
+          const created = await this.createResolvedWorktree(target);
+          reported.delete(target.worktreeId);
+          createdBranches.push(created.branch);
+        }
+      } catch (error) {
+        const rollbackError = await this.rollbackCreatedWorktrees(createdBranches);
+        if (rollbackError) {
+          throw this.wrapOperationError(new Error(`${toErrorMessage(error)}; ${rollbackError}`));
+        }
+        throw this.wrapOperationError(error);
+      }
+
+      return {
+        primaryBranch: createdBranches[0],
+        branches: createdBranches,
+      };
+    } finally {
+      await this.finishReported(reported);
+    }
   }
 
   async createWorktree(input: CreateLifecycleWorktreeInput): Promise<{
@@ -252,14 +264,28 @@ export class LifecycleService {
     worktreeId: string;
   }> {
     const mode = input.mode ?? "new";
-    const branch = await this.resolveBranch(input.branch, input.prompt, mode);
+    const worktreeId = randomUUID();
     const agent = this.resolveAgentDefinition(input.agent);
-    return await this.createResolvedWorktree({
-      ...input,
-      mode,
-      branch,
-      agent: agent.id,
-    });
+    const reported = new Set<string>();
+    try {
+      const branch = await this.resolveBranch(
+        input.branch,
+        input.prompt,
+        mode,
+        () => this.reportNamingBranch(reported, [{ worktreeId, agent: agent.id }], input),
+      );
+      const created = await this.createResolvedWorktree({
+        ...input,
+        mode,
+        branch,
+        agent: agent.id,
+        worktreeId,
+      });
+      reported.delete(worktreeId);
+      return created;
+    } finally {
+      await this.finishReported(reported);
+    }
   }
 
   async openWorktree(
@@ -824,11 +850,12 @@ export class LifecycleService {
     rawBranch: string | undefined,
     prompt: string | undefined,
     mode: CreateWorktreeMode,
+    onNaming: () => Promise<void>,
   ): Promise<string> {
     const explicitBranch = rawBranch?.trim();
     const branch = mode === "existing"
       ? explicitBranch
-      : explicitBranch || await this.generateAutoName(prompt) || generateFallbackBranchName();
+      : explicitBranch || await this.generateAutoName(prompt, onNaming) || generateFallbackBranchName();
     if (!branch) {
       throw new LifecycleError("Existing branch is required", 400);
     }
@@ -838,10 +865,11 @@ export class LifecycleService {
     return branch;
   }
 
-  private async generateAutoName(prompt: string | undefined): Promise<string | null> {
+  private async generateAutoName(prompt: string | undefined, onNaming: () => Promise<void>): Promise<string | null> {
     if (!this.deps.config.autoName || !prompt?.trim()) {
       return null;
     }
+    await onNaming();
     return await this.deps.autoName.generateBranchName(this.deps.config.autoName, prompt);
   }
 
@@ -1349,8 +1377,49 @@ export class LifecycleService {
     await this.deps.onCreateProgress?.(progress);
   }
 
-  private async finishCreateProgress(branch: string): Promise<void> {
-    await this.deps.onCreateFinished?.(branch);
+  private async finishCreateProgress(worktreeId: string): Promise<void> {
+    await this.deps.onCreateFinished?.(worktreeId);
+  }
+
+  /** Reports `naming_branch` for each target while auto-naming runs, adding
+   *  its id to `reported` first so the caller's `finishReported` clears it
+   *  on any failure before `createResolvedWorktree` has taken the id over. */
+  private async reportNamingBranch(
+    reported: Set<string>,
+    targets: Array<{ worktreeId: string; agent: AgentId }>,
+    input: CreateLifecycleWorktreeInput,
+  ): Promise<void> {
+    for (const target of targets) {
+      reported.add(target.worktreeId);
+      await this.reportCreateProgress({
+        worktreeId: target.worktreeId,
+        profile: input.profile ?? getDefaultProfileName(this.deps.config),
+        agent: target.agent,
+        phase: "naming_branch",
+        source: input.source ?? "ui",
+      });
+    }
+  }
+
+  private async finishReported(reported: Set<string>): Promise<void> {
+    for (const worktreeId of reported) {
+      await this.finishCreateProgress(worktreeId);
+    }
+  }
+
+  private createProgressBase(input: ResolvedCreateLifecycleWorktreeInput): Omit<ResolvedWorktreeCreationProgress, "phase"> {
+    const baseBranch = input.mode === "new"
+      ? (input.baseBranch?.trim() || this.deps.config.workspace.mainBranch)
+      : undefined;
+    return {
+      worktreeId: input.worktreeId,
+      branch: input.branch,
+      ...(baseBranch ? { baseBranch } : {}),
+      path: this.resolveWorktreePath(input.branch),
+      profile: input.profile ?? getDefaultProfileName(this.deps.config),
+      agent: input.agent,
+      source: input.source ?? "ui",
+    };
   }
 
   private async rollbackCreatedWorktrees(branches: string[]): Promise<string | null> {
@@ -1382,20 +1451,11 @@ export class LifecycleService {
       throw new LifecycleError("Base branch must differ from branch name", 400);
     }
 
-    const baseBranch = input.mode === "new" ? (requestedBaseBranch || this.deps.config.workspace.mainBranch) : undefined;
     const branchAvailability = this.resolveBranchAvailability(input.branch, input.mode);
     const { profileName, profile } = this.resolveProfile(input.profile);
     const agent = this.resolveAgentDefinition(input.agent);
-    const worktreePath = this.resolveWorktreePath(input.branch);
-    const source: WorktreeSource = input.source ?? "ui";
-    const createProgressBase = {
-      branch: input.branch,
-      ...(baseBranch ? { baseBranch } : {}),
-      path: worktreePath,
-      profile: profileName,
-      agent: input.agent,
-      source,
-    } satisfies Omit<CreateWorktreeProgress, "phase">;
+    const createProgressBase = this.createProgressBase(input);
+    const { baseBranch, path: worktreePath, source } = createProgressBase;
     const deleteBranchOnRollback = input.mode === "new" || branchAvailability.deleteBranchOnRollback;
     let initialized: InitializeManagedWorktreeResult | null = null;
 
@@ -1423,6 +1483,7 @@ export class LifecycleService {
           ...(await this.controlEnvFields()),
           deleteBranchOnRollback,
           source,
+          worktreeId: input.worktreeId,
           ...(input.oneshot ? { oneshot: input.oneshot } : {}),
         },
         {
@@ -1494,7 +1555,7 @@ export class LifecycleService {
       }
       throw this.wrapOperationError(error);
     } finally {
-      await this.finishCreateProgress(input.branch);
+      await this.finishCreateProgress(input.worktreeId);
     }
   }
 

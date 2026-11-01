@@ -96,6 +96,7 @@ describe("project-scoped network calls", () => {
 
 function snapshot(branch: string): ProjectWorktreeSnapshot {
   return {
+    id: `wt-${branch}`,
     branch,
     label: null,
     path: `/repo/${branch}`,
@@ -248,21 +249,40 @@ describe("notifications", () => {
     expect(dismissed).toEqual([{ project: "other", id: 4 }]);
   });
 
-  it("fetchAllProjectWorktrees tags each worktree with its project", async () => {
+  it("fetchAllProjectWorktrees tags each worktree with its project and keeps its id", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
       projects: [
-        { prefix: "alpha", name: "Alpha", worktrees: [snapshot("main")], error: null },
-        { prefix: "beta", name: "Beta", worktrees: [], error: "boom" },
+        { prefix: "alpha", name: "Alpha", worktrees: [snapshot("main")], pendingCreations: [], error: null },
+        { prefix: "beta", name: "Beta", worktrees: [], pendingCreations: [], error: "boom" },
       ],
     })));
     const api = await loadApi();
 
     const projects = await api.fetchAllProjectWorktrees();
 
-    expect(projects.map((p) => [p.prefix, p.error, p.worktrees.map((w) => `${w.project}/${w.branch}`)])).toEqual([
-      ["alpha", null, ["alpha/main"]],
+    expect(projects.map((p) => [p.prefix, p.error, p.worktrees.map((w) => `${w.project}/${w.branch}#${w.id}`)])).toEqual([
+      ["alpha", null, ["alpha/main#wt-main"]],
       ["beta", "boom", []],
     ]);
+  });
+
+  it("fetchAllProjectWorktrees tags each creation still naming its branch with its project", async () => {
+    const pending = {
+      id: "wt-naming",
+      profile: "default",
+      agentName: "claude",
+      agentLabel: "Claude",
+      phase: "naming_branch",
+      source: "ui",
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
+      projects: [{ prefix: "alpha", name: "Alpha", worktrees: [], pendingCreations: [pending], error: null }],
+    })));
+    const api = await loadApi();
+
+    const projects = await api.fetchAllProjectWorktrees();
+
+    expect(projects[0]?.pendingCreations).toEqual([{ ...pending, project: "alpha" }]);
   });
 
   it("fetchAllProjectWorktrees reports the focused project only when given", async () => {

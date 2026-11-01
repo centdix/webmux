@@ -1,6 +1,6 @@
 import { SvelteSet } from "svelte/reactivity";
 import { fetchAllProjectWorktrees } from "./api";
-import type { ProjectWorktreeList, WorktreeInfo, WorktreeRef } from "./types";
+import type { PendingCreationInfo, ProjectWorktreeList, WorktreeInfo, WorktreeRef } from "./types";
 import { worktreeKey } from "./worktree-ref";
 
 export const DEFAULT_POLL_INTERVAL_MS = 5000;
@@ -8,8 +8,8 @@ export const ACTIVE_CREATE_POLL_INTERVAL_MS = 1000;
 const IDLE_TIMEOUT_MS = 60_000;
 
 /** Merge a poll into the previous lists: a project whose fetch failed keeps its
- *  last known worktrees (alongside the error), so a transient failure neither
- *  empties its list nor drops its selection. */
+ *  last known worktrees and pending creations (alongside the error), so a
+ *  transient failure neither empties its list nor drops its selection. */
 export function mergeProjectWorktrees(
   previous: ProjectWorktreeList[],
   next: ProjectWorktreeList[],
@@ -18,7 +18,11 @@ export function mergeProjectWorktrees(
   return next.map((project) =>
     project.error === null
       ? project
-      : { ...project, worktrees: previousByPrefix.get(project.prefix)?.worktrees ?? [] }
+      : {
+          ...project,
+          worktrees: previousByPrefix.get(project.prefix)?.worktrees ?? [],
+          pendingCreations: previousByPrefix.get(project.prefix)?.pendingCreations ?? [],
+        }
   );
 }
 
@@ -53,7 +57,9 @@ export class WorktreesStore {
   readonly archiving = new WorktreeFlags();
   readonly postingLinear = new WorktreeFlags();
   readonly refreshingAgentTerminal = new WorktreeFlags();
-  readonly hasCreating = $derived(this.projects.some((project) => project.worktrees.some((w) => w.creating)));
+  readonly hasCreating = $derived(
+    this.projects.some((project) => project.pendingCreations.length > 0 || project.worktrees.some((w) => w.creating)),
+  );
 
   readonly #onRefreshed: () => void;
   readonly #focus: () => string | undefined;
@@ -81,6 +87,10 @@ export class WorktreesStore {
 
   worktreesOf(project: string): WorktreeInfo[] {
     return this.projects.find((entry) => entry.prefix === project)?.worktrees ?? [];
+  }
+
+  pendingCreationsOf(project: string): PendingCreationInfo[] {
+    return this.projects.find((entry) => entry.prefix === project)?.pendingCreations ?? [];
   }
 
   errorOf(project: string): string | null {

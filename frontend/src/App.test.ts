@@ -4,6 +4,7 @@ import type {
   AgentsUiWorktreeConversationResponse,
   AppConfig,
   AppNotification,
+  PendingCreationInfo,
   LinearIssue,
   LinearIssuesResponse,
   ProjectWorktreeList,
@@ -102,8 +103,9 @@ vi.mock("@xterm/addon-web-links", () => ({
 
 // The dashboard polls every project at once; most tests only need one, so
 // `fetchWorktrees` stands in for that project's slice of the hub listing.
-const { fetchWorktrees, otherProjects } = vi.hoisted(() => ({
+const { fetchWorktrees, fetchPendingCreations, otherProjects } = vi.hoisted(() => ({
   fetchWorktrees: vi.fn<() => Promise<WorktreeInfo[]>>(),
+  fetchPendingCreations: vi.fn<() => Promise<PendingCreationInfo[]>>(async () => []),
   otherProjects: { list: [] as ProjectWorktreeList[] },
 }));
 
@@ -130,7 +132,13 @@ vi.mock("./lib/api", () => {
     dismissNotification: vi.fn(),
     fetchWorktreeConversationHistory: vi.fn(),
     fetchAllProjectWorktrees: vi.fn(async (): Promise<ProjectWorktreeList[]> => [
-      { prefix: "webmux", name: "webmux", worktrees: await fetchWorktrees(), error: null },
+      {
+        prefix: "webmux",
+        name: "webmux",
+        worktrees: await fetchWorktrees(),
+        pendingCreations: await fetchPendingCreations(),
+        error: null,
+      },
       ...otherProjects.list,
     ]),
     interruptWorktreeConversation: vi.fn(),
@@ -287,6 +295,7 @@ function createWorktree(
 ): WorktreeInfo {
   return {
     project: PROJECT,
+    id: `wt-${branch}`,
     branch,
     label: null,
     archived: false,
@@ -594,6 +603,7 @@ describe("App create selection", () => {
       prefix: "images",
       name: "images",
       worktrees: [createWorktree("feature/img", { project: "images" })],
+      pendingCreations: [],
       error: null,
     }];
     vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("main")]);
@@ -628,6 +638,7 @@ describe("App create selection", () => {
       prefix: "images",
       name: "images",
       worktrees: [createWorktree("feature/img", { project: "images" })],
+      pendingCreations: [],
       error: null,
     }];
     vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("feature/web")]);
@@ -673,6 +684,7 @@ describe("App create selection", () => {
       prefix: "images",
       name: "images",
       worktrees: [createWorktree("main", { project: "images" }), createWorktree("feature/img", { project: "images" })],
+      pendingCreations: [],
       error: null,
     }];
     vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("main"), createWorktree("feature/img")]);
@@ -716,6 +728,7 @@ describe("App create selection", () => {
       prefix: "images",
       name: "images",
       worktrees: [createWorktree("feature/img", { project: "images" })],
+      pendingCreations: [],
       error: null,
     }];
 
@@ -732,7 +745,7 @@ describe("App create selection", () => {
 
   it("shows a project's fetch error in the sidebar and retries from it", async () => {
     vi.mocked(fetchAllProjectWorktrees).mockResolvedValueOnce([
-      { prefix: PROJECT, name: PROJECT, worktrees: [], error: "git exploded" },
+      { prefix: PROJECT, name: PROJECT, worktrees: [], pendingCreations: [], error: "git exploded" },
     ]);
 
     renderApp();
@@ -752,7 +765,7 @@ describe("App create selection", () => {
   it("keeps the saved selection when the project's first poll fails", async () => {
     localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "feature/saved");
     vi.mocked(fetchAllProjectWorktrees).mockResolvedValueOnce([
-      { prefix: PROJECT, name: PROJECT, worktrees: [], error: "git exploded" },
+      { prefix: PROJECT, name: PROJECT, worktrees: [], pendingCreations: [], error: "git exploded" },
     ]);
     const selection = new WorktreeSelection(PROJECT);
 
@@ -769,6 +782,7 @@ describe("App create selection", () => {
       prefix: "images",
       name: "images",
       worktrees: [createWorktree("feature/img", { project: "images" })],
+      pendingCreations: [],
       error: null,
     }];
     vi.mocked(fetchProjects).mockResolvedValue([
@@ -804,6 +818,7 @@ describe("App create selection", () => {
       prefix: "images",
       name: "images",
       worktrees: [createWorktree("feature/img", { project: "images" })],
+      pendingCreations: [],
       error: null,
     }];
     const creatingWorktree = createWorktree("feature/new", { creating: true, creationPhase: "creating_worktree" });
@@ -837,9 +852,10 @@ describe("App create selection", () => {
         prefix: "images",
         name: "images",
         worktrees: [createWorktree("main", { project: "images" }), createWorktree("feature/img", { project: "images" })],
+        pendingCreations: [],
         error: null,
       },
-      { prefix: "docs", name: "docs", worktrees: [createWorktree("feature/doc", { project: "docs" })], error: null },
+      { prefix: "docs", name: "docs", worktrees: [createWorktree("feature/doc", { project: "docs" })], pendingCreations: [], error: null },
     ];
     vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("main"), createWorktree("feature/web")]);
   }
@@ -908,6 +924,31 @@ describe("App create selection", () => {
     expect(screen.getByText("No worktrees yet.")).toBeInTheDocument();
     expect(screen.getByText("No worktrees in docs yet")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "New worktree" })).toHaveLength(2);
+  });
+
+  it("shows no empty state for a project whose only worktree is still naming its branch", async () => {
+    useThreeProjects();
+    otherProjects.list[1] = {
+      ...otherProjects.list[1]!,
+      worktrees: [],
+      pendingCreations: [{
+        project: "docs",
+        id: "wt-new",
+        profile: "default",
+        agentName: "claude",
+        agentLabel: "Claude",
+        phase: "naming_branch",
+        source: "ui",
+      }],
+    };
+
+    renderApp();
+    await screen.findByTitle("main");
+    await chooseProject("docs");
+
+    await waitFor(() => expect(window.location.hash).toBe("#docs"));
+    expect(screen.getByRole("button", { name: "Naming branch…" })).toBeInTheDocument();
+    expect(screen.queryByText("No worktrees in docs yet")).not.toBeInTheDocument();
   });
 
   it("badges rail projects with what needs you and running agents", async () => {
@@ -1157,6 +1198,50 @@ describe("App create selection", () => {
     expect(screen.getByTitle("feature/new")).toBeInTheDocument();
   });
 
+  it("shows a row while the branch is named and selects the worktree it becomes, never the pending row", async () => {
+    const pending: PendingCreationInfo = {
+      project: "webmux",
+      id: "wt-new",
+      profile: "default",
+      agentName: "claude",
+      agentLabel: "Claude",
+      phase: "naming_branch",
+      source: "ui",
+    };
+    const creatingWorktree = createWorktree("fix-login", { id: "wt-new", creating: true, creationPhase: "creating_worktree" });
+    const newWorktree = createWorktree("fix-login", { id: "wt-new" });
+    const createResult = deferred<{ primaryBranch: string; branches: string[] }>();
+
+    vi.mocked(fetchWorktrees)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([creatingWorktree])
+      .mockResolvedValue([newWorktree]);
+    vi.mocked(fetchPendingCreations)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([pending]);
+    vi.mocked(api.createWorktree).mockReturnValueOnce(createResult.promise);
+
+    renderApp();
+
+    await screen.findByText("Select a worktree");
+    await fireEvent.click(screen.getByTitle("New worktree (Cmd+K)"));
+    await screen.findByText("New Worktree");
+    await fireEvent.input(screen.getByLabelText(/Prompt/i), { target: { value: "Fix the login flow" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    const pendingRow = await screen.findByRole("button", { name: "Naming branch…" });
+    expect(pendingRow).toBeDisabled();
+    expect(screen.getByText("Select a worktree")).toBeInTheDocument();
+
+    // The next 1s create poll reports the named worktree under the same id.
+    await waitFor(() => expect(window.location.hash).toBe("#webmux/fix-login"), { timeout: 3000 });
+    expect(screen.getByRole("button", { name: "Creating worktree…" })).toBe(pendingRow);
+
+    createResult.resolve({ primaryBranch: "fix-login", branches: ["fix-login"] });
+    await waitFor(() => expect(screen.getByRole("button", { name: /^fix-login\b/ })).toBe(pendingRow));
+  });
+
   it("shows an error toast when worktree creation fails", async () => {
     vi.mocked(fetchWorktrees).mockResolvedValue([]);
     vi.mocked(api.createWorktree).mockRejectedValueOnce(new Error("branch exists"));
@@ -1217,7 +1302,7 @@ describe("App create selection", () => {
 
   describe("project actions", () => {
     function useImagesProject(worktrees: WorktreeInfo[] = [createWorktree("feature/img", { project: "images" })]): void {
-      otherProjects.list = [{ prefix: "images", name: "images", worktrees, error: null }];
+      otherProjects.list = [{ prefix: "images", name: "images", worktrees, pendingCreations: [], error: null }];
     }
 
     async function openProjectMenu(name: string): Promise<void> {

@@ -31,6 +31,7 @@ import {
   type LifecycleServiceDependencies,
 } from "../services/lifecycle-service";
 import { PortRegistrationService } from "../services/port-registration-service";
+import { WorktreeCreationTracker } from "../services/worktree-creation-service";
 import type { PortRegistration } from "../domain/port-registrations";
 
 function run(args: string[], cwd: string): string {
@@ -200,16 +201,25 @@ class FakeHookRunner implements LifecycleHookRunner {
   }
 }
 
+/** The branch a progress event is about; naming events have none yet. */
+function progressBranch(progress: CreateWorktreeProgress): string {
+  return progress.phase === "naming_branch" ? "(naming)" : progress.branch;
+}
+
 class FakeAutoNameService implements AutoNameGenerator {
   readonly calls: Array<{ config: AutoNameConfig; task: string }> = [];
 
-  constructor(private readonly branch = "generated-branch") {}
+  constructor(
+    private readonly branch = "generated-branch",
+    private readonly onGenerate?: () => void,
+  ) {}
 
   async generateBranchName(config: AutoNameConfig, task: string): Promise<string> {
     this.calls.push({
       config: { ...config },
       task,
     });
+    this.onGenerate?.();
     return this.branch;
   }
 }
@@ -312,6 +322,24 @@ const SWITCHABLE_PROFILE_CONFIG: ProjectConfig = {
   },
 };
 
+const AUTO_NAME_CONFIG: ProjectConfig = {
+  ...TEST_CONFIG,
+  autoName: { provider: "claude", systemPrompt: "Generate a branch name" },
+};
+
+/** Lifecycle callbacks feeding a real tracker, as the runtime wires them. */
+function trackerCallbacks(tracker: WorktreeCreationTracker): {
+  onProgress: (progress: CreateWorktreeProgress) => void;
+  onFinished: (worktreeId: string) => void;
+} {
+  return {
+    onProgress: (progress) => tracker.set(progress),
+    onFinished: (worktreeId) => {
+      tracker.clear(worktreeId);
+    },
+  };
+}
+
 function makeLifecycleService(
   repoRoot: string,
   tmux: FakeTmuxGateway,
@@ -323,7 +351,7 @@ function makeLifecycleService(
   autoName: AutoNameGenerator = new FakeAutoNameService(),
   createCallbacks: {
     onProgress?: (progress: CreateWorktreeProgress) => void | Promise<void>;
-    onFinished?: (branch: string) => void | Promise<void>;
+    onFinished?: (worktreeId: string) => void | Promise<void>;
   } = {},
   sessionDiscovery: SessionDiscoveryGateway = { listSessionIds: async () => [] },
   // `null` explicitly configures no control reporting (passing `undefined` would
@@ -383,10 +411,10 @@ describe("LifecycleService", () => {
   }
 
   it("builds original and agent-prefixed targets from selected agents", () => {
-    expect(buildCreateWorktreeTargets("feature/search", ["claude"])).toEqual([
+    expect(buildCreateWorktreeTargets("feature/search", [{ agent: "claude" }])).toEqual([
       { branch: "feature/search", agent: "claude" },
     ]);
-    expect(buildCreateWorktreeTargets("feature/search", ["claude", "codex", "gemini"])).toEqual([
+    expect(buildCreateWorktreeTargets("feature/search", [{ agent: "claude" }, { agent: "codex" }, { agent: "gemini" }])).toEqual([
       { branch: "claude-feature/search", agent: "claude" },
       { branch: "codex-feature/search", agent: "codex" },
       { branch: "gemini-feature/search", agent: "gemini" },
@@ -528,7 +556,26 @@ describe("LifecycleService", () => {
     const repoRoot = await initRepo();
     const runtime = new ProjectRuntime();
     const tmux = new FakeTmuxGateway();
-    const lifecycle = makeLifecycleService(repoRoot, tmux, runtime);
+    const reportedIds = new Set<string>();
+    const finishedIds = new Set<string>();
+    const lifecycle = makeLifecycleService(
+      repoRoot,
+      tmux,
+      runtime,
+      new FakeDockerGateway(),
+      new FakeHookRunner(),
+      TEST_CONFIG,
+      new BunGitGateway(),
+      new FakeAutoNameService(),
+      {
+        onProgress: (progress) => {
+          reportedIds.add(progress.worktreeId);
+        },
+        onFinished: (worktreeId) => {
+          finishedIds.add(worktreeId);
+        },
+      },
+    );
     const git = new BunGitGateway();
 
     run(["git", "branch", "codex-feature/search", "main"], repoRoot);
@@ -545,6 +592,8 @@ describe("LifecycleService", () => {
       buildProjectSessionName(repoRoot),
       buildWorktreeWindowName("claude-feature/search"),
     )).toBe(false);
+    expect(reportedIds.size).toBeGreaterThan(0);
+    expect(finishedIds).toEqual(reportedIds);
   });
 
   it("rejects invalid multi-agent selections", async () => {
@@ -1815,7 +1864,7 @@ describe("LifecycleService", () => {
     const runtime = new ProjectRuntime();
     const tmux = new FakeTmuxGateway();
     const phases: string[] = [];
-    const activeBranches = new Set<string>();
+    const activeIds = new Set<string>();
     const lifecycle = makeLifecycleService(
       repoRoot,
       tmux,
@@ -1827,12 +1876,12 @@ describe("LifecycleService", () => {
       new FakeAutoNameService(),
       {
         onProgress: (progress) => {
-          activeBranches.add(progress.branch);
-          phases.push(`${progress.branch}:${progress.phase}`);
+          activeIds.add(progress.worktreeId);
+          phases.push(`${progressBranch(progress)}:${progress.phase}`);
         },
-        onFinished: (branch) => {
-          activeBranches.delete(branch);
-          phases.push(`${branch}:finished`);
+        onFinished: (worktreeId) => {
+          activeIds.delete(worktreeId);
+          phases.push("finished");
         },
       },
     );
@@ -1845,16 +1894,17 @@ describe("LifecycleService", () => {
       "feature/progress:preparing_runtime",
       "feature/progress:starting_session",
       "feature/progress:reconciling",
-      "feature/progress:finished",
+      "finished",
     ]);
-    expect(activeBranches.has("feature/progress")).toBe(false);
+    expect(activeIds.size).toBe(0);
   });
 
   it("clears creation progress when the first phase callback fails", async () => {
     const repoRoot = await initRepo();
     const runtime = new ProjectRuntime();
     const tmux = new FakeTmuxGateway();
-    const finishedBranches: string[] = [];
+    const reportedIds: string[] = [];
+    const finishedIds: string[] = [];
     const lifecycle = makeLifecycleService(
       repoRoot,
       tmux,
@@ -1866,12 +1916,13 @@ describe("LifecycleService", () => {
       new FakeAutoNameService(),
       {
         onProgress: (progress) => {
+          reportedIds.push(progress.worktreeId);
           if (progress.phase === "creating_worktree") {
             throw new Error("progress failed");
           }
         },
-        onFinished: (branch) => {
-          finishedBranches.push(branch);
+        onFinished: (worktreeId) => {
+          finishedIds.push(worktreeId);
         },
       },
     );
@@ -1879,7 +1930,7 @@ describe("LifecycleService", () => {
     await expect(
       lifecycle.createWorktree({ branch: "feature/progress-failure" }),
     ).rejects.toThrow("progress failed");
-    expect(finishedBranches).toEqual(["feature/progress-failure"]);
+    expect(finishedIds).toEqual(reportedIds);
   });
 
   it("uses auto_name to generate the branch when the prompt is present and no branch was provided", async () => {
@@ -1960,6 +2011,259 @@ describe("LifecycleService", () => {
         task: "Fix the login flow for OAuth redirects",
       },
     ]);
+  });
+
+  it("reports naming_branch before auto-naming, under the id the worktree's meta ends up with", async () => {
+    const repoRoot = await initRepo();
+    const runtime = new ProjectRuntime();
+    const tmux = new FakeTmuxGateway();
+    const events: string[] = [];
+    const reportedIds = new Set<string>();
+    const finishedIds: string[] = [];
+    const lifecycle = makeLifecycleService(
+      repoRoot,
+      tmux,
+      runtime,
+      new FakeDockerGateway(),
+      new FakeHookRunner(),
+      AUTO_NAME_CONFIG,
+      new BunGitGateway(),
+      new FakeAutoNameService("fix-login-flow", () => events.push("auto-name")),
+      {
+        onProgress: (progress) => {
+          reportedIds.add(progress.worktreeId);
+          events.push(`${progressBranch(progress)}:${progress.phase}`);
+        },
+        onFinished: (worktreeId) => {
+          finishedIds.push(worktreeId);
+        },
+      },
+    );
+
+    const created = await lifecycle.createWorktree({ prompt: "Fix the login flow" });
+
+    const meta = await readWorktreeMeta(
+      new BunGitGateway().resolveWorktreeGitDir(join(repoRoot, "__worktrees", "fix-login-flow")),
+    );
+    expect(events.slice(0, 3)).toEqual([
+      "(naming):naming_branch",
+      "auto-name",
+      "fix-login-flow:creating_worktree",
+    ]);
+    expect([...reportedIds]).toEqual([created.worktreeId]);
+    expect(finishedIds).toEqual([created.worktreeId]);
+    expect(meta?.worktreeId).toBe(created.worktreeId);
+    expect(runtime.getWorktreeByBranch("fix-login-flow")?.worktreeId).toBe(created.worktreeId);
+  });
+
+  it("reports naming_branch for every agent while their shared branch is named", async () => {
+    const repoRoot = await initRepo();
+    const tracker = new WorktreeCreationTracker();
+    let pendingWhileNaming: string[] = [];
+    const lifecycle = makeLifecycleService(
+      repoRoot,
+      new FakeTmuxGateway(),
+      new ProjectRuntime(),
+      new FakeDockerGateway(),
+      new FakeHookRunner(),
+      AUTO_NAME_CONFIG,
+      new BunGitGateway(),
+      new FakeAutoNameService("fix-login-flow", () => {
+        pendingWhileNaming = tracker.listPending().map((pending) => `${pending.agentName}:${pending.profile}`);
+      }),
+      trackerCallbacks(tracker),
+    );
+
+    await lifecycle.createWorktrees({ prompt: "Fix the login flow", agents: ["claude", "codex"] });
+
+    expect(pendingWhileNaming).toEqual(["claude:default", "codex:default"]);
+    expect(tracker.listPending()).toEqual([]);
+    expect(tracker.list()).toEqual([]);
+  });
+
+  it("moves every agent from naming to a creating row with its branch once the branch is named", async () => {
+    const repoRoot = await initRepo();
+    const tracker = new WorktreeCreationTracker();
+    const pendingWhileFirstCreates: string[][] = [];
+    const creatingWhileFirstCreates: string[][] = [];
+    const lifecycle = makeLifecycleService(
+      repoRoot,
+      new FakeTmuxGateway(),
+      new ProjectRuntime(),
+      new FakeDockerGateway(),
+      new FakeHookRunner(),
+      AUTO_NAME_CONFIG,
+      new BunGitGateway(),
+      new FakeAutoNameService("fix-login-flow"),
+      {
+        onProgress: (progress) => {
+          tracker.set(progress);
+          if (progress.agent === "claude" && progress.phase === "starting_session") {
+            pendingWhileFirstCreates.push(tracker.listPending().map((pending) => pending.agentName));
+            creatingWhileFirstCreates.push(tracker.list().map((creating) => `${creating.agentName}:${creating.branch}`));
+          }
+        },
+        onFinished: (worktreeId) => {
+          tracker.clear(worktreeId);
+        },
+      },
+    );
+
+    await lifecycle.createWorktrees({ prompt: "Fix the login flow", agents: ["claude", "codex"] });
+
+    expect(pendingWhileFirstCreates).toEqual([[]]);
+    expect(creatingWhileFirstCreates).toEqual([["claude:claude-fix-login-flow", "codex:codex-fix-login-flow"]]);
+    expect(tracker.list()).toEqual([]);
+  });
+
+  it("does not report naming_branch when the branch is given", async () => {
+    const repoRoot = await initRepo();
+    const phases: string[] = [];
+    const lifecycle = makeLifecycleService(
+      repoRoot,
+      new FakeTmuxGateway(),
+      new ProjectRuntime(),
+      new FakeDockerGateway(),
+      new FakeHookRunner(),
+      AUTO_NAME_CONFIG,
+      new BunGitGateway(),
+      new FakeAutoNameService(),
+      { onProgress: (progress) => { phases.push(progress.phase); } },
+    );
+
+    await lifecycle.createWorktree({ branch: "feature/given", prompt: "Fix the login flow" });
+
+    expect(phases).not.toContain("naming_branch");
+  });
+
+  it("clears the naming entries when auto-naming fails", async () => {
+    const repoRoot = await initRepo();
+    const tracker = new WorktreeCreationTracker();
+    const finishedIds: string[] = [];
+    const reportedIds: string[] = [];
+    const lifecycle = makeLifecycleService(
+      repoRoot,
+      new FakeTmuxGateway(),
+      new ProjectRuntime(),
+      new FakeDockerGateway(),
+      new FakeHookRunner(),
+      AUTO_NAME_CONFIG,
+      new BunGitGateway(),
+      {
+        generateBranchName: async () => {
+          throw new Error("auto-name exploded");
+        },
+      },
+      {
+        onProgress: (progress) => {
+          reportedIds.push(progress.worktreeId);
+          tracker.set(progress);
+        },
+        onFinished: (worktreeId) => {
+          finishedIds.push(worktreeId);
+          tracker.clear(worktreeId);
+        },
+      },
+    );
+
+    await expect(
+      lifecycle.createWorktrees({ prompt: "Fix the login flow", agents: ["claude", "codex"] }),
+    ).rejects.toThrow("auto-name exploded");
+    expect(reportedIds).toHaveLength(2);
+    expect(finishedIds).toEqual(reportedIds);
+    expect(tracker.listPending()).toEqual([]);
+  });
+
+  it.each([
+    ["the named branch already exists", "existing", "Branch already exists: existing"],
+    ["the name is not a valid branch", "bad..name", "Invalid branch name: bad..name"],
+  ])("clears the naming entry when %s", async (_case, generated, message) => {
+    const repoRoot = await initRepo();
+    run(["git", "branch", "existing"], repoRoot);
+    const tracker = new WorktreeCreationTracker();
+    const lifecycle = makeLifecycleService(
+      repoRoot,
+      new FakeTmuxGateway(),
+      new ProjectRuntime(),
+      new FakeDockerGateway(),
+      new FakeHookRunner(),
+      AUTO_NAME_CONFIG,
+      new BunGitGateway(),
+      new FakeAutoNameService(generated),
+      trackerCallbacks(tracker),
+    );
+
+    await expect(lifecycle.createWorktree({ prompt: "Fix the login flow" })).rejects.toThrow(message);
+    expect(tracker.listPending()).toEqual([]);
+    expect(tracker.list()).toEqual([]);
+  });
+
+  it.each([
+    ["the first agent's worktree fails before the next one starts", "claude-fix-login-flow"],
+    ["a later agent's worktree fails and the earlier one rolls back", "codex-fix-login-flow"],
+  ])("clears every naming entry when %s", async (_case, takenBranch) => {
+    const repoRoot = await initRepo();
+    run(["git", "branch", takenBranch], repoRoot);
+    const tracker = new WorktreeCreationTracker();
+    const lifecycle = makeLifecycleService(
+      repoRoot,
+      new FakeTmuxGateway(),
+      new ProjectRuntime(),
+      new FakeDockerGateway(),
+      new FakeHookRunner(),
+      AUTO_NAME_CONFIG,
+      new BunGitGateway(),
+      new FakeAutoNameService("fix-login-flow"),
+      trackerCallbacks(tracker),
+    );
+
+    await expect(
+      lifecycle.createWorktrees({ prompt: "Fix the login flow", agents: ["claude", "codex"] }),
+    ).rejects.toThrow(`Branch already exists: ${takenBranch}`);
+    expect(tracker.listPending()).toEqual([]);
+    expect(tracker.list()).toEqual([]);
+    expect(run(["git", "worktree", "list"], repoRoot)).not.toContain("fix-login-flow");
+  });
+
+  it("creates each agent's worktree under its own id, reported from the first phase", async () => {
+    const repoRoot = await initRepo();
+    const runtime = new ProjectRuntime();
+    const tmux = new FakeTmuxGateway();
+    const idsByBranch = new Map<string, Set<string>>();
+    const finishedIds: string[] = [];
+    const lifecycle = makeLifecycleService(
+      repoRoot,
+      tmux,
+      runtime,
+      new FakeDockerGateway(),
+      new FakeHookRunner(),
+      TEST_CONFIG,
+      new BunGitGateway(),
+      new FakeAutoNameService(),
+      {
+        onProgress: (progress) => {
+          const ids = idsByBranch.get(progressBranch(progress)) ?? new Set<string>();
+          ids.add(progress.worktreeId);
+          idsByBranch.set(progressBranch(progress), ids);
+        },
+        onFinished: (worktreeId) => {
+          finishedIds.push(worktreeId);
+        },
+      },
+    );
+
+    await lifecycle.createWorktrees({ branch: "feature/search", agents: ["claude", "codex"] });
+
+    const git = new BunGitGateway();
+    const claudeMeta = await readWorktreeMeta(git.resolveWorktreeGitDir(join(repoRoot, "__worktrees", "claude-feature", "search")));
+    const codexMeta = await readWorktreeMeta(git.resolveWorktreeGitDir(join(repoRoot, "__worktrees", "codex-feature", "search")));
+    const claudeId = claudeMeta?.worktreeId ?? "";
+    const codexId = codexMeta?.worktreeId ?? "";
+
+    expect(claudeId).not.toBe(codexId);
+    expect(idsByBranch.get("claude-feature/search")).toEqual(new Set([claudeId]));
+    expect(idsByBranch.get("codex-feature/search")).toEqual(new Set([codexId]));
+    expect(finishedIds).toEqual([claudeId, codexId]);
   });
 
   it("force removes a dirty worktree", async () => {

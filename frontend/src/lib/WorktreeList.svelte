@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import { MediaQuery } from "svelte/reactivity";
-  import type { ProjectListRows, WorktreeInfo, WorktreeListRow, WorktreeRef } from "./types";
+  import type { ActiveListRow, PendingCreationInfo, PrEntry, ProjectListRows, WorktreeInfo, WorktreeRef } from "./types";
   import AgentStatusCount from "./AgentStatusCount.svelte";
   import Btn from "./Btn.svelte";
   import ContextMenu from "./ContextMenu.svelte";
@@ -14,9 +14,11 @@
     OVERFLOW_STATUS_LABELS,
     countAgentStatusesIn,
     keysWithAgentStatus,
+    listRowKey,
+    worktreeRowsOf,
     type OverflowStatusBarStatus,
   } from "./worktree-list";
-  import { attentionLabel, attentionOf, rowPr, type Attention } from "./worktree-status";
+  import { attentionLabel, attentionOf, creatingLabel, rowPr, type Attention } from "./worktree-status";
   import { worktreeKey } from "./worktree-ref";
 
   type RowPosition = "above" | "visible" | "below";
@@ -87,8 +89,8 @@
   let menuOnEveryRow = $derived(isMobile || touchDevice.current);
 
   let selectedKey = $derived(selected ? worktreeKey(selected) : null);
-  /** Rows on screen, top to bottom. */
-  let shownRows = $derived([...rows.active, ...(showArchived ? rows.archived : [])]);
+  /** Worktree rows on screen, top to bottom (creations still naming their branch left out). */
+  let shownRows = $derived([...worktreeRowsOf(rows.active), ...(showArchived ? rows.archived : [])]);
 
   let menu = $state<{ key: string; x: number; y: number; trigger: HTMLElement } | null>(null);
   let menuWorktree = $derived(menu ? shownRows.find((row) => worktreeKey(row.worktree) === menu?.key)?.worktree : undefined);
@@ -219,13 +221,63 @@
     target?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
+  /** The title's "agent · profile" line, null when both are empty. */
+  function agentProfileLine(row: Pick<WorktreeInfo, "agentLabel" | "agentName" | "profile">): string | null {
+    return [row.agentLabel ?? row.agentName, row.profile].filter(Boolean).join(" · ") || null;
+  }
+
   function rowTitle(wt: WorktreeInfo, attention: Attention, opening: boolean): string {
     return [
       wt.label || wt.creating ? wt.branch : null,
-      [wt.agentLabel ?? wt.agentName, wt.profile].filter(Boolean).join(" · ") || null,
+      agentProfileLine(wt),
       wt.source === "oneshot" ? "Autonomous run — auto-closes when done" : null,
       opening ? "Opening…" : attentionLabel(attention, wt),
     ].filter((line) => line !== null).join("\n");
+  }
+
+  function pendingRowTitle(pending: PendingCreationInfo): string {
+    return [agentProfileLine(pending), creatingLabel(pending.phase)].filter((line) => line !== null).join("\n");
+  }
+
+  /** What a row shows; `target` is null for a creation still naming its branch. */
+  interface RowView {
+    target: { wt: WorktreeInfo; key: string } | null;
+    isBusy: boolean;
+    attention: Attention;
+    dim: boolean;
+    pr: PrEntry | null;
+    name: string;
+    title: string;
+  }
+
+  function rowView(row: ActiveListRow): RowView {
+    switch (row.kind) {
+      case "pending":
+        return {
+          target: null,
+          isBusy: false,
+          attention: "creating",
+          dim: true,
+          pr: null,
+          name: creatingLabel(row.pending.phase),
+          title: pendingRowTitle(row.pending),
+        };
+      case "worktree": {
+        const wt = row.worktree;
+        const key = worktreeKey(wt);
+        const isInitializing = initializing.has(key);
+        const attention = isInitializing ? "creating" : attentionOf(wt, notified);
+        return {
+          target: { wt, key },
+          isBusy: removing.has(key) || isInitializing,
+          attention,
+          dim: attention === "closed" || attention === "creating" || wt.archived,
+          pr: rowPr(wt),
+          name: wt.creating ? attentionLabel(attention, wt) : (wt.label ?? wt.branch),
+          title: rowTitle(wt, attention, isInitializing),
+        };
+      }
+    }
   }
 </script>
 
@@ -251,7 +303,7 @@
       </div>
     {/if}
     <ul class="list-none" aria-label="Worktrees">
-      {#each rows.active as row (worktreeKey(row.worktree))}
+      {#each rows.active as row (listRowKey(row))}
         {@render worktreeRow(row)}
       {/each}
     </ul>
@@ -278,7 +330,7 @@
       </button>
       {#if showArchived}
         <ul class="list-none" aria-label="Archived worktrees">
-          {#each rows.archived as row (worktreeKey(row.worktree))}
+          {#each rows.archived as row (listRowKey(row))}
             {@render worktreeRow(row)}
           {/each}
         </ul>
@@ -334,48 +386,48 @@
   </ContextMenu>
 {/if}
 
-{#snippet worktreeRow({ worktree: wt, depth }: WorktreeListRow)}
-  {@const key = worktreeKey(wt)}
-  {@const isActive = key === selectedKey}
-  {@const isInitializing = initializing.has(key)}
-  {@const isBusy = removing.has(key) || isInitializing}
-  {@const attention = isInitializing ? "creating" : attentionOf(wt, notified)}
-  {@const dim = attention === "closed" || attention === "creating" || wt.archived}
-  {@const pr = rowPr(wt)}
+<!-- A creation still naming its branch renders through the same markup, as a
+     disabled row, so it keeps its elements once its worktree exists. -->
+{#snippet worktreeRow(row: ActiveListRow)}
+  {@const { target, isBusy, attention, dim, pr, name, title } = rowView(row)}
+  {@const isActive = target !== null && target.key === selectedKey}
   <li
-    data-worktree-key={key}
-    class="group relative rounded-md {isActive ? 'bg-active shadow-[inset_2px_0_0_var(--color-accent)]' : 'hover:bg-hover'} {isBusy
+    data-worktree-key={target?.key}
+    class="group relative rounded-md {isActive ? 'bg-active shadow-[inset_2px_0_0_var(--color-accent)]' : target ? 'hover:bg-hover' : ''} {isBusy
       ? 'pointer-events-none opacity-40'
       : ''}"
   >
     <div class="flex min-h-7 items-center">
       <button
         type="button"
-        disabled={isBusy}
-        class="flex min-h-7 min-w-0 flex-1 cursor-pointer items-center gap-1.5 pr-1 text-left text-[13px] text-primary"
-        style="padding-left:{6 + depth * 14}px"
-        title={rowTitle(wt, attention, isInitializing)}
+        disabled={isBusy || !target}
+        class="flex min-h-7 min-w-0 flex-1 cursor-pointer items-center gap-1.5 pr-1 text-left text-[13px] text-primary disabled:cursor-default"
+        style="padding-left:{6 + row.depth * 14}px"
+        {title}
         aria-current={isActive ? "true" : undefined}
         onclick={() => {
+          if (!target) return;
           menu = null;
-          onselect({ project: wt.project, branch: wt.branch });
+          onselect({ project: target.wt.project, branch: target.wt.branch });
         }}
-        oncontextmenu={(event) => openMenu(event, key)}
+        oncontextmenu={(event: MouseEvent) => {
+          if (target) openMenu(event, target.key);
+        }}
       >
         <WorktreeStatusGlyph {attention} />
-        <span class="min-w-0 flex-1 truncate {dim ? 'text-muted' : ''} {attention === 'creating' ? 'italic' : ''}">{wt.creating ? attentionLabel(attention, wt) : (wt.label ?? wt.branch)}</span>
-        {#if favorites.has(key)}<span class="shrink-0 text-[10px] text-warning/80" aria-hidden="true">★</span>{/if}
+        <span class="min-w-0 flex-1 truncate {dim ? 'text-muted' : ''} {attention === 'creating' ? 'italic' : ''}">{name}</span>
+        {#if target && favorites.has(target.key)}<span class="shrink-0 text-[10px] text-warning/80" aria-hidden="true">★</span>{/if}
         {#if pr}<PrMark {pr} />{/if}
       </button>
-      {#if isActive || menuOnEveryRow}
+      {#if target && (isActive || menuOnEveryRow)}
         <IconBtn
           icon="more"
-          label="Actions for {wt.branch}"
+          label="Actions for {target.wt.branch}"
           title="Worktree actions"
           class="mr-0.5"
           disabled={isBusy}
-          aria-expanded={menu?.key === key}
-          onclick={(event) => openMenu(event, key)}
+          aria-expanded={menu?.key === target.key}
+          onclick={(event) => openMenu(event, target.key)}
         />
       {/if}
     </div>

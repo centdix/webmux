@@ -1,4 +1,11 @@
-import type { CreatingWorktreeState, PrEntry, ProjectSnapshot, WorktreeSnapshot } from "../domain/model";
+import type {
+  CreatingWorktreeState,
+  PendingCreationSnapshot,
+  PendingWorktreeCreationState,
+  PrEntry,
+  ProjectSnapshot,
+  WorktreeSnapshot,
+} from "../domain/model";
 import { compareWorktreeOrder, type WorktreeOrderFields } from "../domain/policies";
 import type { RuntimeNotification } from "./notification-service";
 import { ProjectRuntime } from "./project-runtime";
@@ -46,6 +53,7 @@ function mapWorktreeSnapshot(
   findAgentLabel?: (agentId: string | null) => string | null,
 ): WorktreeSnapshot {
   return {
+    id: creating?.worktreeId ?? state.worktreeId,
     branch: state.branch,
     label: state.label,
     ...(state.baseBranch ? { baseBranch: state.baseBranch } : {}),
@@ -80,6 +88,7 @@ function mapCreatingWorktreeSnapshot(
   findAgentLabel?: (agentId: string | null) => string | null,
 ): WorktreeSnapshot {
   return {
+    id: creating.worktreeId,
     branch: creating.branch,
     label: null,
     ...(creating.baseBranch ? { baseBranch: creating.baseBranch } : {}),
@@ -110,7 +119,8 @@ function mapCreatingWorktreeSnapshot(
 function orderFieldsOf(worktree: WorktreeSnapshot): WorktreeOrderFields {
   return {
     branch: worktree.branch,
-    open: worktree.mux || worktree.creation !== null,
+    creating: worktree.creation !== null,
+    open: worktree.mux,
     prStates: worktree.prs.map((pr) => pr.state),
   };
 }
@@ -128,22 +138,33 @@ export function buildWorktreeSnapshots(input: BuildWorktreeSnapshotsInput): Work
   const now = input.now ?? (() => new Date());
   const isArchived = input.isArchived ?? (() => false);
   const creatingWorktrees = input.creatingWorktrees ?? [];
-  const creatingByBranch = new Map(creatingWorktrees.map((worktree) => [worktree.branch, worktree]));
   const runtimeWorktrees = input.runtime.listWorktrees();
-  const runtimeBranches = new Set(runtimeWorktrees.map((worktree) => worktree.branch));
-  const worktrees = runtimeWorktrees.map((state) =>
-    mapWorktreeSnapshot(
+  const runtimeIds = new Set(runtimeWorktrees.map((state) => state.worktreeId));
+  const creatingById = new Map(creatingWorktrees.map((worktree) => [worktree.worktreeId, worktree]));
+  // Path fallback, only for creations not yet listed under their id: between
+  // `git worktree add` and the meta write, a reconcile lists the new worktree
+  // under its unmanaged id.
+  const creatingByPath = new Map(
+    creatingWorktrees
+      .filter((worktree) => !runtimeIds.has(worktree.worktreeId))
+      .map((worktree) => [worktree.path, worktree]),
+  );
+  const mergedCreatingIds = new Set<string>();
+  const worktrees = runtimeWorktrees.map((state) => {
+    const creating = creatingById.get(state.worktreeId) ?? creatingByPath.get(state.path) ?? null;
+    if (creating) mergedCreatingIds.add(creating.worktreeId);
+    return mapWorktreeSnapshot(
       state,
       now,
-      creatingByBranch.get(state.branch) ?? null,
+      creating,
       isArchived,
       input.findLinearIssue,
       input.findAgentLabel,
-    ),
-  );
+    );
+  });
 
   for (const creating of creatingWorktrees) {
-    if (!runtimeBranches.has(creating.branch)) {
+    if (!mergedCreatingIds.has(creating.worktreeId)) {
       worktrees.push(mapCreatingWorktreeSnapshot(creating, isArchived, input.findLinearIssue, input.findAgentLabel));
     }
   }
@@ -153,10 +174,25 @@ export function buildWorktreeSnapshots(input: BuildWorktreeSnapshotsInput): Work
   return worktrees;
 }
 
+function mapPendingCreationSnapshot(
+  pending: PendingWorktreeCreationState,
+  findAgentLabel?: (agentId: string | null) => string | null,
+): PendingCreationSnapshot {
+  return {
+    id: pending.worktreeId,
+    profile: pending.profile,
+    agentName: pending.agentName,
+    agentLabel: findAgentLabel ? findAgentLabel(pending.agentName) : pending.agentName,
+    phase: pending.phase,
+    source: pending.source,
+  };
+}
+
 export function buildProjectSnapshot(input: BuildWorktreeSnapshotsInput & {
   projectName: string;
   mainBranch: string;
   notifications: RuntimeNotification[];
+  pendingCreations?: PendingWorktreeCreationState[];
 }): ProjectSnapshot {
   return {
     project: {
@@ -164,6 +200,9 @@ export function buildProjectSnapshot(input: BuildWorktreeSnapshotsInput & {
       mainBranch: input.mainBranch,
     },
     worktrees: buildWorktreeSnapshots(input),
+    pendingCreations: (input.pendingCreations ?? []).map((pending) =>
+      mapPendingCreationSnapshot(pending, input.findAgentLabel)
+    ),
     notifications: input.notifications.map((notification) => ({ ...notification })),
   };
 }

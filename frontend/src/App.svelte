@@ -54,7 +54,7 @@
     saveFavoriteWorktreeKeys,
     projectRepos,
   } from "./lib/utils";
-  import { buildProjectListRows, matchesWorktreeSearch } from "./lib/worktree-list";
+  import { buildProjectListRows, matchesWorktreeSearch, worktreeRowsOf } from "./lib/worktree-list";
   import { buildProjectRail } from "./lib/project-rail";
   import { supportsWorktreeChat, supportsWorktreeTabs } from "./lib/agent-capabilities";
   import { getTheme } from "./lib/themes";
@@ -367,12 +367,15 @@
   let railItems = $derived(buildProjectRail(store.projects, notifications.unreadWorktrees));
   let activeProjectName = $derived(store.nameOf(activeProject) ?? activeProject);
   let listRows = $derived(
-    buildProjectListRows(store.worktreesOf(activeProject), { query: trimmedWorktreeSearch, favorites: favoriteKeys }),
+    buildProjectListRows(store.worktreesOf(activeProject), store.pendingCreationsOf(activeProject), {
+      query: trimmedWorktreeSearch,
+      favorites: favoriteKeys,
+    }),
   );
   /** The current project's rows on screen, top to bottom: the order
    *  Cmd+Up/Down and the neighbor picked on remove follow. */
   let visibleWorktrees = $derived(
-    [...listRows.active, ...(showArchivedWorktrees ? listRows.archived : [])].map((row) => row.worktree),
+    [...worktreeRowsOf(listRows.active), ...(showArchivedWorktrees ? listRows.archived : [])].map((row) => row.worktree),
   );
   let visibleKeys = $derived(visibleWorktrees.map(worktreeKey));
   let navigableKeys = $derived(visibleKeys.filter((key) => !store.removing.keys.has(key)));
@@ -1118,7 +1121,7 @@
       </div>
     {:else}
       <div class="flex-1 flex flex-col items-center justify-center gap-3 text-muted text-sm">
-        {#if hasLoadedWorktrees && store.worktreesOf(activeProject).length === 0 && store.errorOf(activeProject) === null}
+        {#if hasLoadedWorktrees && store.worktreesOf(activeProject).length === 0 && store.pendingCreationsOf(activeProject).length === 0 && store.errorOf(activeProject) === null}
           <p>No worktrees in {activeProjectName} yet</p>
           <Btn variant="accent-outline" onclick={() => openCreateDialog(activeProject)}>New worktree</Btn>
         {:else}

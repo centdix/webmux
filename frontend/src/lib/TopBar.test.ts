@@ -9,6 +9,7 @@ function createWorktree(
 ): WorktreeInfo {
   return {
     project: "webmux",
+    id: `wt-${branch}`,
     branch,
     label: null,
     archived: false,
