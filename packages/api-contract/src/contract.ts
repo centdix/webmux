@@ -65,6 +65,11 @@ export const hubApiPaths = {
   fetchAllProjectWorktrees: "/api/projects/worktrees",
   removeProject: "/api/projects/:prefix",
   streamNotifications: "/api/notifications/stream",
+  fetchAgents: "/api/agents",
+  createAgent: "/api/agents",
+  updateAgent: "/api/agents/:id",
+  deleteAgent: "/api/agents/:id",
+  validateAgent: "/api/agents/validate",
 } as const;
 
 /** Mount point of one project's routes on the shared server. */
@@ -81,11 +86,6 @@ export const projectApiPaths = {
   fetchAvailableBranches: "/branches",
   fetchBaseBranches: "/base-branches",
   fetchProject: "/project",
-  fetchAgents: "/agents",
-  createAgent: "/agents",
-  updateAgent: "/agents/:id",
-  deleteAgent: "/agents/:id",
-  validateAgent: "/agents/validate",
   attachAgentsWorktreeConversation: "/agents/worktrees/:name/attach",
   fetchAgentsWorktreeConversationHistory: "/agents/worktrees/:name/history",
   sendAgentsWorktreeConversationMessage: "/agents/worktrees/:name/messages",
@@ -165,60 +165,6 @@ export const projectContract = c.router({
       200: ProjectSnapshotSchema,
       500: ErrorResponseSchema,
       502: ErrorResponseSchema,
-    },
-  },
-  fetchAgents: {
-    method: "GET",
-    path: projectApiPaths.fetchAgents,
-    responses: {
-      200: AgentListResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  createAgent: {
-    method: "POST",
-    path: projectApiPaths.createAgent,
-    body: UpsertCustomAgentRequestSchema,
-    responses: {
-      200: AgentResponseSchema,
-      400: ErrorResponseSchema,
-      409: ErrorResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  updateAgent: {
-    method: "PUT",
-    path: projectApiPaths.updateAgent,
-    pathParams: AgentIdParamsSchema,
-    body: UpsertCustomAgentRequestSchema,
-    responses: {
-      200: AgentResponseSchema,
-      400: ErrorResponseSchema,
-      404: ErrorResponseSchema,
-      409: ErrorResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  deleteAgent: {
-    method: "DELETE",
-    path: projectApiPaths.deleteAgent,
-    pathParams: AgentIdParamsSchema,
-    body: c.noBody(),
-    responses: {
-      200: OkResponseSchema,
-      400: ErrorResponseSchema,
-      404: ErrorResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  validateAgent: {
-    method: "POST",
-    path: projectApiPaths.validateAgent,
-    body: UpsertCustomAgentRequestSchema,
-    responses: {
-      200: ValidateCustomAgentResponseSchema,
-      400: ErrorResponseSchema,
-      500: ErrorResponseSchema,
     },
   },
   attachAgentsWorktreeConversation: {
@@ -566,6 +512,60 @@ export const hubContract = c.router({
     responses: {
       200: OkResponseSchema,
       404: ErrorResponseSchema,
+      500: ErrorResponseSchema,
+    },
+  },
+  fetchAgents: {
+    method: "GET",
+    path: hubApiPaths.fetchAgents,
+    responses: {
+      200: AgentListResponseSchema,
+      500: ErrorResponseSchema,
+    },
+  },
+  createAgent: {
+    method: "POST",
+    path: hubApiPaths.createAgent,
+    body: UpsertCustomAgentRequestSchema,
+    responses: {
+      200: AgentResponseSchema,
+      400: ErrorResponseSchema,
+      409: ErrorResponseSchema,
+      500: ErrorResponseSchema,
+    },
+  },
+  updateAgent: {
+    method: "PUT",
+    path: hubApiPaths.updateAgent,
+    pathParams: AgentIdParamsSchema,
+    body: UpsertCustomAgentRequestSchema,
+    responses: {
+      200: AgentResponseSchema,
+      400: ErrorResponseSchema,
+      404: ErrorResponseSchema,
+      409: ErrorResponseSchema,
+      500: ErrorResponseSchema,
+    },
+  },
+  deleteAgent: {
+    method: "DELETE",
+    path: hubApiPaths.deleteAgent,
+    pathParams: AgentIdParamsSchema,
+    body: c.noBody(),
+    responses: {
+      200: OkResponseSchema,
+      400: ErrorResponseSchema,
+      404: ErrorResponseSchema,
+      500: ErrorResponseSchema,
+    },
+  },
+  validateAgent: {
+    method: "POST",
+    path: hubApiPaths.validateAgent,
+    body: UpsertCustomAgentRequestSchema,
+    responses: {
+      200: ValidateCustomAgentResponseSchema,
+      400: ErrorResponseSchema,
       500: ErrorResponseSchema,
     },
   },

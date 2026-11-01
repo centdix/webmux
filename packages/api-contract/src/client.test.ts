@@ -127,4 +127,41 @@ describe("createHubApi", () => {
       "https://example.com/api/projects/webmux",
     ]);
   });
+
+  it("serves the custom agent routes from the hub, outside any project", async () => {
+    const calls: string[] = [];
+    const agent = {
+      id: "gemini",
+      label: "Gemini",
+      kind: "custom",
+      capabilities: { terminal: true, inAppChat: false, conversationHistory: false, interrupt: false, resume: false },
+      startCommand: "gemini",
+      resumeCommand: null,
+    };
+    const api = createHubApi({
+      origin: "https://example.com",
+      api: async ({ path, method }) => {
+        calls.push(`${method} ${path}`);
+        if (path.endsWith("/validate")) return success({ normalizedId: "gemini", warnings: [] });
+        if (method === "DELETE") return success({ ok: true });
+        if (method === "GET") return success({ agents: [agent] });
+        return success({ agent });
+      },
+    });
+    const body = { label: "Gemini", startCommand: "gemini" };
+
+    await api.fetchAgents();
+    await api.createAgent({ body });
+    await api.validateAgent({ body });
+    await api.updateAgent({ params: { id: "gemini" }, body });
+    await api.deleteAgent({ params: { id: "gemini" } });
+
+    expect(calls).toEqual([
+      "GET https://example.com/api/agents",
+      "POST https://example.com/api/agents",
+      "POST https://example.com/api/agents/validate",
+      "PUT https://example.com/api/agents/gemini",
+      "DELETE https://example.com/api/agents/gemini",
+    ]);
+  });
 });

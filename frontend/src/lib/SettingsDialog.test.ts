@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SettingsDialog from "./SettingsDialog.svelte";
 import { ProjectCache } from "./project-cache.svelte";
-import type { AgentDetails, AgentSummary, AppConfig } from "./types";
+import type { AgentDetails, AppConfig } from "./types";
 
 vi.mock("./api", () => {
   const clients = new Map<string, Record<string, ReturnType<typeof vi.fn>>>();
@@ -23,7 +23,7 @@ vi.mock("./api", () => {
   };
 });
 
-import { createAgent, deleteAgent, fetchAgents, projectApi, validateAgent } from "./api";
+import { fetchAgents, projectApi } from "./api";
 
 const PROJECTS = [
   { prefix: "webmux", name: "webmux" },
@@ -49,22 +49,6 @@ function createAgentDetails(overrides: Partial<AgentDetails> = {}): AgentDetails
     },
     startCommand: 'gemini --prompt "${PROMPT}"',
     resumeCommand: 'gemini resume --branch "${BRANCH}"',
-    ...overrides,
-  };
-}
-
-function createAgentSummary(overrides: Partial<AgentSummary> = {}): AgentSummary {
-  return {
-    id: "gemini",
-    label: "Gemini CLI",
-    kind: "custom",
-    capabilities: {
-      terminal: true,
-      inAppChat: false,
-      conversationHistory: false,
-      interrupt: false,
-      resume: true,
-    },
     ...overrides,
   };
 }
@@ -165,19 +149,27 @@ describe("SettingsDialog", () => {
     const imagesBody = document.getElementById(imagesHeader.getAttribute("aria-controls") ?? "");
     expect(imagesBody).toContainElement(within(section("Image Generator")).getAllByRole("switch")[0]);
     expect(within(section("webmux")).queryByRole("switch")).not.toBeInTheDocument();
-    await waitFor(() => expect(fetchAgents).toHaveBeenCalledWith("images"));
-    expect(fetchAgents).not.toHaveBeenCalledWith("webmux");
   });
 
-  it("loads a collapsed project's config and agents when it is expanded", async () => {
+  it("loads a collapsed project's config when it is expanded", async () => {
     renderDialog();
-    await waitFor(() => expect(fetchAgents).toHaveBeenCalledWith("webmux"));
+    await waitFor(() => expect(webmuxApi.fetchConfig).toHaveBeenCalledTimes(1));
     expect(imagesApi.fetchConfig).not.toHaveBeenCalled();
 
     await fireEvent.click(within(section("Image Generator")).getByRole("button", { name: "Image Generator" }));
 
     await waitFor(() => expect(imagesApi.fetchConfig).toHaveBeenCalledTimes(1));
-    expect(fetchAgents).toHaveBeenCalledWith("images");
+  });
+
+  it("shows custom agents once, globally, outside every project section", async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([BUILTIN_CLAUDE, createAgentDetails()]);
+
+    renderDialog({ activeProject: "images" });
+
+    await screen.findByText("Gemini CLI");
+    expect(fetchAgents).toHaveBeenCalledTimes(1);
+    expect(within(section("Image Generator")).queryByText("Gemini CLI")).not.toBeInTheDocument();
+    expect(within(section("Image Generator")).queryByRole("button", { name: "Add agent" })).not.toBeInTheDocument();
   });
 
   it("shows each project's own toggle values", async () => {
@@ -243,76 +235,5 @@ describe("SettingsDialog", () => {
     expect(await within(images).findByText("config is read-only")).toBeInTheDocument();
     expect(toggle).toHaveAttribute("aria-checked", "false");
     expect(configs.get("images")?.autoRemoveOnMerge).toBe(false);
-  });
-
-  it("shows only custom agents in the list", async () => {
-    vi.mocked(fetchAgents).mockResolvedValue([BUILTIN_CLAUDE, createAgentDetails()]);
-
-    renderDialog();
-
-    await screen.findByText("Gemini CLI");
-    expect(screen.queryByText("Claude")).not.toBeInTheDocument();
-    expect(screen.getByText('gemini --prompt "${PROMPT}"')).toBeInTheDocument();
-  });
-
-  it("shows an empty state when no custom agents are configured", async () => {
-    vi.mocked(fetchAgents).mockResolvedValue([BUILTIN_CLAUDE]);
-
-    renderDialog();
-
-    expect(await screen.findByText("No custom agents setup")).toBeInTheDocument();
-    expect(screen.queryByText("Claude")).not.toBeInTheDocument();
-  });
-
-  it("validates, creates, and deletes custom agents in the section's project and refreshes its config", async () => {
-    vi.mocked(fetchAgents)
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([createAgentDetails()])
-      .mockResolvedValueOnce([]);
-    vi.mocked(createAgent).mockResolvedValue({ agent: createAgentDetails() });
-    vi.mocked(validateAgent).mockResolvedValue({ normalizedId: "gemini-cli", warnings: [] });
-    vi.mocked(deleteAgent).mockResolvedValue();
-    vi.mocked(imagesApi.fetchConfig)
-      .mockResolvedValueOnce(createConfig({ agents: [] }))
-      .mockResolvedValueOnce(createConfig({ agents: [createAgentSummary()] }))
-      .mockResolvedValueOnce(createConfig({ agents: [] }));
-
-    const configs = renderDialog({ activeProject: "images" });
-    const images = section("Image Generator");
-
-    await within(images).findByText("No custom agents setup");
-    await fireEvent.click(within(images).getByRole("button", { name: "Add agent to Image Generator" }));
-    await fireEvent.input(screen.getByLabelText("Agent name"), { target: { value: "Gemini CLI" } });
-    await fireEvent.input(screen.getByLabelText("Start command"), { target: { value: 'gemini --prompt "${PROMPT}"' } });
-    await fireEvent.click(screen.getByRole("button", { name: "Test" }));
-
-    await waitFor(() => {
-      expect(validateAgent).toHaveBeenCalledWith("images", {
-        label: "Gemini CLI",
-        startCommand: 'gemini --prompt "${PROMPT}"',
-      });
-    });
-    expect(await screen.findByText("Configuration looks good.")).toBeInTheDocument();
-
-    const editor = screen.getByLabelText("Agent name").closest("dialog");
-    if (!editor) throw new Error("agent editor not open");
-    await fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
-
-    await waitFor(() => {
-      expect(createAgent).toHaveBeenCalledWith("images", {
-        label: "Gemini CLI",
-        startCommand: 'gemini --prompt "${PROMPT}"',
-      });
-    });
-    await waitFor(() => expect(configs.get("images")?.agents).toEqual([createAgentSummary()]));
-
-    await fireEvent.click(await within(images).findByRole("button", { name: "Delete" }));
-    await fireEvent.click(screen.getByRole("button", { name: "Remove" }));
-
-    await waitFor(() => {
-      expect(deleteAgent).toHaveBeenCalledWith("images", "gemini");
-    });
-    await waitFor(() => expect(configs.get("images")?.agents).toEqual([]));
-    expect(webmuxApi.fetchConfig).not.toHaveBeenCalled();
   });
 });

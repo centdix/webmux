@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import type { ProjectConfig } from "../domain/config";
+import type { CustomAgents, ProjectConfig } from "../domain/config";
 import { BunGitGateway, type GitGateway } from "../adapters/git";
 import type { LifecycleHookRunner, RunLifecycleHookInput } from "../adapters/hooks";
 import type { PortProbe } from "../adapters/port-probe";
@@ -261,7 +261,6 @@ const TEST_CONFIG: ProjectConfig = {
       ],
     },
   },
-  agents: {},
   startupEnvs: {
     FEATURE_FLAG: true,
   },
@@ -331,6 +330,7 @@ function makeLifecycleService(
   // fall back to the default below).
   controlBaseUrl: string | null = "http://127.0.0.1:5111/api/projects/webmux",
   portRegistrations: LifecycleServiceDependencies["portRegistrations"] = { releaseWorktree: () => {} },
+  customAgents: CustomAgents = {},
 ): LifecycleService {
   const reconciliation = new ReconciliationService({
     git,
@@ -345,6 +345,7 @@ function makeLifecycleService(
     controlBaseUrl: controlBaseUrl ?? undefined,
     getControlToken: async () => "secret-token",
     config,
+    customAgents: { list: () => customAgents },
     archiveState: new ArchiveStateService(git.resolveWorktreeGitDir(repoRoot)),
     git,
     tmux,
@@ -720,14 +721,18 @@ describe("LifecycleService", () => {
       runtime,
       new FakeDockerGateway(),
       new FakeHookRunner(),
+      TEST_CONFIG,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
       {
-        ...TEST_CONFIG,
-        agents: {
-          gemini: {
-            label: "Gemini CLI",
-            startCommand: 'gemini --task "${PROMPT}" --cwd "${WORKTREE_PATH}" --repo "${REPO_PATH}" --branch "${BRANCH}" --profile "${PROFILE}"',
-            resumeCommand: 'gemini resume --branch "${BRANCH}"',
-          },
+        gemini: {
+          label: "Gemini CLI",
+          startCommand: 'gemini --task "${PROMPT}" --cwd "${WORKTREE_PATH}" --repo "${REPO_PATH}" --branch "${BRANCH}" --profile "${PROFILE}"',
+          resumeCommand: 'gemini resume --branch "${BRANCH}"',
         },
       },
     );
@@ -775,11 +780,17 @@ describe("LifecycleService", () => {
             systemPrompt: "Database: ${FEATURE_FLAG}",
           },
         },
-        agents: {
-          gemini: {
-            label: "Gemini CLI",
-            startCommand: 'gemini --system "${SYSTEM_PROMPT}" --task "${PROMPT}" --branch "${BRANCH}"',
-          },
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        gemini: {
+          label: "Gemini CLI",
+          startCommand: 'gemini --system "${SYSTEM_PROMPT}" --task "${PROMPT}" --branch "${BRANCH}"',
         },
       },
     );

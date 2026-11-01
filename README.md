@@ -237,6 +237,21 @@ For fresh agents using a host profile, webmux automatically includes capture com
 
 Lifecycle hooks run with the worktree as `cwd` and receive the same computed runtime env that the managed panes will use, including `startupEnvs` and `WEBMUX_*` metadata.
 
+### Custom agents
+
+Besides the built-in `claude`, `codex`, `opencode`, and `pi` agents, you can define your own terminal agents. Custom agents are machine-wide: they live in `~/.config/webmux/config.yaml` and every project the server serves can launch them. Manage them from **Settings → Agents** in the dashboard, or edit the file directly (restart the server to pick up manual edits):
+
+```yaml
+# ~/.config/webmux/config.yaml
+agents:
+  gemini-cli:
+    label: Gemini CLI
+    startCommand: gemini --prompt "${PROMPT}"
+    resumeCommand: gemini --resume latest   # optional
+```
+
+`startCommand` and `resumeCommand` can reference `${PROMPT}`, `${SYSTEM_PROMPT}`, `${WORKTREE_PATH}`, `${REPO_PATH}`, `${BRANCH}`, and `${PROFILE}`. Without a `resumeCommand`, reopening a worktree restarts the agent fresh. An `agents:` section in `.webmux.yaml` or `.webmux.local.yaml` is ignored — move it to the global file. Worktrees started on a former project-local custom agent fail to open with `Unknown agent` until you recreate that agent globally under the same id.
+
 ### Dev server ports
 
 webmux hands out dev server ports on demand instead of from config. Run a server as `PORT=$(webmux port <label>) <cmd>` in a command pane, a hook or an agent shell:

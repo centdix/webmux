@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { ProjectConfig } from "../domain/config";
+import type { CustomAgents } from "../domain/config";
 import {
   getAgentDefinition,
   isBuiltInAgentId,
@@ -9,46 +9,21 @@ import {
   normalizeCustomAgentId,
 } from "../services/agent-registry";
 
-const TEST_CONFIG: ProjectConfig = {
-  name: "Project",
-  workspace: {
-    mainBranch: "main",
-    worktreeRoot: "__worktrees",
-    defaultAgent: "claude",
-    autoPull: { enabled: false, intervalSeconds: 300 },
-    ide: "cursor",
+const CUSTOM_AGENTS: CustomAgents = {
+  gemini: {
+    label: "Gemini CLI",
+    startCommand: 'gemini --prompt "${PROMPT}"',
+    resumeCommand: "gemini resume --last",
   },
-  profiles: {
-    default: {
-      runtime: "host",
-      envPassthrough: [],
-      panes: [{ id: "agent", kind: "agent", focus: true }],
-    },
-  },
-  agents: {
-    gemini: {
-      label: "Gemini CLI",
-      startCommand: 'gemini --prompt "${PROMPT}"',
-      resumeCommand: "gemini resume --last",
-    },
-  },
-  startupEnvs: {},
-  integrations: {
-    github: { linkedRepos: [], autoRemoveOnMerge: false },
-    linear: { enabled: true, autoCreateWorktrees: false, createTicketOption: false },
-  },
-  lifecycleHooks: {},
-  autoName: null,
-  oneshot: { systemPrompt: "" },
 };
 
 describe("agent-registry", () => {
-  it("lists built-in agents before local custom agents", () => {
-    expect(listAgentDefinitions(TEST_CONFIG).map((agent) => agent.id)).toEqual(["claude", "codex", "opencode", "pi", "gemini"]);
+  it("lists built-in agents before custom agents", () => {
+    expect(listAgentDefinitions(CUSTOM_AGENTS).map((agent) => agent.id)).toEqual(["claude", "codex", "opencode", "pi", "gemini"]);
   });
 
   it("exposes custom agents as terminal-only summaries", () => {
-    expect(listAgentSummaries(TEST_CONFIG)).toEqual([
+    expect(listAgentSummaries(CUSTOM_AGENTS)).toEqual([
       {
         id: "claude",
         label: "Claude",
@@ -114,13 +89,10 @@ describe("agent-registry", () => {
 
   it("ignores custom agents that collide with built-in ids", () => {
     const definitions = listAgentDefinitions({
-      ...TEST_CONFIG,
-      agents: {
-        ...TEST_CONFIG.agents,
-        claude: {
-          label: "Override",
-          startCommand: "custom-claude",
-        },
+      ...CUSTOM_AGENTS,
+      claude: {
+        label: "Override",
+        startCommand: "custom-claude",
       },
     });
 
@@ -129,9 +101,9 @@ describe("agent-registry", () => {
   });
 
   it("resolves built-in and custom agent definitions by id", () => {
-    const claude = getAgentDefinition(TEST_CONFIG, "claude");
-    const gemini = getAgentDefinition(TEST_CONFIG, "gemini");
-    const missing = getAgentDefinition(TEST_CONFIG, "missing");
+    const claude = getAgentDefinition(CUSTOM_AGENTS, "claude");
+    const gemini = getAgentDefinition(CUSTOM_AGENTS, "gemini");
+    const missing = getAgentDefinition(CUSTOM_AGENTS, "missing");
 
     expect(claude?.kind).toBe("builtin");
     expect(gemini?.kind).toBe("custom");
@@ -140,7 +112,7 @@ describe("agent-registry", () => {
   });
 
   it("exposes agent details for settings screens", () => {
-    expect(listAgentDetails(TEST_CONFIG)).toEqual([
+    expect(listAgentDetails(CUSTOM_AGENTS)).toEqual([
       {
         id: "claude",
         label: "Claude",

@@ -1,7 +1,7 @@
 import type { AgentDetails, AgentSummary } from "@webmux/api-contract";
 import { AGENT_ADAPTERS } from "../agents";
 import type { AgentCapabilities } from "../agents/types";
-import type { AgentId, AgentKind, CustomAgentConfig, ProjectConfig } from "../domain/config";
+import type { AgentId, AgentKind, CustomAgentConfig, CustomAgents } from "../domain/config";
 
 interface BuiltInAgentDefinition {
   id: AgentKind;
@@ -94,9 +94,9 @@ function buildCustomAgentDefinition(id: AgentId, config: CustomAgentConfig): Cus
   };
 }
 
-export function listAgentDefinitions(config: Pick<ProjectConfig, "agents">): AgentDefinition[] {
+export function listAgentDefinitions(customAgents: CustomAgents): AgentDefinition[] {
   const builtInIds = new Set(BUILTIN_AGENT_DEFINITIONS.map((agent) => agent.id));
-  const customDefinitions = Object.entries(config.agents)
+  const customDefinitions = Object.entries(customAgents)
     .filter(([id]) => !builtInIds.has(id))
     .sort(([leftId, left], [rightId, right]) => {
       const labelCompare = left.label.localeCompare(right.label);
@@ -111,15 +111,15 @@ export function listAgentDefinitions(config: Pick<ProjectConfig, "agents">): Age
 }
 
 export function getAgentDefinition(
-  config: Pick<ProjectConfig, "agents">,
+  customAgents: CustomAgents,
   agentId: AgentId,
 ): AgentDefinition | null {
-  const definition = listAgentDefinitions(config).find((agent) => agent.id === agentId);
+  const definition = listAgentDefinitions(customAgents).find((agent) => agent.id === agentId);
   return definition ?? null;
 }
 
-export function listAgentSummaries(config: Pick<ProjectConfig, "agents">): AgentSummary[] {
-  return listAgentDefinitions(config).map((agent) => ({
+export function listAgentSummaries(customAgents: CustomAgents): AgentSummary[] {
+  return listAgentDefinitions(customAgents).map((agent) => ({
     id: agent.id,
     label: agent.label,
     kind: agent.kind,
@@ -127,8 +127,8 @@ export function listAgentSummaries(config: Pick<ProjectConfig, "agents">): Agent
   }));
 }
 
-export function listAgentDetails(config: Pick<ProjectConfig, "agents">): AgentDetails[] {
-  return listAgentDefinitions(config).map((agent) => ({
+export function listAgentDetails(customAgents: CustomAgents): AgentDetails[] {
+  return listAgentDefinitions(customAgents).map((agent) => ({
     id: agent.id,
     label: agent.label,
     kind: agent.kind,

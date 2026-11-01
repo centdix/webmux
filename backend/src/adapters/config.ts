@@ -4,11 +4,9 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { isAgentKind } from "../agents";
 import { log } from "../lib/log";
 import type {
-  AgentId,
   AgentKind,
   AutoNameConfig,
   AutoPullConfig,
-  CustomAgentConfig,
   GitHubIntegrationConfig,
   IdeKind,
   LifecycleHooksConfig,
@@ -21,7 +19,7 @@ import type {
   ProjectConfig,
 } from "../domain/config";
 
-export type { CustomAgentConfig, LinkedRepoConfig, MountSpec, PaneTemplate, ProfileConfig, ProjectConfig };
+export type { LinkedRepoConfig, MountSpec, PaneTemplate, ProfileConfig, ProjectConfig };
 export type DockerProfileConfig = ProfileConfig & { runtime: "docker"; image: string };
 
 interface LoadConfigOptions {
@@ -31,7 +29,6 @@ interface LoadConfigOptions {
 interface LocalProjectConfigOverlay {
   worktreeRoot: string | null;
   profiles: Record<string, ProfileConfig>;
-  agents: Record<AgentId, CustomAgentConfig>;
   lifecycleHooks: LifecycleHooksConfig;
   linear: Partial<LinearIntegrationConfig> | null;
   github: Partial<GitHubIntegrationConfig> | null;
@@ -70,7 +67,6 @@ const DEFAULT_CONFIG: ProjectConfig = {
       panes: clonePanes(DEFAULT_PANES),
     },
   },
-  agents: {},
   startupEnvs: {},
   integrations: {
     github: { linkedRepos: [], autoRemoveOnMerge: false },
@@ -217,43 +213,6 @@ function parseProfiles(raw: unknown, includeDefaultProfile: boolean): Record<str
   return profiles;
 }
 
-function cloneAgentConfig(agent: CustomAgentConfig): CustomAgentConfig {
-  return { ...agent };
-}
-
-function cloneAgents(agents: Record<AgentId, CustomAgentConfig>): Record<AgentId, CustomAgentConfig> {
-  return Object.fromEntries(
-    Object.entries(agents).map(([id, agent]) => [id, cloneAgentConfig(agent)]),
-  );
-}
-
-function parseCustomAgent(raw: unknown): CustomAgentConfig | null {
-  if (!isRecord(raw)) return null;
-  if (typeof raw.label !== "string" || !raw.label.trim()) return null;
-  if (typeof raw.startCommand !== "string" || !raw.startCommand.trim()) return null;
-
-  return {
-    label: raw.label.trim(),
-    startCommand: raw.startCommand.trim(),
-    ...(typeof raw.resumeCommand === "string" && raw.resumeCommand.trim()
-      ? { resumeCommand: raw.resumeCommand.trim() }
-      : {}),
-  };
-}
-
-function parseCustomAgents(raw: unknown): Record<AgentId, CustomAgentConfig> {
-  if (!isRecord(raw)) return {};
-
-  return Object.entries(raw).reduce<Record<AgentId, CustomAgentConfig>>((acc, [id, value]) => {
-    if (!id.trim()) return acc;
-    const parsed = parseCustomAgent(value);
-    if (parsed) {
-      acc[id.trim()] = parsed;
-    }
-    return acc;
-  }, {});
-}
-
 function parseStartupEnvs(raw: unknown): Record<string, string | boolean> {
   if (!isRecord(raw)) return {};
 
@@ -378,7 +337,6 @@ function parseProjectConfig(parsed: Record<string, unknown>): ProjectConfig {
         : DEFAULT_CONFIG.workspace.ide,
     },
     profiles: parseProfiles(parsed.profiles, true),
-    agents: {},
     startupEnvs: parseStartupEnvs(parsed.startupEnvs),
     integrations: {
       github: {
@@ -484,7 +442,7 @@ function loadLocalProjectConfigOverlay(root: string): LocalProjectConfigOverlay 
   try {
     const text = readLocalConfigFile(root).trim();
     if (!text) {
-      return { worktreeRoot: null, profiles: {}, agents: {}, lifecycleHooks: {}, linear: null, github: null, autoPull: null, ide: null };
+      return { worktreeRoot: null, profiles: {}, lifecycleHooks: {}, linear: null, github: null, autoPull: null, ide: null };
     }
 
     const parsed = parseConfigDocument(text);
@@ -492,7 +450,6 @@ function loadLocalProjectConfigOverlay(root: string): LocalProjectConfigOverlay 
     return {
       worktreeRoot: ws && typeof ws.worktreeRoot === "string" ? ws.worktreeRoot : null,
       profiles: parseProfiles(parsed.profiles, false),
-      agents: parseCustomAgents(parsed.agents),
       lifecycleHooks: parseLifecycleHooks(parsed.lifecycleHooks),
       linear: parseLocalLinearOverlay(parsed),
       github: parseLocalGitHubOverlay(parsed),
@@ -500,7 +457,7 @@ function loadLocalProjectConfigOverlay(root: string): LocalProjectConfigOverlay 
       ide: ws && (ws.ide === "cursor" || ws.ide === "vscode") ? ws.ide : null,
     };
   } catch {
-    return { worktreeRoot: null, profiles: {}, agents: {}, lifecycleHooks: {}, linear: null, github: null, autoPull: null, ide: null };
+    return { worktreeRoot: null, profiles: {}, lifecycleHooks: {}, linear: null, github: null, autoPull: null, ide: null };
   }
 }
 
@@ -581,10 +538,6 @@ export function loadConfig(dir: string, options: LoadConfigOptions = {}): Projec
       ...cloneProfiles(projectConfig.profiles),
       ...cloneProfiles(localOverlay.profiles),
     },
-    agents: {
-      ...cloneAgents(projectConfig.agents),
-      ...cloneAgents(localOverlay.agents),
-    },
     lifecycleHooks: mergeLifecycleHooks(projectConfig.lifecycleHooks, localOverlay.lifecycleHooks),
     integrations,
   };
@@ -633,44 +586,6 @@ export async function persistLocalGitHubConfig(
   Object.assign(github, changes);
   integrations.github = github;
   existing.integrations = integrations;
-
-  await Bun.write(localPath, stringifyYaml(existing));
-}
-
-export async function persistLocalCustomAgent(
-  dir: string,
-  agentId: AgentId,
-  agent: CustomAgentConfig,
-): Promise<void> {
-  const root = projectRoot(dir);
-  const { localPath, existing } = readLocalConfigDocument(root);
-  const agents = isRecord(existing.agents) ? { ...existing.agents } : {};
-
-  agents[agentId] = {
-    label: agent.label,
-    startCommand: agent.startCommand,
-    ...(agent.resumeCommand ? { resumeCommand: agent.resumeCommand } : {}),
-  } satisfies Record<string, unknown>;
-  existing.agents = agents;
-
-  await Bun.write(localPath, stringifyYaml(existing));
-}
-
-export async function removeLocalCustomAgent(dir: string, agentId: AgentId): Promise<void> {
-  const root = projectRoot(dir);
-  const { localPath, existing } = readLocalConfigDocument(root);
-  if (!isRecord(existing.agents) || !(agentId in existing.agents)) {
-    return;
-  }
-
-  const agents = { ...existing.agents };
-  delete agents[agentId];
-
-  if (Object.keys(agents).length === 0) {
-    delete existing.agents;
-  } else {
-    existing.agents = agents;
-  }
 
   await Bun.write(localPath, stringifyYaml(existing));
 }

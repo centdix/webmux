@@ -32,6 +32,12 @@ export function webmuxConfigDir(): string {
   return join(Bun.env.HOME ?? "/root", ".config", "webmux");
 }
 
+/** Machine-wide webmux config (custom agents), shared by every project the
+ *  server serves. */
+export function webmuxGlobalConfigPath(): string {
+  return join(webmuxConfigDir(), "config.yaml");
+}
+
 /** Optional global env file webmux reads at server startup for machine-wide
  *  secrets (e.g. `LINEAR_API_KEY`). Loaded after the launch project's `.env`
  *  so a project can still override a machine-wide default. */
