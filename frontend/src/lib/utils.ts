@@ -12,6 +12,7 @@ export const WEB_CHAT_UI_STORAGE_KEY = "wt-use-web-chat-ui";
 export const FAVORITE_WORKTREES_STORAGE_KEY = "wt-favorite-worktrees";
 export const FAVORITE_WORKTREE_KEYS_STORAGE_KEY = "wt-favorite-worktree-keys";
 export const LAST_PROJECT_STORAGE_KEY = "wt-last-project";
+export const COLLAPSED_PROJECTS_STORAGE_KEY = "wt-collapsed-projects";
 const DEFAULT_SIDEBAR_WIDTH = 220;
 
 export function prLabel(pr: Pick<PrEntry, "repo" | "number">): string {
@@ -174,12 +175,25 @@ export function loadFavoriteWorktreeKeys(currentProject: string): Set<string> {
   return keys;
 }
 
-export function saveFavoriteWorktreeKeys(keys: ReadonlySet<string>): void {
-  if (keys.size === 0) {
-    localStorage.removeItem(FAVORITE_WORKTREE_KEYS_STORAGE_KEY);
+function saveStringSet(key: string, values: ReadonlySet<string>): void {
+  if (values.size === 0) {
+    localStorage.removeItem(key);
     return;
   }
-  localStorage.setItem(FAVORITE_WORKTREE_KEYS_STORAGE_KEY, JSON.stringify([...keys]));
+  localStorage.setItem(key, JSON.stringify([...values]));
+}
+
+export function saveFavoriteWorktreeKeys(keys: ReadonlySet<string>): void {
+  saveStringSet(FAVORITE_WORKTREE_KEYS_STORAGE_KEY, keys);
+}
+
+/** Prefixes of the projects collapsed in the sidebar. */
+export function loadCollapsedProjects(): Set<string> {
+  return new Set(parseStringArray(localStorage.getItem(COLLAPSED_PROJECTS_STORAGE_KEY)));
+}
+
+export function saveCollapsedProjects(prefixes: ReadonlySet<string>): void {
+  saveStringSet(COLLAPSED_PROJECTS_STORAGE_KEY, prefixes);
 }
 
 export function applyTheme(key: ThemeKey): void {

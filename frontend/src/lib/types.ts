@@ -153,6 +153,19 @@ export interface WorktreeListRow {
   depth: number;
 }
 
+/** One project of the sidebar list: its header, then its rows. */
+export interface WorktreeListSection {
+  prefix: string;
+  name: string;
+  error: string | null;
+  collapsed: boolean;
+  /** Worktrees passing the filters, favorites first, sub-worktrees nested;
+   *  computed even when collapsed (the header counts them). */
+  rows: WorktreeListRow[];
+  /** Shown in place of rows when the project has none to show. */
+  emptyMessage: string | null;
+}
+
 export type ToastTone = "info" | "success" | "error";
 
 export interface ToastInput {

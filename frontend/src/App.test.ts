@@ -562,9 +562,10 @@ describe("App create selection", () => {
     await fireEvent.click(screen.getByTitle("Switch project"));
     await fireEvent.click(await screen.findByRole("menuitem", { name: /^images/ }));
 
-    // Straight from the polled store: no empty list, no extra fetch.
+    // Straight from the polled store: no extra fetch, and the list (which shows
+    // every project) does not change.
     expect(screen.getByRole("button", { name: /^feature\/img\b/i })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^feature\/web\b/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^feature\/web\b/i })).toBeInTheDocument();
     expect(screen.getByTitle("feature/saved")).toBeInTheDocument();
     expect(window.location.hash).toBe("#images/feature/saved");
     expect(fetchAllProjectWorktrees).toHaveBeenCalledTimes(pollsBefore);
@@ -717,6 +718,113 @@ describe("App create selection", () => {
 
     expect(screen.getByTitle("feature/img")).toBeInTheDocument();
     expect(window.location.hash).toBe("#images/feature/img");
+  });
+
+  function projectSectionNames(): string[] {
+    return screen.getAllByRole("region").map((region) => region.getAttribute("aria-label") ?? "");
+  }
+
+  function useThreeProjects(): void {
+    otherProjects.list = [
+      {
+        prefix: "images",
+        name: "images",
+        worktrees: [createWorktree("main", { project: "images" }), createWorktree("feature/img", { project: "images" })],
+        error: null,
+      },
+      { prefix: "docs", name: "docs", worktrees: [createWorktree("feature/doc", { project: "docs" })], error: null },
+    ];
+    vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("main"), createWorktree("feature/web")]);
+  }
+
+  it("lists every project under its header, in a stable order whatever is selected", async () => {
+    useThreeProjects();
+
+    renderApp();
+    await screen.findByTitle("main");
+    expect(projectSectionNames()).toEqual(["webmux", "images", "docs"]);
+
+    const images = screen.getByRole("region", { name: "images" });
+    await fireEvent.click(within(images).getByRole("button", { name: /^feature\/img\b/i }));
+
+    expect(await screen.findByTitle("feature/img")).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/");
+    expect(window.location.hash).toBe("#images/feature/img");
+    expect(projectSectionNames()).toEqual(["webmux", "images", "docs"]);
+    expect(within(screen.getByRole("region", { name: "webmux" })).getByRole("button", { name: /^feature\/web\b/i }))
+      .toBeInTheDocument();
+  });
+
+  it("moves through every project's rows with Cmd+Up/Down", async () => {
+    useThreeProjects();
+    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "feature/web");
+
+    renderApp();
+    await screen.findByTitle("feature/web");
+
+    await fireEvent.keyDown(window, { key: "ArrowDown", metaKey: true });
+    await waitFor(() => expect(window.location.hash).toBe("#images/main"));
+    await fireEvent.keyDown(window, { key: "ArrowDown", metaKey: true });
+    await fireEvent.keyDown(window, { key: "ArrowDown", metaKey: true });
+    await waitFor(() => expect(window.location.hash).toBe("#docs/feature/doc"));
+    await fireEvent.keyDown(window, { key: "ArrowUp", metaKey: true });
+    await waitFor(() => expect(window.location.hash).toBe("#images/feature/img"));
+  });
+
+  it("collapses a project from its header and keeps it collapsed after a remount", async () => {
+    useThreeProjects();
+
+    renderApp();
+    await screen.findByTitle("main");
+    const header = within(screen.getByRole("region", { name: "images" })).getByRole("button", { name: /^images/ });
+    await fireEvent.click(header);
+
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: /^feature\/img\b/i })).not.toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem("wt-collapsed-projects") ?? "[]")).toEqual(["images"]);
+
+    cleanup();
+    renderApp();
+    await screen.findByTitle("main");
+    expect(within(screen.getByRole("region", { name: "images" })).getByRole("button", { name: /^images/ }))
+      .toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: /^feature\/doc\b/i })).toBeInTheDocument();
+  });
+
+  it("searches every project and hides those without a match", async () => {
+    useThreeProjects();
+
+    renderApp();
+    await screen.findByTitle("main");
+    await fireEvent.input(screen.getByLabelText("Search worktrees"), { target: { value: "doc" } });
+
+    expect(projectSectionNames()).toEqual(["docs"]);
+    expect(screen.getByRole("button", { name: /^feature\/doc\b/i })).toBeInTheDocument();
+
+    await fireEvent.input(screen.getByLabelText("Search worktrees"), { target: { value: "nothing-matches" } });
+    expect(screen.queryAllByRole("region")).toEqual([]);
+    expect(screen.getByText('No matches for "nothing-matches".')).toBeInTheDocument();
+  });
+
+  it("creates a sub-worktree in the parent row's project", async () => {
+    useThreeProjects();
+    vi.mocked(api.createWorktree).mockResolvedValue({ primaryBranch: "feature/doc-child", branches: ["feature/doc-child"] });
+
+    renderApp();
+    await screen.findByTitle("main");
+    const docs = screen.getByRole("region", { name: "docs" });
+    await fireEvent.click(within(docs).getByRole("button", { name: /actions for feature\/doc/i }));
+    await fireEvent.click(within(docs).getByRole("button", { name: "Create sub-worktree" }));
+    expect(await screen.findByText("New Sub-Worktree")).toBeInTheDocument();
+    await fireEvent.input(screen.getByLabelText(/Branch name/i), { target: { value: "feature/doc-child" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(api.createWorktree).toHaveBeenCalled());
+    // The shared mock client hides the target, so read it from the projectApi call made just before.
+    const createdAt = vi.mocked(api.createWorktree).mock.invocationCallOrder[0] ?? 0;
+    const projectCalls = vi.mocked(projectApi).mock;
+    const lastBefore = projectCalls.invocationCallOrder.findLastIndex((order) => order < createdAt);
+    expect(projectCalls.calls[lastBefore]).toEqual(["docs"]);
   });
 
   it("keeps the current selection when a new worktree is created from an existing selection", async () => {

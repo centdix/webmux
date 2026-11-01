@@ -1,9 +1,17 @@
-import type { WorktreeInfo, WorktreeListRow } from "./types";
+import type { ProjectWorktreeList, WorktreeInfo, WorktreeListRow, WorktreeListSection } from "./types";
 import { searchMatch } from "./utils";
+import { worktreeKey } from "./worktree-ref";
 
 export interface FilterWorktreesOptions {
   query: string;
   showArchived: boolean;
+}
+
+export interface WorktreeListSectionsOptions extends FilterWorktreesOptions {
+  /** Favorite worktree keys, listed first within their project. */
+  favorites: ReadonlySet<string>;
+  /** Prefixes of the collapsed projects. */
+  collapsed: ReadonlySet<string>;
 }
 
 function parentBranchOf(worktree: WorktreeInfo, worktreesByBranch: Map<string, WorktreeInfo>): string | null {
@@ -48,51 +56,83 @@ export function rowShowsAgentStatus(worktree: WorktreeInfo): boolean {
 
 // The countable mark a row contributes to the overflow bars, mirroring the per-row
 // indicator: waiting, error, or a done run that hasn't been viewed yet (the blue dot).
+// Sets below hold `worktreeKey`s, so rows of every project can share them.
 export function overflowStatusOf(
   worktree: WorktreeInfo,
-  notifiedBranches: Set<string>,
+  notifiedKeys: ReadonlySet<string>,
 ): OverflowStatusBarStatus | null {
   if (!rowShowsAgentStatus(worktree)) return null;
   if (worktree.agent === "waiting") return "waiting";
   if (worktree.agent === "error") return "error";
-  if (worktree.agent === "done" && notifiedBranches.has(worktree.branch)) return "done-unread";
+  if (worktree.agent === "done" && notifiedKeys.has(worktreeKey(worktree))) return "done-unread";
   return null;
 }
 
 export function countAgentStatusesIn(
   rows: WorktreeListRow[],
-  branches: Set<string>,
-  notifiedBranches: Set<string> = new Set(),
+  keys: ReadonlySet<string>,
+  notifiedKeys: ReadonlySet<string> = new Set(),
 ): Record<OverflowStatusBarStatus, number> {
   const counts: Record<OverflowStatusBarStatus, number> = { waiting: 0, error: 0, "done-unread": 0 };
   for (const { worktree } of rows) {
-    if (!branches.has(worktree.branch)) continue;
-    const status = overflowStatusOf(worktree, notifiedBranches);
+    if (!keys.has(worktreeKey(worktree))) continue;
+    const status = overflowStatusOf(worktree, notifiedKeys);
     if (status) counts[status]++;
   }
   return counts;
 }
 
-export function branchesWithAgentStatus(
+export function keysWithAgentStatus(
   rows: WorktreeListRow[],
   status: OverflowStatusBarStatus,
-  branches?: Set<string>,
-  notifiedBranches: Set<string> = new Set(),
+  keys?: ReadonlySet<string>,
+  notifiedKeys: ReadonlySet<string> = new Set(),
 ): string[] {
   return rows
-    .filter(
-      ({ worktree }) =>
-        overflowStatusOf(worktree, notifiedBranches) === status &&
-        (!branches || branches.has(worktree.branch)),
-    )
-    .map(({ worktree }) => worktree.branch);
+    .map(({ worktree }) => ({ worktree, key: worktreeKey(worktree) }))
+    .filter(({ worktree, key }) => overflowStatusOf(worktree, notifiedKeys) === status && (!keys || keys.has(key)))
+    .map(({ key }) => key);
 }
 
-export function sortFavoritesFirst(worktrees: WorktreeInfo[], favorites: Set<string>): WorktreeInfo[] {
+export function sortFavoritesFirst(worktrees: WorktreeInfo[], favorites: ReadonlySet<string>): WorktreeInfo[] {
   return [
-    ...worktrees.filter((worktree) => favorites.has(worktree.branch)),
-    ...worktrees.filter((worktree) => !favorites.has(worktree.branch)),
+    ...worktrees.filter((worktree) => favorites.has(worktreeKey(worktree))),
+    ...worktrees.filter((worktree) => !favorites.has(worktreeKey(worktree))),
   ];
+}
+
+function emptySectionMessage(project: ProjectWorktreeList, showArchived: boolean): string | null {
+  if (project.error !== null) return null;
+  return !showArchived && project.worktrees.some((worktree) => worktree.archived)
+    ? "No active worktrees."
+    : "No worktrees found.";
+}
+
+/** The sidebar: every project in the given (server) order, each with its
+ *  filtered rows. While searching, a project without a match is left out. */
+export function buildWorktreeListSections(
+  projects: ProjectWorktreeList[],
+  options: WorktreeListSectionsOptions,
+): WorktreeListSection[] {
+  const searching = options.query.trim() !== "";
+  return projects.flatMap((project) => {
+    const visible = filterWorktrees(project.worktrees, options);
+    if (searching && visible.length === 0) return [];
+    return [{
+      prefix: project.prefix,
+      name: project.name,
+      error: project.error,
+      collapsed: options.collapsed.has(project.prefix),
+      rows: buildWorktreeListRows(sortFavoritesFirst(visible, options.favorites)),
+      emptyMessage: visible.length === 0 ? emptySectionMessage(project, options.showArchived) : null,
+    }];
+  });
+}
+
+/** Rows on screen, top to bottom across projects (collapsed ones contribute
+ *  none): the order keyboard navigation and neighbor selection follow. */
+export function displayedWorktrees(sections: WorktreeListSection[]): WorktreeInfo[] {
+  return sections.flatMap((section) => (section.collapsed ? [] : section.rows.map((row) => row.worktree)));
 }
 
 export function buildWorktreeListRows(worktrees: WorktreeInfo[]): WorktreeListRow[] {

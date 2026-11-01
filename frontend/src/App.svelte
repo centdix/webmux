@@ -46,13 +46,14 @@
     saveUseWebChatUi,
     loadFavoriteWorktreeKeys,
     saveFavoriteWorktreeKeys,
+    loadCollapsedProjects,
+    saveCollapsedProjects,
   } from "./lib/utils";
   import {
-    buildWorktreeListRows,
+    buildWorktreeListSections,
     countArchivedMatches,
-    filterWorktrees,
+    displayedWorktrees,
     matchesWorktreeSearch,
-    sortFavoritesFirst,
   } from "./lib/worktree-list";
   import { supportsWorktreeChat, supportsWorktreeTabs } from "./lib/agent-capabilities";
   import { getTheme } from "./lib/themes";
@@ -60,7 +61,7 @@
   import { setToastController } from "./lib/toast-context";
   import { projectApi, subscribeNotifications } from "./lib/api";
   import TabBar from "./lib/TabBar.svelte";
-  import { branchesInProject, worktreeKey } from "./lib/worktree-ref";
+  import { parseWorktreeKey, sameWorktree, worktreeKey } from "./lib/worktree-ref";
   import {
     ACTIVE_CREATE_POLL_INTERVAL_MS,
     DEFAULT_POLL_INTERVAL_MS,
@@ -111,7 +112,10 @@
     onBranchesChanged: invalidateBranchCaches,
   });
 
-  /** The current project: the one the sidebar lists (and its Linear panel). */
+  /** The current project: the selected worktree's (the last one when nothing
+   *  is selected). The sidebar lists every project regardless; this only
+   *  drives the Linear panel, new worktrees, pull and the initial fallback
+   *  selection. */
   let project = $derived(selection.project);
   /** Project of the selected worktree (the current one when none): the main
    *  panel, its dialogs and the config they read all target it. */
@@ -120,18 +124,11 @@
   let linearData = $derived(linear.get(project));
   let linearIssues = $derived(linearData?.issues ?? []);
   let linearAvailability = $derived(linearData?.availability ?? "disabled");
-  let worktrees = $derived(store.worktreesOf(project));
-  let worktreesError = $derived(store.errorOf(project));
   let hasLoadedWorktrees = $derived(store.hasLoaded(project));
   let selectedBranch = $derived(selection.branch);
   // The boot project inherits the unscoped legacy favorites.
   let favoriteKeys = $state(untrack(() => loadFavoriteWorktreeKeys(selection.project)));
-  let favoriteBranches = $derived(branchesInProject(favoriteKeys, project));
-  let removingBranches = $derived(branchesInProject(store.removing.keys, project));
-  let openingBranches = $derived(branchesInProject(store.opening.keys, project));
-  let archivingBranches = $derived(branchesInProject(store.archiving.keys, project));
-  let postingLinearBranches = $derived(branchesInProject(store.postingLinear.keys, project));
-  let notifiedBranches = $derived(branchesInProject(notifications.unreadWorktrees, project));
+  let collapsedProjects = $state(loadCollapsedProjects());
 
   function worktreeSupportsChat(worktree: WorktreeInfo | undefined): boolean {
     return supportsWorktreeChat(config.agents, worktree);
@@ -153,9 +150,14 @@
   let labelLoading = $state(false);
   let labelError = $state("");
   let profileRef = $state<WorktreeRef | null>(null);
+  let profileConfig = $derived((profileRef && configs.get(profileRef.project)) ?? DEFAULT_CONFIG);
   let profileLoading = $state(false);
   let profileError = $state("");
   let showCreateDialog = $state(false);
+  /** Project the create dialog targets: the current one, or the parent's for
+   *  a sub-worktree. */
+  let createProject = $state("");
+  let createConfig = $derived(configs.get(createProject) ?? DEFAULT_CONFIG);
   let showSettingsDialog = $state(false);
   let ciDetailsPr = $state<PrEntry | null>(null);
   let commentReviewPr = $state<PrEntry | null>(null);
@@ -362,37 +364,36 @@
     | undefined = $state();
 
   let trimmedWorktreeSearch = $derived(searchQuery.trim());
-  let archivedWorktreeCount = $derived(worktrees.filter((w) => w.archived).length);
+  let allWorktrees = $derived(store.projects.flatMap((entry) => entry.worktrees));
+  let archivedWorktreeCount = $derived(allWorktrees.filter((w) => w.archived).length);
   let hiddenArchivedMatchCount = $derived(
-    showArchivedWorktrees ? 0 : countArchivedMatches(worktrees, trimmedWorktreeSearch),
+    showArchivedWorktrees ? 0 : countArchivedMatches(allWorktrees, trimmedWorktreeSearch),
   );
+  let worktreeSections = $derived(
+    buildWorktreeListSections(store.projects, {
+      query: trimmedWorktreeSearch,
+      showArchived: showArchivedWorktrees,
+      favorites: favoriteKeys,
+      collapsed: collapsedProjects,
+    }),
+  );
+  /** Rows on screen, across projects, minus those being removed. */
+  let navigableWorktrees = $derived(displayedWorktrees(worktreeSections).filter((w) => !store.removing.has(w)));
+  /** The current project's rows passing the filters (collapsed or not). */
   let visibleWorktrees = $derived(
-    sortFavoritesFirst(
-      filterWorktrees(worktrees, {
-        query: trimmedWorktreeSearch,
-        showArchived: showArchivedWorktrees,
-      }),
-      favoriteBranches,
-    ),
+    worktreeSections.find((section) => section.prefix === project)?.rows.map((row) => row.worktree) ?? [],
   );
-  let visibleWorktreeRows = $derived(buildWorktreeListRows(visibleWorktrees));
-  let creatingWorktrees = $derived(worktrees.filter((w) => w.creating));
-  let activeCreateCount = $derived(Math.max(pendingCreateCount, creatingWorktrees.length));
-  let selectableWorktrees = $derived(
-    visibleWorktrees.filter((w) => !removingBranches.has(w.branch)),
-  );
+  let creatingCount = $derived(allWorktrees.filter((w) => w.creating).length);
+  let activeCreateCount = $derived(Math.max(pendingCreateCount, creatingCount));
+  let selectableWorktrees = $derived(visibleWorktrees.filter((w) => !store.removing.has(w)));
   let createIndicatorLabel = $derived(
     activeCreateCount === 1 ? "Creating..." : `Creating ${activeCreateCount}...`,
   );
-  let selectedVisibleWorktree = $derived(
-    selectedBranch && !removingBranches.has(selectedBranch)
-      ? visibleWorktrees.find((w) => w.branch === selectedBranch)
-      : undefined,
-  );
   let selectedWorktree = $derived(
-    selectedBranch && !removingBranches.has(selectedBranch)
-      ? worktrees.find((w) => w.branch === selectedBranch)
-      : undefined,
+    selection.selected && !store.removing.has(selection.selected) ? store.find(selection.selected) : undefined,
+  );
+  let selectedVisibleWorktree = $derived(
+    selectedWorktree && visibleWorktrees.some((w) => w.branch === selectedWorktree.branch) ? selectedWorktree : undefined,
   );
   let labelWorktree = $derived(labelRef ? store.find(labelRef) : undefined);
   let profileWorktree = $derived(profileRef ? store.find(profileRef) : undefined);
@@ -400,8 +401,8 @@
   let showWebChat = $derived(useWebChatUi && canConnect && worktreeSupportsChat(selectedWorktree));
   // Tabs are only meaningful for the built-in terminal agents that have a forkable session.
   let showTabBar = $derived(canConnect && !showWebChat && worktreeSupportsTabs(selectedWorktree));
-  let isSelectedOpening = $derived(selectedBranch ? openingBranches.has(selectedBranch) : false);
-  let isSelectedArchiving = $derived(selectedBranch ? archivingBranches.has(selectedBranch) : false);
+  let isSelectedOpening = $derived(selectedBranch ? store.opening.has(refOf(selectedBranch)) : false);
+  let isSelectedArchiving = $derived(selectedBranch ? store.archiving.has(refOf(selectedBranch)) : false);
   let isSelectedAgentTerminalRefreshing = $derived(
     selectedBranch ? store.refreshingAgentTerminal.has(refOf(selectedBranch)) : false,
   );
@@ -415,9 +416,7 @@
       ? hiddenArchivedMatchCount > 0
         ? "Archived matches are hidden."
         : `No matches for "${trimmedWorktreeSearch}".`
-      : archivedWorktreeCount > 0 && !showArchivedWorktrees
-        ? "No active worktrees."
-        : "No worktrees found.",
+      : "No worktrees found.",
   );
 
   $effect(() => {
@@ -466,13 +465,21 @@
   });
 
   $effect(() => {
+    if (profileRef) configs.ensure(profileRef.project);
+  });
+
+  $effect(() => {
+    if (showCreateDialog) configs.ensure(createProject);
+  });
+
+  $effect(() => {
     linear.ensure(project);
   });
 
   $effect(() => {
     if (!showCreateDialog) return;
 
-    const targetProject = project;
+    const targetProject = createProject;
     const cached = availableBranchCache[getAvailableBranchCacheKey(targetProject, includeRemoteBranches)];
     if (cached) {
       availableBranches = cached;
@@ -503,7 +510,7 @@
   $effect(() => {
     if (!showCreateDialog) return;
 
-    const targetProject = project;
+    const targetProject = createProject;
     const cached = baseBranchCache[targetProject];
     if (cached) {
       baseBranches = cached;
@@ -547,16 +554,18 @@
   let showPaneBar = $derived(isMobile && canConnect && !showWebChat && paneBarPanes.length > 0);
 
   function openCreateDialog(issue: LinearIssue | null = null): void {
+    createProject = project;
     includeRemoteBranches = false;
     assignIssue = issue;
     lockedBaseBranch = null;
     showCreateDialog = true;
   }
 
-  function openSubworktreeDialog(parentBranch: string): void {
+  function openSubworktreeDialog(parent: WorktreeRef): void {
+    createProject = parent.project;
     includeRemoteBranches = false;
     assignIssue = null;
-    lockedBaseBranch = parentBranch;
+    lockedBaseBranch = parent.branch;
     showCreateDialog = true;
   }
 
@@ -565,14 +574,14 @@
   }
 
   async function handleCreate(request: CreateWorktreeRequest) {
-    const targetProject = project;
+    const targetProject = createProject;
     const requestId = nextCreateRequestId++;
     const shouldAutoSelectCreatedWorktree = selectedWorktree == null;
     const requestedAgentIds = request.agents && request.agents.length > 0
       ? request.agents
       : request.agent
         ? [request.agent]
-        : [config.defaultAgentId];
+        : [createConfig.defaultAgentId];
     const expectedCreatedCount = requestedAgentIds.length;
     if (shouldAutoSelectCreatedWorktree) {
       latestAutoSelectCreateId = requestId;
@@ -628,9 +637,10 @@
   }
 
   function selectNeighborOf(ref: WorktreeRef): void {
-    if (ref.project !== project || selectedBranch !== ref.branch) return;
-    const ordered = visibleWorktreeRows.map((row) => row.worktree.branch);
-    selection.selectBranch(neighborBranch(ordered, ref.branch, removingBranches));
+    if (!sameWorktree(ref, selection.selected)) return;
+    const ordered = displayedWorktrees(worktreeSections).map(worktreeKey);
+    const neighbor = neighborBranch(ordered, worktreeKey(ref), store.removing.keys);
+    selection.select(neighbor ? parseWorktreeKey(neighbor) : null);
   }
 
   function revealWorktreeInFilters(ref: WorktreeRef): void {
@@ -642,14 +652,22 @@
     if (trimmedWorktreeSearch && !matchesWorktreeSearch(worktree, trimmedWorktreeSearch)) {
       searchQuery = "";
     }
+    if (collapsedProjects.has(ref.project)) toggleProjectCollapsed(ref.project);
   }
 
-  function toggleFavoriteWorktree(branch: string): void {
-    const key = worktreeKey(refOf(branch));
+  function toggleFavoriteWorktree(ref: WorktreeRef): void {
+    const key = worktreeKey(ref);
     const next = new Set(favoriteKeys);
     if (!next.delete(key)) next.add(key);
     favoriteKeys = next;
     saveFavoriteWorktreeKeys(next);
+  }
+
+  function toggleProjectCollapsed(prefix: string): void {
+    const next = new Set(collapsedProjects);
+    if (!next.delete(prefix)) next.add(prefix);
+    collapsedProjects = next;
+    saveCollapsedProjects(next);
   }
 
   /** Select a worktree of any project (sidebar row, toast, bell): its project
@@ -661,10 +679,6 @@
     selection.select(target);
     notifications.markRead(target);
     if (isMobile) sidebarOpen = false;
-  }
-
-  function handleSelectWorktree(branch: string): void {
-    selectWorktree(refOf(branch));
   }
 
   function handleSwitchProject(next: string | null): void {
@@ -707,8 +721,8 @@
     }
   }
 
-  function openProfileDialog(branch: string): void {
-    profileRef = refOf(branch);
+  function openProfileDialog(ref: WorktreeRef): void {
+    profileRef = ref;
     profileError = "";
   }
 
@@ -788,8 +802,7 @@
     if (selectedBranch) void actions.open(refOf(selectedBranch));
   }
 
-  function handlePostToLinear(branch: string): void {
-    const ref = refOf(branch);
+  function handlePostToLinear(ref: WorktreeRef): void {
     if (store.postingLinear.has(ref)) return;
     const worktree = store.find(ref);
     if (!worktree?.linearIssue) {
@@ -820,9 +833,10 @@
 
     if (e.key === "ArrowUp" || e.key === "ArrowDown") {
       e.preventDefault();
-      const branches = selectableWorktrees.map((w) => w.branch);
-      const next = stepBranch(branches, selectedBranch, e.key === "ArrowUp" ? -1 : 1);
-      if (next !== selectedBranch) selection.selectBranch(next);
+      const keys = navigableWorktrees.map(worktreeKey);
+      const current = selection.selected ? worktreeKey(selection.selected) : null;
+      const next = stepBranch(keys, current, e.key === "ArrowUp" ? -1 : 1);
+      if (next !== current) selection.select(next ? parseWorktreeKey(next) : null);
     } else if (e.key === "k" || e.key === "K") {
       e.preventDefault();
       openCreateDialog();
@@ -957,29 +971,25 @@
           </div>
         </div>
       </div>
-      {#if worktreesError}
-        <p class="px-4 py-2 text-[11px] text-danger break-words" role="status">
-          Failed to load worktrees: {worktreesError}
-        </p>
-      {/if}
       <WorktreeList
-        rows={visibleWorktreeRows}
-        selected={selectedBranch}
-        removing={removingBranches}
-        initializing={openingBranches}
-        archiving={archivingBranches}
-        postingLinear={postingLinearBranches}
-        {notifiedBranches}
-        favorites={favoriteBranches}
+        sections={worktreeSections}
+        selected={selection.selected}
+        removing={store.removing.keys}
+        initializing={store.opening.keys}
+        archiving={store.archiving.keys}
+        postingLinear={store.postingLinear.keys}
+        notified={notifications.unreadWorktrees}
+        favorites={favoriteKeys}
         emptyMessage={worktreeListEmptyMessage}
-        onselect={handleSelectWorktree}
-        onclose={(b) => void actions.close(refOf(b))}
-        onarchive={(b) => void actions.toggleArchived(refOf(b))}
-        onremove={(b) => (removeRef = refOf(b))}
+        onselect={selectWorktree}
+        onclose={(ref) => void actions.close(ref)}
+        onarchive={(ref) => void actions.toggleArchived(ref)}
+        onremove={(ref) => (removeRef = ref)}
         oneditprofile={openProfileDialog}
         oncreatesubworktree={openSubworktreeDialog}
         ontogglefavorite={toggleFavoriteWorktree}
         onposttolinear={handlePostToLinear}
+        ontogglecollapsed={toggleProjectCollapsed}
       />
       {#if config.projectDir}
         <SidebarRepoRow
@@ -1169,11 +1179,11 @@
 
 {#if showCreateDialog}
   <CreateWorktreeDialog
-    profiles={config.profiles}
-    agents={config.agents}
-    defaultProfileName={config.defaultProfileName}
-    defaultAgentId={config.defaultAgentId}
-    autoNameEnabled={config.autoName}
+    profiles={createConfig.profiles}
+    agents={createConfig.agents}
+    defaultProfileName={createConfig.defaultProfileName}
+    defaultAgentId={createConfig.defaultAgentId}
+    autoNameEnabled={createConfig.autoName}
     initialBranch={assignIssue?.branchName ?? ""}
     initialPrompt={assignIssue ? `${assignIssue.title}${assignIssue.description ? '\n\n' + assignIssue.description : ''}` : ""}
     bind:includeRemoteBranches
@@ -1184,8 +1194,8 @@
     {baseBranchesLoading}
     {baseBranchesError}
     {lockedBaseBranch}
-    startupEnvs={config.startupEnvs ?? {}}
-    linearCreateTicketOption={config.linearCreateTicketOption}
+    startupEnvs={createConfig.startupEnvs ?? {}}
+    linearCreateTicketOption={createConfig.linearCreateTicketOption}
     openedFromLinearIssue={assignIssue !== null}
     oncreate={handleCreate}
     oncancel={() => { showCreateDialog = false; assignIssue = null; lockedBaseBranch = null; }}
@@ -1210,7 +1220,7 @@
 {#if profileRef && profileWorktree}
   <WorktreeProfileDialog
     branch={profileWorktree.branch}
-    profiles={config.profiles}
+    profiles={profileConfig.profiles}
     currentProfile={profileWorktree.profile}
     isOpen={profileWorktree.mux === "✓"}
     loading={profileLoading}
