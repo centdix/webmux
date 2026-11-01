@@ -9,6 +9,7 @@ import {
   AgentsSendMessageRequestSchema,
   hubApiPaths,
   projectApiPaths,
+  AllProjectWorktreesQuerySchema,
   AvailableBranchesQuerySchema,
   CreateWorktreeRequestSchema,
   NotificationIdParamsSchema,
@@ -74,7 +75,7 @@ import {
 } from "./services/project-init-service";
 import { isRecord, isStringArray } from "./lib/type-guards";
 import { parseJsonBody, parseParams, parseQuery } from "./api-validation";
-import { hasRecentDashboardActivity, touchDashboardActivity } from "./services/dashboard-activity";
+import { DashboardActivityTracker, FOCUSED_PR_SYNC_INTERVAL_MS } from "./services/dashboard-activity";
 import { NotificationHub } from "./services/notification-hub-service";
 import { buildArchivedWorktreePathSet, normalizeArchivePath } from "./services/archive-service";
 import { resolveAgentChatSupport, resolveAgentTerminalSubmitDelayMs } from "./services/agent-chat-service";
@@ -636,7 +637,6 @@ async function resolveAgentsTerminalWorktree(branch: string): Promise<{
 }
 
 async function apiGetNativeTerminalLaunch(branch: string): Promise<Response> {
-  touchDashboardActivity();
   ensureBranchNotBusy(branch);
   await reconciliationService.reconcile(PROJECT_DIR);
   const launch = buildNativeTerminalLaunch({
@@ -732,12 +732,10 @@ async function readProjectSnapshot(reconcileOptions: ReconcileOptions = {}): Pro
 // --- API handler functions (thin I/O layer, testable by injecting deps) ---
 
 async function apiGetProject(): Promise<Response> {
-  touchDashboardActivity();
   return jsonResponse(await readProjectSnapshot());
 }
 
 async function apiGetWorktrees(): Promise<Response> {
-  touchDashboardActivity();
   return jsonResponse({ worktrees: await readWorktrees() });
 }
 
@@ -921,7 +919,6 @@ async function sendClaudeStreamingMessage(input: {
 }
 
 async function apiAttachAgentsWorktree(branch: string): Promise<Response> {
-  touchDashboardActivity();
   const resolved = await resolveAgentsWorktree(branch);
   if (!resolved.ok) return resolved.response;
 
@@ -939,7 +936,6 @@ async function apiAttachAgentsWorktree(branch: string): Promise<Response> {
 }
 
 async function apiGetAgentsWorktreeHistory(branch: string): Promise<Response> {
-  touchDashboardActivity();
   const resolved = await resolveAgentsWorktree(branch);
   if (!resolved.ok) return resolved.response;
 
@@ -957,7 +953,6 @@ async function apiGetAgentsWorktreeHistory(branch: string): Promise<Response> {
 }
 
 async function apiSendAgentsWorktreeMessage(branch: string, req: Request): Promise<Response> {
-  touchDashboardActivity();
   await disarmOneshotIfArmed(branch, "agents-send-message");
   const parsed = await parseJsonBody(req, AgentsSendMessageRequestSchema);
   if (!parsed.ok) return parsed.response;
@@ -1021,7 +1016,6 @@ async function apiSendAgentsWorktreeMessage(branch: string, req: Request): Promi
 }
 
 async function apiInterruptAgentsWorktree(branch: string): Promise<Response> {
-  touchDashboardActivity();
   await disarmOneshotIfArmed(branch, "agents-interrupt");
   const resolved = await resolveAgentsWorktree(branch);
   if (!resolved.ok) return resolved.response;
@@ -1074,7 +1068,6 @@ async function apiInterruptAgentsWorktree(branch: string): Promise<Response> {
 }
 
 async function apiRefreshWorktreeAgentTerminal(branch: string): Promise<Response> {
-  touchDashboardActivity();
   return withMutatingTab(branch, async () => {
     await lifecycleService.refreshAgentTerminal(branch);
     return jsonResponse({ ok: true });
@@ -2420,9 +2413,17 @@ function parseAgentIdParam(params: Record<string, string>):
   // auto-create, oneshot watcher, auto-pull). Heavy work (reconciliation,
   // terminal attach) is on-demand and therefore already active-only.
   function startLight(): void {
-    // Display sync (PR/CI status shown in the dashboard) stays gated on dashboard
-    // activity -- that data is only needed while someone is looking.
-    stopPrMonitor = startPrMonitor(getWorktreeGitDirs, config.integrations.github.linkedRepos, PROJECT_DIR, prSyncState, undefined, hasRecentDashboardActivity);
+    // Display sync (PR/CI status shown in the dashboard) is gated on dashboard
+    // activity -- fast for the project being viewed, slow for the others,
+    // off with no dashboard. It ticks at the fast interval; the gate skips.
+    stopPrMonitor = startPrMonitor(
+      getWorktreeGitDirs,
+      config.integrations.github.linkedRepos,
+      PROJECT_DIR,
+      prSyncState,
+      FOCUSED_PR_SYNC_INTERVAL_MS,
+      dashboardActivity.prSyncGate(instancePrefix),
+    );
     // Auto-remove is headless maintenance: it must run even when the dashboard is
     // closed, so it gets its own ungated sweep instead of riding the display sync.
     stopAutoRemoveMonitor = startAutoRemoveMonitor(async () => {
@@ -2484,6 +2485,8 @@ function actualPort(server: Server<WsData>, requested: number): number {
 // served in this one process; an unknown prefix just falls through to the SPA.
 
 const apps = new Map<string, ProjectApp>();
+// Fed by dashboard polls of the hub listing; sets each project's PR sync cadence.
+const dashboardActivity = new DashboardActivityTracker();
 // Open WebSockets per project, so we can run their cleanup when a project is
 // removed and track whether a project is currently being viewed (`active`).
 const openSockets = new Map<string, Set<ServerWebSocket<WsData>>>();
@@ -2516,9 +2519,11 @@ function apiListProjects(): Response {
 
 /** Worktrees of every served project, for the cross-project sidebar. Idle
  *  projects reconcile on a long staleness window so polling stays cheap. */
-async function apiListAllProjectWorktrees(): Promise<Response> {
-  // Dashboard activity is process-wide: any open dashboard keeps PR/CI display sync running.
-  touchDashboardActivity();
+async function apiListAllProjectWorktrees(req: Request): Promise<Response> {
+  const parsed = parseQuery(req, AllProjectWorktreesQuerySchema);
+  if (!parsed.ok) return parsed.response;
+  // Only the dashboard sends `focus`; one-shot CLI listings don't count as activity.
+  if (parsed.data.focus !== undefined) dashboardActivity.touch(parsed.data.focus);
   const sources = manager.list().flatMap((p) => {
     const app = apps.get(p.prefix);
     if (!app) return [];
@@ -2709,7 +2714,7 @@ function buildServeRoutes(): ProjectRoutes {
       GET: () => apiListProjectInits(),
     },
     [hubApiPaths.fetchAllProjectWorktrees]: {
-      GET: () => catchingRoute("GET /api/projects/worktrees", () => apiListAllProjectWorktrees()),
+      GET: (req) => catchingRoute("GET /api/projects/worktrees", () => apiListAllProjectWorktrees(req)),
     },
     [hubApiPaths.migrateProjects]: {
       POST: (req) => catchingRoute("POST /api/projects/migrate", () => apiMigrateProjects(req)),

@@ -48,6 +48,7 @@ import {
   AutoNameConfigResponseSchema,
   InstancesResponseSchema,
   ProjectsResponseSchema,
+  AllProjectWorktreesQuerySchema,
   AllProjectWorktreesResponseSchema,
   AddProjectRequestSchema,
   AddProjectResponseSchema,
@@ -555,8 +556,10 @@ export const hubContract = c.router({
   fetchAllProjectWorktrees: {
     method: "GET",
     path: hubApiPaths.fetchAllProjectWorktrees,
+    query: AllProjectWorktreesQuerySchema,
     responses: {
       200: AllProjectWorktreesResponseSchema,
+      400: ErrorResponseSchema,
       500: ErrorResponseSchema,
     },
   },

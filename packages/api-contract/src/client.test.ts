@@ -118,10 +118,12 @@ describe("createHubApi", () => {
     });
 
     await api.fetchAllProjectWorktrees();
+    await api.fetchAllProjectWorktrees({ query: { focus: "webmux" } });
     await api.removeProject({ params: { prefix: "webmux" } });
 
     expect(paths).toEqual([
       "https://example.com/api/projects/worktrees",
+      "https://example.com/api/projects/worktrees?focus=webmux",
       "https://example.com/api/projects/webmux",
     ]);
   });

@@ -661,6 +661,13 @@ export const ProjectWorktreesSchema = z.object({
   error: z.string().nullable(),
 });
 
+/** `focus` is the project the dashboard is showing. Only a dashboard poll sends
+ *  it, and only such a poll counts as dashboard activity (which drives the
+ *  per-project PR polling cadence); one-shot CLI listings omit it. */
+export const AllProjectWorktreesQuerySchema = z.object({
+  focus: z.string().min(1).optional(),
+});
+
 export const AllProjectWorktreesResponseSchema = z.object({
   projects: z.array(ProjectWorktreesSchema),
 });
@@ -722,6 +729,7 @@ export const MigrateProjectsResponseSchema = z.object({
 export type ProjectSummary = z.infer<typeof ProjectSummarySchema>;
 export type ProjectsResponse = z.infer<typeof ProjectsResponseSchema>;
 export type ProjectWorktrees = z.infer<typeof ProjectWorktreesSchema>;
+export type AllProjectWorktreesQuery = z.infer<typeof AllProjectWorktreesQuerySchema>;
 export type AllProjectWorktreesResponse = z.infer<typeof AllProjectWorktreesResponseSchema>;
 export type AddProjectRequest = z.infer<typeof AddProjectRequestSchema>;
 export type AddProjectResponse = z.infer<typeof AddProjectResponseSchema>;
