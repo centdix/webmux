@@ -168,6 +168,15 @@ import { WorktreeSelection } from "./lib/worktree-selection.svelte";
 const PROJECT = "webmux";
 const api = projectApi(PROJECT);
 
+/** Project a call on the shared mock client targeted: the shared client hides
+ *  it, so read it from the projectApi call made just before. */
+function projectOfFirstCall(fn: (...args: never[]) => unknown): string | undefined {
+  const calledAt = vi.mocked(fn).mock.invocationCallOrder[0] ?? 0;
+  const projectCalls = vi.mocked(projectApi).mock;
+  const lastBefore = projectCalls.invocationCallOrder.findLastIndex((order) => order < calledAt);
+  return projectCalls.calls[lastBefore]?.[0];
+}
+
 function renderApp(): void {
   render(App, { props: { selection: new WorktreeSelection(PROJECT), onNoProjects: vi.fn() } });
 }
@@ -820,11 +829,131 @@ describe("App create selection", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => expect(api.createWorktree).toHaveBeenCalled());
-    // The shared mock client hides the target, so read it from the projectApi call made just before.
-    const createdAt = vi.mocked(api.createWorktree).mock.invocationCallOrder[0] ?? 0;
-    const projectCalls = vi.mocked(projectApi).mock;
-    const lastBefore = projectCalls.invocationCallOrder.findLastIndex((order) => order < createdAt);
-    expect(projectCalls.calls[lastBefore]).toEqual(["docs"]);
+    expect(projectOfFirstCall(api.createWorktree)).toBe("docs");
+  });
+
+  it("opens the sub-worktree dialog only once the row's project config has loaded", async () => {
+    useThreeProjects();
+    const docsConfig = deferred<AppConfig>();
+    vi.mocked(api.fetchConfig).mockImplementation(() =>
+      vi.mocked(projectApi).mock.lastCall?.[0] === "docs" ? docsConfig.promise : Promise.resolve(createConfig()),
+    );
+
+    renderApp();
+    await screen.findByTitle("main");
+    const docs = screen.getByRole("region", { name: "docs" });
+    await fireEvent.click(within(docs).getByRole("button", { name: /actions for feature\/doc/i }));
+    await fireEvent.click(within(docs).getByRole("button", { name: "Create sub-worktree" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByText("New Sub-Worktree")).not.toBeInTheDocument();
+
+    docsConfig.resolve(createConfig({ startupEnvs: { DOCS_ENV: "preview" } }));
+
+    expect(await screen.findByText("New Sub-Worktree")).toBeInTheDocument();
+    expect(screen.getByLabelText("DOCS_ENV")).toHaveValue("preview");
+  });
+
+  it("drops a pending sub-worktree dialog with a toast when its project config fails to load", async () => {
+    useThreeProjects();
+    vi.mocked(api.fetchConfig).mockImplementation(() =>
+      vi.mocked(projectApi).mock.lastCall?.[0] === "docs"
+        ? Promise.reject(new Error("offline"))
+        : Promise.resolve(createConfig()),
+    );
+
+    renderApp();
+    await screen.findByTitle("main");
+    const docs = screen.getByRole("region", { name: "docs" });
+    await fireEvent.click(within(docs).getByRole("button", { name: /actions for feature\/doc/i }));
+    await fireEvent.click(within(docs).getByRole("button", { name: "Create sub-worktree" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Failed to load the docs config: offline");
+    expect(screen.queryByText("New Sub-Worktree")).not.toBeInTheDocument();
+  });
+
+  it("closes, archives and removes another project's row through that project's API", async () => {
+    useThreeProjects();
+    otherProjects.list[1] = {
+      ...otherProjects.list[1]!,
+      worktrees: [createWorktree("feature/doc", { project: "docs", mux: "✓" })],
+    };
+
+    renderApp();
+    await screen.findByTitle("main");
+    async function runRowAction(label: string): Promise<void> {
+      const docs = screen.getByRole("region", { name: "docs" });
+      await fireEvent.click(within(docs).getByRole("button", { name: /actions for feature\/doc/i }));
+      await fireEvent.click(within(docs).getByRole("button", { name: label }));
+    }
+
+    await runRowAction("Close");
+    await waitFor(() => expect(api.closeWorktree).toHaveBeenCalledWith({ params: { name: "feature/doc" } }));
+    expect(projectOfFirstCall(api.closeWorktree)).toBe("docs");
+
+    await runRowAction("Archive");
+    await waitFor(() => expect(api.setWorktreeArchived).toHaveBeenCalled());
+    expect(projectOfFirstCall(api.setWorktreeArchived)).toBe("docs");
+
+    await runRowAction("Remove");
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent('Remove worktree "feature/doc" from docs?');
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(api.removeWorktree).toHaveBeenCalledWith({ params: { name: "feature/doc" } }));
+    expect(projectOfFirstCall(api.removeWorktree)).toBe("docs");
+  });
+
+  it("expands a collapsed project when the restored selection lands in it", async () => {
+    useThreeProjects();
+    localStorage.setItem("wt-collapsed-projects", JSON.stringify([PROJECT, "docs"]));
+    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "feature/web");
+
+    renderApp();
+
+    expect(await screen.findByTitle("feature/web")).toBeInTheDocument();
+    const header = within(screen.getByRole("region", { name: PROJECT })).getByRole("button", { name: /^webmux/ });
+    await waitFor(() => expect(header).toHaveAttribute("aria-expanded", "true"));
+    expect(screen.getByRole("button", { name: /^feature\/web\b/i })).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "docs" })).getByRole("button", { name: /^docs/ }))
+      .toHaveAttribute("aria-expanded", "false");
+  });
+
+  async function selectThenCollapse(project: string, branch: string): Promise<void> {
+    const region = screen.getByRole("region", { name: project });
+    await fireEvent.click(within(region).getByRole("button", { name: new RegExp(`^${branch}\\b`, "i") }));
+    await waitFor(() => expect(window.location.hash).toBe(`#${project}/${branch}`));
+    await fireEvent.click(within(region).getByRole("button", { name: new RegExp(`^${project}`) }));
+    expect(within(region).queryByRole("button", { name: new RegExp(`^${branch}\\b`, "i") })).not.toBeInTheDocument();
+  }
+
+  it("steps from a selection the user collapsed to the rows around its project", async () => {
+    useThreeProjects();
+
+    renderApp();
+    await screen.findByTitle("main");
+    await selectThenCollapse("images", "main");
+
+    await fireEvent.keyDown(window, { key: "ArrowUp", metaKey: true });
+    await waitFor(() => expect(window.location.hash).toBe(`#${PROJECT}/feature/web`));
+    expect(within(screen.getByRole("region", { name: "images" })).getByRole("button", { name: /^images/ }))
+      .toHaveAttribute("aria-expanded", "false");
+
+    await selectThenCollapse("webmux", "feature/web");
+    await fireEvent.keyDown(window, { key: "ArrowDown", metaKey: true });
+    await waitFor(() => expect(window.location.hash).toBe("#docs/feature/doc"));
+  });
+
+  it("selects the row above a removed worktree hidden in a collapsed project", async () => {
+    useThreeProjects();
+
+    renderApp();
+    await screen.findByTitle("main");
+    await selectThenCollapse("images", "main");
+
+    await fireEvent.keyDown(window, { key: "d", metaKey: true });
+    await fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Remove" }));
+
+    await waitFor(() => expect(api.removeWorktree).toHaveBeenCalledWith({ params: { name: "main" } }));
+    await waitFor(() => expect(window.location.hash).toBe(`#${PROJECT}/feature/web`));
   });
 
   it("keeps the current selection when a new worktree is created from an existing selection", async () => {

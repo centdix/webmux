@@ -52,8 +52,8 @@
   import {
     buildWorktreeListSections,
     countArchivedMatches,
-    displayedWorktrees,
     matchesWorktreeSearch,
+    navigationKeys,
   } from "./lib/worktree-list";
   import { supportsWorktreeChat, supportsWorktreeTabs } from "./lib/agent-capabilities";
   import { getTheme } from "./lib/themes";
@@ -93,7 +93,15 @@
   const LINEAR_THROTTLE_MS = 300_000;
   const CONFIG_MAX_AGE_MS = 60_000;
 
-  const configs = new ProjectCache<AppConfig>((p) => projectApi(p).fetchConfig(), { maxAgeMs: CONFIG_MAX_AGE_MS });
+  const configs = new ProjectCache<AppConfig>((p) => projectApi(p).fetchConfig(), {
+    maxAgeMs: CONFIG_MAX_AGE_MS,
+    // A create dialog waiting on this config would otherwise never open.
+    onError: (p, err) => {
+      if (!showCreateDialog || p !== createProject || configs.get(p)) return;
+      closeCreateDialog();
+      showToast({ tone: "error", message: `Failed to load the ${store.nameOf(p) ?? p} config: ${errorMessage(err)}` });
+    },
+  });
   const linear = new ProjectCache<LinearIssuesResponse>((p) => projectApi(p).fetchLinearIssues(), {
     maxAgeMs: LINEAR_THROTTLE_MS,
     onError: (_project, err) => console.warn("[linear]", err),
@@ -158,6 +166,9 @@
    *  a sub-worktree. */
   let createProject = $state("");
   let createConfig = $derived(configs.get(createProject) ?? DEFAULT_CONFIG);
+  /** The dialog reads the profiles and startup envs once at mount, so it
+   *  opens only once its project's config has loaded. */
+  let createDialogOpen = $derived(showCreateDialog && configs.get(createProject) !== undefined);
   let showSettingsDialog = $state(false);
   let ciDetailsPr = $state<PrEntry | null>(null);
   let commentReviewPr = $state<PrEntry | null>(null);
@@ -378,7 +389,9 @@
     }),
   );
   /** Rows on screen, across projects, minus those being removed. */
-  let navigableWorktrees = $derived(displayedWorktrees(worktreeSections).filter((w) => !store.removing.has(w)));
+  let navigableKeys = $derived(
+    navigationKeys(worktreeSections, selection.selected).filter((key) => !store.removing.keys.has(key)),
+  );
   /** The current project's rows passing the filters (collapsed or not). */
   let visibleWorktrees = $derived(
     worktreeSections.find((section) => section.prefix === project)?.rows.map((row) => row.worktree) ?? [],
@@ -452,6 +465,18 @@
 
   $effect(() => {
     store.setPollInterval(pollIntervalMs);
+  });
+
+  // A selection restored or auto-picked inside a collapsed project expands it;
+  // collapsing the selected worktree's project by hand leaves it collapsed.
+  let selectedWorktreeKey = $derived(selectedWorktree ? worktreeKey(selectedWorktree) : null);
+  $effect(() => {
+    if (!selectedWorktreeKey) return;
+    untrack(() => {
+      if (selectedWorktree && collapsedProjects.has(selectedWorktree.project)) {
+        toggleProjectCollapsed(selectedWorktree.project);
+      }
+    });
   });
 
   $effect(() => {
@@ -569,6 +594,12 @@
     showCreateDialog = true;
   }
 
+  function closeCreateDialog(): void {
+    showCreateDialog = false;
+    assignIssue = null;
+    lockedBaseBranch = null;
+  }
+
   function handleAssignIssue(issue: LinearIssue): void {
     openCreateDialog(issue);
   }
@@ -638,7 +669,7 @@
 
   function selectNeighborOf(ref: WorktreeRef): void {
     if (!sameWorktree(ref, selection.selected)) return;
-    const ordered = displayedWorktrees(worktreeSections).map(worktreeKey);
+    const ordered = navigationKeys(worktreeSections, ref);
     const neighbor = neighborBranch(ordered, worktreeKey(ref), store.removing.keys);
     selection.select(neighbor ? parseWorktreeKey(neighbor) : null);
   }
@@ -826,16 +857,15 @@
 
   function handleKeydown(e: KeyboardEvent) {
     // Ignore shortcuts when a dialog is open (let dialog handle its own keys)
-    if (showCreateDialog || removeRef || pullMainConfirm || pullLinkedRepoAlias || postToLinkedConfirm) return;
+    if (createDialogOpen || removeRef || pullMainConfirm || pullLinkedRepoAlias || postToLinkedConfirm) return;
 
     const mod = e.metaKey || e.ctrlKey;
     if (!mod) return;
 
     if (e.key === "ArrowUp" || e.key === "ArrowDown") {
       e.preventDefault();
-      const keys = navigableWorktrees.map(worktreeKey);
       const current = selection.selected ? worktreeKey(selection.selected) : null;
-      const next = stepBranch(keys, current, e.key === "ArrowUp" ? -1 : 1);
+      const next = stepBranch(navigableKeys, current, e.key === "ArrowUp" ? -1 : 1);
       if (next !== current) selection.select(next ? parseWorktreeKey(next) : null);
     } else if (e.key === "k" || e.key === "K") {
       e.preventDefault();
@@ -1177,7 +1207,7 @@
   </main>
 </div>
 
-{#if showCreateDialog}
+{#if createDialogOpen}
   <CreateWorktreeDialog
     profiles={createConfig.profiles}
     agents={createConfig.agents}
@@ -1198,7 +1228,7 @@
     linearCreateTicketOption={createConfig.linearCreateTicketOption}
     openedFromLinearIssue={assignIssue !== null}
     oncreate={handleCreate}
-    oncancel={() => { showCreateDialog = false; assignIssue = null; lockedBaseBranch = null; }}
+    oncancel={closeCreateDialog}
   />
 {/if}
 
@@ -1235,7 +1265,7 @@
 
 {#if removeRef}
   <ConfirmDialog
-    message={`Remove worktree "${removeRef.branch}"? This action cannot be undone.`}
+    message={`Remove worktree "${removeRef.branch}" from ${store.nameOf(removeRef.project) ?? removeRef.project}? This action cannot be undone.`}
     onconfirm={handleRemove}
     oncancel={() => (removeRef = null)}
   />
