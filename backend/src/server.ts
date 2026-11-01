@@ -2539,7 +2539,12 @@ async function apiListAllProjectWorktrees(req: Request): Promise<Response> {
     const app = apps.get(p.prefix);
     if (!app) return [];
     const reconcileOptions = hubReconcileOptions(p.active);
-    return [{ prefix: p.prefix, name: p.entry.name, readWorktrees: () => app.readWorktrees(reconcileOptions) }];
+    return [{
+      prefix: p.prefix,
+      name: p.entry.name,
+      readWorktrees: () => app.readWorktrees(reconcileOptions),
+      isServed: () => apps.get(p.prefix) === app,
+    }];
   });
   const projects = await listAllProjectWorktrees(parsed.data.focus, sources, dashboardActivity);
   for (const project of projects) {

@@ -12,8 +12,8 @@ import { DashboardActivityTracker } from "../services/dashboard-activity";
 describe("all-projects-worktrees-service", () => {
   it("returns each project's worktrees in input order", async () => {
     const result = await collectAllProjectWorktrees([
-      { prefix: "a", name: "Alpha", readWorktrees: async () => { await Bun.sleep(5); return ["a1", "a2"]; } },
-      { prefix: "b", name: "Beta", readWorktrees: async () => ["b1"] },
+      { prefix: "a", name: "Alpha", readWorktrees: async () => { await Bun.sleep(5); return ["a1", "a2"]; }, isServed: () => true },
+      { prefix: "b", name: "Beta", readWorktrees: async () => ["b1"], isServed: () => true },
     ]);
     expect(result).toEqual([
       { prefix: "a", name: "Alpha", worktrees: ["a1", "a2"], error: null },
@@ -23,8 +23,8 @@ describe("all-projects-worktrees-service", () => {
 
   it("reports a failing project as an error entry while others succeed", async () => {
     const result = await collectAllProjectWorktrees([
-      { prefix: "a", name: "Alpha", readWorktrees: async () => { throw new Error("git exploded"); } },
-      { prefix: "b", name: "Beta", readWorktrees: async () => ["b1"] },
+      { prefix: "a", name: "Alpha", readWorktrees: async () => { throw new Error("git exploded"); }, isServed: () => true },
+      { prefix: "b", name: "Beta", readWorktrees: async () => ["b1"], isServed: () => true },
     ]);
     expect(result).toEqual([
       { prefix: "a", name: "Alpha", worktrees: [], error: "git exploded" },
@@ -34,7 +34,7 @@ describe("all-projects-worktrees-service", () => {
 
   it("stringifies a non-Error rejection", async () => {
     const result = await collectAllProjectWorktrees<string>([
-      { prefix: "a", name: "Alpha", readWorktrees: () => Promise.reject("plain failure") },
+      { prefix: "a", name: "Alpha", readWorktrees: () => Promise.reject("plain failure"), isServed: () => true },
     ]);
     expect(result).toEqual([{ prefix: "a", name: "Alpha", worktrees: [], error: "plain failure" }]);
   });
@@ -44,6 +44,24 @@ describe("all-projects-worktrees-service", () => {
     expect(hubReconcileOptions(false)).toEqual({ freshnessMs: IDLE_PROJECT_RECONCILE_FRESHNESS_MS });
   });
 
+  it("drops a project removed while its worktrees were being read", async () => {
+    let served = true;
+    const result = await collectAllProjectWorktrees([
+      { prefix: "a", name: "Alpha", readWorktrees: async () => ["a1"], isServed: () => true },
+      {
+        prefix: "gone",
+        name: "Gone",
+        readWorktrees: async () => {
+          await Bun.sleep(5);
+          served = false;
+          return ["g1"];
+        },
+        isServed: () => served,
+      },
+    ]);
+    expect(result.map((p) => p.prefix)).toEqual(["a"]);
+  });
+
   it("returns an empty list when there are no projects", async () => {
     expect(await collectAllProjectWorktrees<string>([])).toEqual([]);
   });
@@ -51,8 +69,8 @@ describe("all-projects-worktrees-service", () => {
 
 describe("listAllProjectWorktrees", () => {
   const sources = [
-    { prefix: "a", name: "Alpha", readWorktrees: async () => ["a1"] },
-    { prefix: "b", name: "Beta", readWorktrees: async () => ["b1"] },
+    { prefix: "a", name: "Alpha", readWorktrees: async () => ["a1"], isServed: () => true },
+    { prefix: "b", name: "Beta", readWorktrees: async () => ["b1"], isServed: () => true },
   ];
 
   it("records a poll without focus as visible activity for every project", async () => {

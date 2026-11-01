@@ -1,5 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
+  import { MediaQuery } from "svelte/reactivity";
   import type { ProjectListRows, WorktreeInfo, WorktreeListRow, WorktreeRef } from "./types";
   import AgentStatusCount from "./AgentStatusCount.svelte";
   import Btn from "./Btn.svelte";
@@ -63,7 +64,7 @@
     postingLinear: ReadonlySet<string>;
     notified: ReadonlySet<string>;
     favorites: ReadonlySet<string>;
-    /** Touch: ⋯ on every row, as long-press doesn't open the menu everywhere. */
+    /** Mobile layout: ⋯ on every row, as long-press doesn't open the menu everywhere. */
     isMobile?: boolean;
     onselect: (ref: WorktreeRef) => void;
     ontogglearchived: () => void;
@@ -80,6 +81,10 @@
     ontogglefavorite: (ref: WorktreeRef) => void;
     onposttolinear?: (ref: WorktreeRef) => void;
   } = $props();
+
+  // A touch device of any width (iPad) has no hover or right-click either.
+  const touchDevice = new MediaQuery("(hover: none), (pointer: coarse)");
+  let menuOnEveryRow = $derived(isMobile || touchDevice.current);
 
   let selectedKey = $derived(selected ? worktreeKey(selected) : null);
   /** Rows on screen, top to bottom. */
@@ -362,7 +367,7 @@
         {#if favorites.has(key)}<span class="shrink-0 text-[10px] text-warning/80" aria-hidden="true">★</span>{/if}
         {#if pr}<PrMark {pr} />{/if}
       </button>
-      {#if isActive || isMobile}
+      {#if isActive || menuOnEveryRow}
         <IconBtn
           icon="more"
           label="Actions for {wt.branch}"

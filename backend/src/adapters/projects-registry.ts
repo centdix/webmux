@@ -19,23 +19,36 @@ function defaultRegistryFile(): string {
   return join(webmuxRuntimeStateDir(), "projects.json");
 }
 
+export type ProjectsRegistryReadResult =
+  | { ok: true; entries: ProjectEntry[] }
+  | { ok: false; error: string };
+
+/** Strict read: a missing file is an empty registry, but an unreadable or
+ *  malformed one is reported instead of being treated as empty. */
+export function readProjectsRegistryFile(file: string = defaultRegistryFile()): ProjectsRegistryReadResult {
+  let raw: string;
+  try {
+    raw = readFileSync(file, "utf8");
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return { ok: true, entries: [] };
+    return { ok: false, error: `Cannot read ${file}: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    return { ok: false, error: `Invalid JSON in ${file}: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  if (!Array.isArray(parsed)) return { ok: false, error: `Invalid ${file}: expected a JSON array` };
+  return { ok: true, entries: parsed.filter(isProjectEntry) };
+}
+
 export function createProjectsRegistry(file: string = defaultRegistryFile()): ProjectsRegistry {
   function read(): ProjectEntry[] {
-    let raw: string;
-    try {
-      raw = readFileSync(file, "utf8");
-    } catch {
-      return [];
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      log.debug(`[projects-registry] ignoring malformed ${file}`);
-      return [];
-    }
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isProjectEntry);
+    const result = readProjectsRegistryFile(file);
+    if (result.ok) return result.entries;
+    log.debug(`[projects-registry] ignoring ${result.error}`);
+    return [];
   }
 
   function write(entries: ProjectEntry[]): void {
