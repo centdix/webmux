@@ -74,7 +74,7 @@ export interface WorktreeOrderFields {
   branch: string;
   /** Still being created: listed first so it does not move when it gets its name. */
   creating: boolean;
-  /** Has a live session, or is still being created (it is about to have one). */
+  /** Has a live session. */
   open: boolean;
   prStates: readonly PrEntry["state"][];
 }

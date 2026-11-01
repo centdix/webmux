@@ -113,7 +113,7 @@ function orderFieldsOf(worktree: WorktreeSnapshot): WorktreeOrderFields {
   return {
     branch: worktree.branch,
     creating: worktree.creation !== null,
-    open: worktree.mux || worktree.creation !== null,
+    open: worktree.mux,
     prStates: worktree.prs.map((pr) => pr.state),
   };
 }
