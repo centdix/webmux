@@ -661,11 +661,11 @@ export const ProjectWorktreesSchema = z.object({
   error: z.string().nullable(),
 });
 
-/** `focus` is the project the dashboard is showing. Only a dashboard poll sends
- *  it, and only such a poll counts as dashboard activity (which drives the
- *  per-project PR polling cadence); one-shot CLI listings omit it. */
+/** Only the dashboard polls this listing, so every call counts as dashboard
+ *  activity (which drives the per-project PR polling cadence). `focus` is the
+ *  project the dashboard is showing; an empty or unknown prefix is ignored. */
 export const AllProjectWorktreesQuerySchema = z.object({
-  focus: z.string().min(1).optional(),
+  focus: z.string().optional(),
 });
 
 export const AllProjectWorktreesResponseSchema = z.object({

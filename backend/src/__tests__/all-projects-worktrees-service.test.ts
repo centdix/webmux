@@ -1,9 +1,13 @@
 import { describe, expect, it } from "bun:test";
+import { AllProjectWorktreesQuerySchema } from "@webmux/api-contract";
+import { parseQuery } from "../api-validation";
 import {
   collectAllProjectWorktrees,
   hubReconcileOptions,
   IDLE_PROJECT_RECONCILE_FRESHNESS_MS,
+  listAllProjectWorktrees,
 } from "../services/all-projects-worktrees-service";
+import { DashboardActivityTracker } from "../services/dashboard-activity";
 
 describe("all-projects-worktrees-service", () => {
   it("returns each project's worktrees in input order", async () => {
@@ -42,5 +46,40 @@ describe("all-projects-worktrees-service", () => {
 
   it("returns an empty list when there are no projects", async () => {
     expect(await collectAllProjectWorktrees<string>([])).toEqual([]);
+  });
+});
+
+describe("listAllProjectWorktrees", () => {
+  const sources = [
+    { prefix: "a", name: "Alpha", readWorktrees: async () => ["a1"] },
+    { prefix: "b", name: "Beta", readWorktrees: async () => ["b1"] },
+  ];
+
+  it("records a poll without focus as visible activity for every project", async () => {
+    const tracker = new DashboardActivityTracker();
+    const result = await listAllProjectWorktrees(undefined, sources, tracker);
+    expect(result.map((p) => p.prefix)).toEqual(["a", "b"]);
+    expect(tracker.activityOf("a")).toBe("visible");
+    expect(tracker.activityOf("b")).toBe("visible");
+  });
+
+  it("marks the focused project focused", async () => {
+    const tracker = new DashboardActivityTracker();
+    await listAllProjectWorktrees("a", sources, tracker);
+    expect(tracker.activityOf("a")).toBe("focused");
+    expect(tracker.activityOf("b")).toBe("visible");
+  });
+
+  it("accepts an empty focus query instead of rejecting the listing", () => {
+    const parsed = parseQuery(new Request("http://localhost/api/projects/worktrees?focus="), AllProjectWorktreesQuerySchema);
+    expect(parsed.ok && parsed.data).toEqual({ focus: "" });
+  });
+
+  it.each(["", "unknown"])("lists everything and focuses nothing for focus %p", async (focus) => {
+    const tracker = new DashboardActivityTracker();
+    const result = await listAllProjectWorktrees(focus, sources, tracker);
+    expect(result).toHaveLength(2);
+    expect(tracker.activityOf(focus)).toBe("visible");
+    expect(tracker.activityOf("a")).toBe("visible");
   });
 });

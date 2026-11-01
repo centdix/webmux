@@ -126,7 +126,7 @@ import {
 } from "./services/agents-ui-stream-service";
 import { classifyAgentsTerminalWorktreeError } from "./services/agents-ui-action-service";
 import { buildProjectSnapshot } from "./services/snapshot-service";
-import { collectAllProjectWorktrees, hubReconcileOptions } from "./services/all-projects-worktrees-service";
+import { hubReconcileOptions, listAllProjectWorktrees } from "./services/all-projects-worktrees-service";
 import type { ReconcileOptions } from "./services/reconciliation-service";
 import {
   ClaudeConversationService,
@@ -2522,15 +2522,13 @@ function apiListProjects(): Response {
 async function apiListAllProjectWorktrees(req: Request): Promise<Response> {
   const parsed = parseQuery(req, AllProjectWorktreesQuerySchema);
   if (!parsed.ok) return parsed.response;
-  // Only the dashboard sends `focus`; one-shot CLI listings don't count as activity.
-  if (parsed.data.focus !== undefined) dashboardActivity.touch(parsed.data.focus);
   const sources = manager.list().flatMap((p) => {
     const app = apps.get(p.prefix);
     if (!app) return [];
     const reconcileOptions = hubReconcileOptions(p.active);
     return [{ prefix: p.prefix, name: p.entry.name, readWorktrees: () => app.readWorktrees(reconcileOptions) }];
   });
-  const projects = await collectAllProjectWorktrees(sources);
+  const projects = await listAllProjectWorktrees(parsed.data.focus, sources, dashboardActivity);
   for (const project of projects) {
     if (project.error !== null) {
       log.warn(`[projects-worktrees] ${project.prefix}: ${project.error}`);

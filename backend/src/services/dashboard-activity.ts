@@ -51,15 +51,15 @@ export class DashboardActivityTracker {
 
   constructor(private readonly now: () => number = Date.now) {}
 
-  /** A dashboard polled while showing `focus`. Expired focuses are dropped
-   *  so the map only holds what was focused within the timeout. */
-  touch(focus: string): void {
+  /** A dashboard polled, showing `focus` if given. Expired focuses are
+   *  dropped so the map only holds what was focused within the timeout. */
+  touch(focus?: string): void {
     const now = this.now();
     this.lastSeenAt = now;
     for (const [prefix, at] of this.focusedAt) {
       if (now - at >= DASHBOARD_ACTIVITY_TIMEOUT_MS) this.focusedAt.delete(prefix);
     }
-    this.focusedAt.set(focus, now);
+    if (focus !== undefined) this.focusedAt.set(focus, now);
   }
 
   activityOf(prefix: string): ProjectActivity {

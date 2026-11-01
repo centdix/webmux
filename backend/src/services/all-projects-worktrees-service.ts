@@ -1,3 +1,4 @@
+import type { DashboardActivityTracker } from "./dashboard-activity";
 import type { ReconcileOptions } from "./reconciliation-service";
 
 /** Idle projects (no open socket) still need dirty/ahead, tmux state and
@@ -42,4 +43,16 @@ export async function collectAllProjectWorktrees<T>(
           error: result.reason instanceof Error ? result.reason.message : String(result.reason),
         };
   });
+}
+
+/** The hub listing behind the dashboard's poll. Only the dashboard calls it,
+ *  so every call counts as dashboard activity; `focus` marks that project
+ *  focused unless it isn't one of `projects` (empty or unknown: ignored). */
+export async function listAllProjectWorktrees<T>(
+  focus: string | undefined,
+  projects: ProjectWorktreesSource<T>[],
+  activity: Pick<DashboardActivityTracker, "touch">,
+): Promise<ProjectWorktreesResult<T>[]> {
+  activity.touch(projects.some((project) => project.prefix === focus) ? focus : undefined);
+  return collectAllProjectWorktrees(projects);
 }

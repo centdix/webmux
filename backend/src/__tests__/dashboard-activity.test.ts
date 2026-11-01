@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { join } from "node:path";
 import {
   DASHBOARD_ACTIVITY_TIMEOUT_MS,
   DashboardActivityTracker,
@@ -118,6 +119,13 @@ describe("DashboardActivityTracker", () => {
     expect(gate()).toBe(false);
   });
 
+  it("counts a poll without focus as dashboard activity, focusing nothing", () => {
+    const { tracker } = setup();
+    tracker.touch();
+    expect(tracker.activityOf("a")).toBe("visible");
+    expect(tracker.prSyncGate("a")()).toBe(true);
+  });
+
   it("keeps every tab's focus when several dashboards focus different projects", () => {
     const { tracker, advance } = setup();
     tracker.touch("a");
@@ -126,5 +134,20 @@ describe("DashboardActivityTracker", () => {
     expect(tracker.activityOf("a")).toBe("focused");
     expect(tracker.activityOf("b")).toBe("focused");
     expect(tracker.activityOf("c")).toBe("visible");
+  });
+});
+
+describe("server.ts PR sync wiring", () => {
+  const serverPath = join(import.meta.dir, "..", "server.ts");
+
+  it("ticks each project's PR monitor at the focused interval behind its own activity gate", async () => {
+    const source = await Bun.file(serverPath).text();
+    const pattern = /startPrMonitor\([\s\S]*?FOCUSED_PR_SYNC_INTERVAL_MS,\s*dashboardActivity\.prSyncGate\(instancePrefix\),\s*\)/;
+    expect(pattern.test(source)).toBe(true);
+  });
+
+  it("records every hub worktree poll as dashboard activity", async () => {
+    const source = await Bun.file(serverPath).text();
+    expect(source.includes("listAllProjectWorktrees(parsed.data.focus, sources, dashboardActivity)")).toBe(true);
   });
 });
