@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { WorktreeInfo } from "../../lib/types";
-  import { buildWorktreeListSections } from "../../lib/worktree-list";
+  import { buildWorktreeListSections } from "../sections";
   import {
     attentionOf,
     displayName,
