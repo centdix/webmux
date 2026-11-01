@@ -65,6 +65,24 @@ describe("ProjectCache", () => {
     expect(cache.get("alpha")).toBe("fresh");
   });
 
+  it("update during an in-flight load wins", async () => {
+    let resolveStale!: (value: { agents: number }) => void;
+    const load = vi.fn<(project: string) => Promise<{ agents: number }>>()
+      .mockResolvedValueOnce({ agents: 1 })
+      .mockReturnValueOnce(new Promise((resolve) => (resolveStale = resolve)));
+    const cache = new ProjectCache(load, { maxAgeMs: Infinity });
+
+    cache.ensure("alpha");
+    await flush();
+    cache.invalidate("alpha");
+    cache.ensure("alpha");
+    cache.update("alpha", () => ({ agents: 5 }));
+    resolveStale({ agents: 1 });
+    await flush();
+
+    expect(cache.get("alpha")).toEqual({ agents: 5 });
+  });
+
   it("updates a loaded value in place", async () => {
     const cache = new ProjectCache(async () => ({ agents: 1 }), { maxAgeMs: Infinity });
     cache.update("alpha", (value) => ({ agents: value.agents + 1 }));

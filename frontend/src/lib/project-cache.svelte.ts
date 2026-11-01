@@ -53,9 +53,12 @@ export class ProjectCache<T> {
     this.#values = rest;
   }
 
+  /** Change a loaded value; a load still in flight would hold the older one, so it is dropped. */
   update(project: string, change: (value: T) => T): void {
     const value = this.#values[project];
-    if (value !== undefined) this.#set(project, change(value));
+    if (value === undefined) return;
+    this.#latestLoad.delete(project);
+    this.#set(project, change(value));
   }
 
   #set(project: string, value: T): void {
