@@ -100,10 +100,9 @@ You don't run a separate webmux per project. A single `webmux serve` serves **ev
 webmux project ls                 # list projects the dashboard is serving
 webmux project add ~/code/other   # add another project (persists; must have a .webmux.yaml)
 webmux project rm other           # remove by prefix
-webmux project migrate            # fold other running webmux servers into this one
 ```
 
-Projects added with `webmux project add` are remembered in `~/.webmux/projects.json` and reloaded on the next start. Run webmux as a single service per machine with `webmux service install`. If you're upgrading from an older setup that ran one service per project, `webmux project migrate` consolidates those leftover servers into this one (the dashboard shows a banner when it detects them).
+Projects added with `webmux project add` are remembered in `~/.webmux/projects.json` and reloaded on the next start. Run webmux as a single service per machine with `webmux service install`.
 
 ## Prerequisites
 

@@ -230,8 +230,8 @@ describe("webmux entrypoint", () => {
     const nestedDir = join(repoRoot, "nested", "dir");
     await mkdir(nestedDir, { recursive: true });
 
-    // Isolate HOME so the migration-warning's registry read (~/.webmux/instances)
-    // sees an empty dir, not the dev machine's real running instances.
+    // Isolate HOME so live-server discovery (~/.webmux/instances) sees an empty
+    // dir, not the dev machine's real running server.
     const home = await mkdtemp(join(tmpdir(), "webmux-home-"));
     tempDirs.push(home);
 
@@ -273,8 +273,8 @@ describe("webmux entrypoint", () => {
     const worktreePath = join(worktreesRoot, "feature-self-remove");
     runOrThrow(["git", "worktree", "add", "-b", "feature-self-remove", worktreePath], repoRoot);
 
-    // Isolate HOME so the migration-warning's registry read sees an empty dir,
-    // keeping stderr clean regardless of what's running on the dev machine.
+    // Isolate HOME so live-server discovery sees an empty dir, regardless of
+    // what's running on the dev machine.
     const home = await mkdtemp(join(tmpdir(), "webmux-home-"));
     tempDirs.push(home);
 

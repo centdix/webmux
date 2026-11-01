@@ -192,7 +192,7 @@ _webmux() {
     project)
       if (( CURRENT == 3 )); then
         local -a subs
-        subs=('ls:List projects' 'add:Add a project' 'rm:Remove a project by prefix' 'migrate:Consolidate other running webmux servers')
+        subs=('ls:List projects' 'add:Add a project' 'rm:Remove a project by prefix')
         _describe 'project subcommand' subs
       fi
       ;;
@@ -260,7 +260,7 @@ const BASH_SCRIPT = `_webmux() {
       ;;
     project)
       if [[ \${COMP_CWORD} -eq 2 ]]; then
-        COMPREPLY=($(compgen -W "ls add rm migrate" -- "\${cur}"))
+        COMPREPLY=($(compgen -W "ls add rm" -- "\${cur}"))
       fi
       ;;
     completion)
