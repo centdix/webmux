@@ -28,7 +28,7 @@ import {
   WorktreeNameParamsSchema,
 } from "@webmux/api-contract";
 import { log } from "./lib/log";
-import { serveStaticFrontend } from "./services/static-frontend-service";
+import { serveUnmatchedRequest } from "./services/static-frontend-service";
 import {
   attach,
   detach,
@@ -148,7 +148,7 @@ import type {
 } from "./domain/agents-ui";
 import type { OneshotMeta, ProjectSnapshot, WorktreeSnapshot } from "./domain/model";
 import { isValidBranchName, isValidWorktreeName } from "./domain/policies";
-import { assembleServeRoutes, isApiPath, legacyProjectRedirect } from "./domain/project-routes";
+import { assembleServeRoutes } from "./domain/project-routes";
 import { createPortRegistrationService, createWebmuxRuntime, type WebmuxRuntime } from "./runtime";
 import { createInstanceRegistry, type InstanceEntry } from "./adapters/instance-registry";
 import { createProjectsRegistry } from "./adapters/projects-registry";
@@ -2728,17 +2728,7 @@ function buildServeRoutes(): ProjectRoutes {
 }
 
 async function globalFetch(req: Request): Promise<Response> {
-  const url = new URL(req.url);
-
-  if (isApiPath(url.pathname)) {
-    return errorResponse(`No route for ${req.method} ${url.pathname}`, 404);
-  }
-
-  // Static frontend files in production mode (fallback for unmatched routes)
-  const res = STATIC_DIR ? await serveStaticFrontend(STATIC_DIR, url.pathname) : new Response("Not Found", { status: 404 });
-  if (res.status !== 404) return res;
-  const redirect = legacyProjectRedirect(url.pathname, (prefix) => apps.has(prefix));
-  return redirect ? new Response(null, { status: 302, headers: { Location: redirect } }) : res;
+  return serveUnmatchedRequest(req.method, new URL(req.url).pathname, STATIC_DIR, (prefix) => apps.has(prefix));
 }
 
 function trackSocket(ws: ServerWebSocket<WsData>): void {
