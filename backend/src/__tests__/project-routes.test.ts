@@ -60,6 +60,46 @@ describe("assembleServeRoutes", () => {
   });
 });
 
+describe("hub agent routes", () => {
+  it("serves /api/agents*, with /api/agents/validate not captured by /api/agents/:id", async () => {
+    type Handler = (req: Bun.BunRequest) => Response;
+    const hubRoutes: Record<string, Record<string, Handler>> = {
+      [hubApiPaths.fetchAgents]: {
+        GET: (): Response => new Response("list"),
+        POST: (): Response => new Response("create"),
+      },
+      [hubApiPaths.validateAgent]: {
+        POST: (): Response => new Response("validate"),
+      },
+      [hubApiPaths.updateAgent]: {
+        PUT: (req) => new Response(`update ${req.params.id}`),
+        DELETE: (req) => new Response(`delete ${req.params.id}`),
+      },
+    };
+    const projectRoutes = Object.fromEntries(
+      Object.values(projectApiPaths).map((path): [string, Record<string, Handler>] => [path, { GET: () => new Response("project") }]),
+    );
+    const server = Bun.serve({
+      port: 0,
+      routes: assembleServeRoutes(hubRoutes, [{ prefix: "webmux", routes: projectRoutes }]),
+      fetch: () => new Response("fallback", { status: 404 }),
+    });
+
+    try {
+      const call = async (method: string, path: string): Promise<string> =>
+        (await fetch(new URL(path, server.url), { method })).text();
+
+      expect(await call("GET", "/api/agents")).toBe("list");
+      expect(await call("POST", "/api/agents")).toBe("create");
+      expect(await call("POST", "/api/agents/validate")).toBe("validate");
+      expect(await call("PUT", "/api/agents/gemini")).toBe("update gemini");
+      expect(await call("DELETE", "/api/agents/gemini")).toBe("delete gemini");
+    } finally {
+      await server.stop(true);
+    }
+  });
+});
+
 describe("isApiPath", () => {
   it("matches /api, /api/... and legacy /<prefix>/api(/...) paths", () => {
     for (const path of ["/api", "/api/", "/api/nope", "/api/projects/webmux/x", "/webmux/api", "/webmux/api/worktrees"]) {
