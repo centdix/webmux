@@ -8,6 +8,7 @@
   let {
     name,
     repos,
+    showShortcuts,
     onopen,
     oncreate,
     onpull,
@@ -16,6 +17,8 @@
     name: string;
     /** The project's own repo first, then its linked repos. */
     repos: ProjectRepo[];
+    /** Mention the keyboard shortcut (desktop). */
+    showShortcuts: boolean;
     /** The menu opened: a chance to load what its items need. */
     onopen: () => void;
     oncreate: () => void;
@@ -37,7 +40,7 @@
 </script>
 
 <span class="relative flex shrink-0 items-center">
-  <IconBtn icon="plus" label="New worktree in {name}" title="New worktree (Cmd+K)" onclick={oncreate} />
+  <IconBtn icon="plus" label="New worktree in {name}" title={showShortcuts ? "New worktree (Cmd+K)" : undefined} onclick={oncreate} />
   <span class="contents" {@attach open && dismissible(() => (open = false))}>
     <IconBtn icon="more" label="Actions for {name}" title="Project actions" aria-expanded={open} onclick={toggle} />
     {#if open}

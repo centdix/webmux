@@ -13,6 +13,7 @@ function renderMenu(overrides: Partial<MenuProps> = {}): MenuProps {
   const props: MenuProps = {
     name: "app",
     repos: [ownRepo, linkedRepo],
+    showShortcuts: true,
     onopen: vi.fn(),
     oncreate: vi.fn(),
     onpull: vi.fn(),
@@ -37,6 +38,15 @@ describe("ProjectActionsMenu", () => {
 
     expect(props.oncreate).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: "Remove project" })).not.toBeInTheDocument();
+  });
+
+  it("mentions Cmd+K on the + button only where there is a keyboard", () => {
+    renderMenu();
+    expect(screen.getByRole("button", { name: "New worktree in app" })).toHaveAttribute("title", "New worktree (Cmd+K)");
+    cleanup();
+
+    renderMenu({ showShortcuts: false });
+    expect(screen.getByRole("button", { name: "New worktree in app" })).toHaveAttribute("title", "New worktree in app");
   });
 
   it("reports opening and runs each item, closing the menu", async () => {

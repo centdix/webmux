@@ -892,6 +892,7 @@
             <ProjectActionsMenu
               name={activeProjectName}
               repos={projectRepos(configs.get(activeProject), sshHost)}
+              showShortcuts={!isMobile}
               onopen={() => configs.ensure(activeProject)}
               oncreate={() => openCreateDialog(activeProject)}
               onpull={(repo) => pull.start({ project: activeProject, repo })}
