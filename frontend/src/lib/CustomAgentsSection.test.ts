@@ -145,6 +145,20 @@ describe("CustomAgentsSection", () => {
     expect(configs.get("images")?.agents).toEqual([]);
   });
 
+  it("shows a failed delete and closes the confirmation", async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([GEMINI]);
+    vi.mocked(deleteAgent).mockRejectedValue(new Error("Global config is not a YAML mapping"));
+
+    renderSection();
+
+    await fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    expect(screen.getByText('Delete agent "Gemini CLI"? It is shared by all projects.')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+
+    expect(await screen.findByText("Global config is not a YAML mapping")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+  });
+
   it("edits an existing agent by id", async () => {
     vi.mocked(fetchAgents).mockResolvedValue([GEMINI]);
     vi.mocked(updateAgent).mockResolvedValue({ agent: GEMINI });

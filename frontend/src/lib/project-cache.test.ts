@@ -99,6 +99,25 @@ describe("ProjectCache", () => {
     expect(cache.get("beta")).toBeUndefined();
   });
 
+  it("reloads a project whose first load is still in flight", async () => {
+    let version = 1;
+    const resolvers: Array<() => void> = [];
+    const load = vi.fn((project: string) => {
+      const value = `${project} v${version}`;
+      return new Promise<string>((resolve) => resolvers.push(() => resolve(value)));
+    });
+    const cache = new ProjectCache(load, { maxAgeMs: Infinity });
+    cache.ensure("alpha");
+
+    version = 2;
+    cache.reloadLoaded();
+    for (const resolve of resolvers) resolve();
+    await flush();
+
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(cache.get("alpha")).toBe("alpha v2");
+  });
+
   it("updates a loaded value in place", async () => {
     const cache = new ProjectCache(async () => ({ agents: 1 }), { maxAgeMs: Infinity });
     cache.update("alpha", (value) => ({ agents: value.agents + 1 }));
