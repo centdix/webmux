@@ -2,17 +2,38 @@ import { describe, expect, it } from "bun:test";
 import type { CustomAgents } from "../domain/config";
 import { CustomAgentsStore } from "../services/custom-agents-store";
 
-function makeStore(agents: CustomAgents = {}): { store: CustomAgentsStore; writes: CustomAgents[] } {
+interface FakeFile {
+  agents: CustomAgents;
+}
+
+function makeStore(
+  agents: CustomAgents = {},
+  beforeWrite: () => Promise<void> = async () => {},
+): { store: CustomAgentsStore; writes: CustomAgents[]; file: FakeFile } {
   const writes: CustomAgents[] = [];
+  const file: FakeFile = { agents: { ...agents } };
   const store = new CustomAgentsStore({
     path: "/fake/config.yaml",
     agents,
-    write: async (path, next) => {
+    read: (path) => {
       expect(path).toBe("/fake/config.yaml");
-      writes.push(next);
+      return { ...file.agents };
+    },
+    write: async (path, agentId, agent) => {
+      expect(path).toBe("/fake/config.yaml");
+      const current = { ...file.agents };
+      await beforeWrite();
+      if (agent) {
+        current[agentId] = agent;
+      } else {
+        delete current[agentId];
+      }
+      file.agents = current;
+      writes.push(current);
+      return { ...current };
     },
   });
-  return { store, writes };
+  return { store, writes, file };
 }
 
 describe("CustomAgentsStore", () => {
@@ -83,6 +104,7 @@ describe("CustomAgentsStore", () => {
     const store = new CustomAgentsStore({
       path: "/fake/config.yaml",
       agents: {},
+      read: () => ({}),
       write: async () => {
         throw new Error("read-only");
       },
@@ -90,5 +112,41 @@ describe("CustomAgentsStore", () => {
 
     await expect(store.create({ label: "Gemini", startCommand: "gemini" })).rejects.toThrow("read-only");
     expect(store.list()).toEqual({});
+    // A failed change does not block the ones queued after it.
+    await expect(store.remove("gemini")).resolves.toEqual({ ok: false, status: 404, error: "Unknown agent: gemini" });
+  });
+
+  it("serializes concurrent creates so neither update is lost", async () => {
+    let releaseFirstWrite = (): void => {};
+    const firstWriteBlocked = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve;
+    });
+    let writeCount = 0;
+    const { store, file } = makeStore({}, async () => {
+      writeCount += 1;
+      if (writeCount === 1) await firstWriteBlocked;
+    });
+
+    const first = store.create({ label: "Gemini", startCommand: "gemini" });
+    const second = store.create({ label: "Aider", startCommand: "aider" });
+    const duplicate = store.create({ label: "Gemini", startCommand: "other" });
+    await Bun.sleep(0);
+    releaseFirstWrite();
+
+    expect((await first).ok).toBe(true);
+    expect((await second).ok).toBe(true);
+    expect(await duplicate).toEqual({ ok: false, status: 409, error: "Agent already exists: gemini" });
+    expect(Object.keys(file.agents).sort()).toEqual(["aider", "gemini"]);
+    expect(Object.keys(store.list()).sort()).toEqual(["aider", "gemini"]);
+  });
+
+  it("checks and writes against the file's current agents, picking up hand-added ones", async () => {
+    const { store, file } = makeStore();
+    file.agents = { manual: { label: "Manual", startCommand: "manual" } };
+
+    expect(await store.create({ label: "Manual", startCommand: "x" }))
+      .toEqual({ ok: false, status: 409, error: "Agent already exists: manual" });
+    expect((await store.create({ label: "Gemini", startCommand: "gemini" })).ok).toBe(true);
+    expect(Object.keys(store.list()).sort()).toEqual(["gemini", "manual"]);
   });
 });
