@@ -245,24 +245,24 @@ export function connectWorktreeConversationStream(
   };
 }
 
-export function fetchAgents(project: string): Promise<AgentDetails[]> {
-  return projectApi(project).fetchAgents().then((response) => response.agents);
+export function fetchAgents(): Promise<AgentDetails[]> {
+  return hubApi.fetchAgents().then((response) => response.agents);
 }
 
-export function createAgent(project: string, body: UpsertCustomAgentRequest): Promise<AgentResponse> {
-  return projectApi(project).createAgent({ body });
+export function createAgent(body: UpsertCustomAgentRequest): Promise<AgentResponse> {
+  return hubApi.createAgent({ body });
 }
 
-export function updateAgent(project: string, id: string, body: UpsertCustomAgentRequest): Promise<AgentResponse> {
-  return projectApi(project).updateAgent({ params: { id }, body });
+export function updateAgent(id: string, body: UpsertCustomAgentRequest): Promise<AgentResponse> {
+  return hubApi.updateAgent({ params: { id }, body });
 }
 
-export function deleteAgent(project: string, id: string): Promise<void> {
-  return projectApi(project).deleteAgent({ params: { id } }).then(() => undefined);
+export function deleteAgent(id: string): Promise<void> {
+  return hubApi.deleteAgent({ params: { id } }).then(() => undefined);
 }
 
-export function validateAgent(project: string, body: UpsertCustomAgentRequest): Promise<ValidateCustomAgentResponse> {
-  return projectApi(project).validateAgent({ body });
+export function validateAgent(body: UpsertCustomAgentRequest): Promise<ValidateCustomAgentResponse> {
+  return hubApi.validateAgent({ body });
 }
 
 export async function fetchProjects(): Promise<ProjectSummary[]> {

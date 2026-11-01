@@ -5,6 +5,7 @@
   import BaseDialog from "./BaseDialog.svelte";
   import Btn from "./Btn.svelte";
   import SettingToggle from "./SettingToggle.svelte";
+  import CustomAgentsSection from "./CustomAgentsSection.svelte";
   import ProjectSettingsSection from "./ProjectSettingsSection.svelte";
   import type { ProjectCache } from "./project-cache.svelte";
   import type { AppConfig, IdeKind, ProjectWorktreeList } from "./types";
@@ -107,6 +108,8 @@
       </p>
     </div>
   </form>
+
+  <CustomAgentsSection {configs} />
 
   <div class="mb-4">
     <span class="block text-xs text-muted mb-2">Projects</span>
