@@ -15,6 +15,8 @@ export interface ProjectWorktreesSource<T> {
   prefix: string;
   name: string;
   readWorktrees: () => Promise<T[]>;
+  /** Whether the project is still served once its read settles. */
+  isServed: () => boolean;
 }
 
 export interface ProjectWorktreesResult<T> {
@@ -27,21 +29,22 @@ export interface ProjectWorktreesResult<T> {
 /** Start every project's read at once and wait for all of them (the reads
  *  themselves may still block on synchronous git calls). One project failing yields an
  *  entry with `error` set and no worktrees; the others are still returned, in
- *  input order. */
+ *  input order. A project removed while being read is left out. */
 export async function collectAllProjectWorktrees<T>(
   projects: ProjectWorktreesSource<T>[],
 ): Promise<ProjectWorktreesResult<T>[]> {
   const settled = await Promise.allSettled(projects.map((project) => project.readWorktrees()));
-  return projects.map((project, index): ProjectWorktreesResult<T> => {
+  return projects.flatMap((project, index): ProjectWorktreesResult<T>[] => {
+    if (!project.isServed()) return [];
     const result = settled[index];
-    return result.status === "fulfilled"
+    return [result.status === "fulfilled"
       ? { prefix: project.prefix, name: project.name, worktrees: result.value, error: null }
       : {
           prefix: project.prefix,
           name: project.name,
           worktrees: [],
           error: result.reason instanceof Error ? result.reason.message : String(result.reason),
-        };
+        }];
   });
 }
 
