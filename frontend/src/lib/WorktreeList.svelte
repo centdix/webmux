@@ -367,62 +367,60 @@
     >
       {isFavorite ? "★" : "☆"}
     </button>
-    <button
-      type="button"
-      disabled={isBusy}
-      class="absolute top-2 right-2 w-6 h-6 rounded flex items-center justify-center text-muted hover:text-primary hover:bg-hover opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
-      title="Worktree actions"
-      aria-label={`Actions for ${wt.branch}`}
-      aria-haspopup="menu"
-      aria-expanded={openMenuKey === key}
-      onclick={(event) => {
-        event.stopPropagation();
-        toggleMenu(key);
-      }}
-    >
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        width="14"
-        height="14"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
+    <div class="contents" {@attach openMenuKey === key && dismissible(() => (openMenuKey = null))}>
+      <button
+        type="button"
+        disabled={isBusy}
+        class="absolute top-2 right-2 w-6 h-6 rounded flex items-center justify-center text-muted hover:text-primary hover:bg-hover opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+        title="Worktree actions"
+        aria-label={`Actions for ${wt.branch}`}
+        aria-expanded={openMenuKey === key}
+        onclick={() => toggleMenu(key)}
       >
-        <circle cx="12" cy="5" r="1" />
-        <circle cx="12" cy="12" r="1" />
-        <circle cx="12" cy="19" r="1" />
-      </svg>
-    </button>
-    {#if openMenuKey === key}
-      <div
-        class="absolute top-9 right-2 z-10 min-w-32 rounded-md border border-edge bg-surface shadow-lg p-1"
-        {@attach dismissible(() => (openMenuKey = null))}
-      >
-        <MenuItem disabled={isClosed || isCreating} onclick={() => runMenuAction(ref, onclose)}>Close</MenuItem>
-        <MenuItem disabled={isCreating || isArchiving} onclick={() => runMenuAction(ref, onarchive)}>
-          {wt.archived ? "Restore" : "Archive"}
-        </MenuItem>
-        <MenuItem disabled={isCreating} onclick={() => runMenuAction(ref, oneditprofile)}>Change profile…</MenuItem>
-        <MenuItem disabled={isCreating} onclick={() => runMenuAction(ref, oncreatesubworktree)}>Create sub-worktree</MenuItem>
-        <MenuItem danger onclick={() => runMenuAction(ref, onremove)}>Remove</MenuItem>
-        {#if onposttolinear}
-          {@const isPostingLinear = postingLinear.has(key)}
-          <div class="my-1 border-t border-edge"></div>
-          <MenuItem disabled={isPostingLinear} onclick={() => runMenuAction(ref, onposttolinear)}>
-            {#if isPostingLinear}
-              Posting to Linear…
-            {:else if wt.linearIssue}
-              Post conversation to {wt.linearIssue.identifier}
-            {:else}
-              Post conversation to Linear…
-            {/if}
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="5" r="1" />
+          <circle cx="12" cy="12" r="1" />
+          <circle cx="12" cy="19" r="1" />
+        </svg>
+      </button>
+      {#if openMenuKey === key}
+        <div
+          class="absolute top-9 right-2 z-10 min-w-32 rounded-md border border-edge bg-surface shadow-lg p-1"
+          data-popup-menu
+        >
+          <MenuItem disabled={isClosed || isCreating} onclick={() => runMenuAction(ref, onclose)}>Close</MenuItem>
+          <MenuItem disabled={isCreating || isArchiving} onclick={() => runMenuAction(ref, onarchive)}>
+            {wt.archived ? "Restore" : "Archive"}
           </MenuItem>
-        {/if}
-      </div>
-    {/if}
+          <MenuItem disabled={isCreating} onclick={() => runMenuAction(ref, oneditprofile)}>Change profile…</MenuItem>
+          <MenuItem disabled={isCreating} onclick={() => runMenuAction(ref, oncreatesubworktree)}>Create sub-worktree</MenuItem>
+          <MenuItem danger onclick={() => runMenuAction(ref, onremove)}>Remove</MenuItem>
+          {#if onposttolinear}
+            {@const isPostingLinear = postingLinear.has(key)}
+            <div class="my-1 border-t border-edge"></div>
+            <MenuItem disabled={isPostingLinear} onclick={() => runMenuAction(ref, onposttolinear)}>
+              {#if isPostingLinear}
+                Posting to Linear…
+              {:else if wt.linearIssue}
+                Post conversation to {wt.linearIssue.identifier}
+              {:else}
+                Post conversation to Linear…
+              {/if}
+            </MenuItem>
+          {/if}
+        </div>
+      {/if}
+    </div>
   </li>
 {/snippet}
 

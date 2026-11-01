@@ -40,7 +40,7 @@
 </script>
 
 <div
-  class="sticky top-0 z-[1] bg-sidebar px-1 pt-2 pb-1 {separated ? 'border-t border-edge' : ''}"
+  class="sticky top-0 z-[1] has-[[data-popup-menu]]:z-10 bg-sidebar px-1 pt-2 pb-1 {separated ? 'border-t border-edge' : ''}"
   data-project-header-bar
 >
   <div class="group/header flex items-center gap-0.5 rounded-md hover:bg-hover">

@@ -19,15 +19,10 @@
   let className = $derived(
     `block w-full px-2 py-1.5 rounded text-left text-xs no-underline hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed ${danger ? "text-danger" : "text-primary"}`,
   );
-
-  function handleClick(event: MouseEvent): void {
-    event.stopPropagation();
-    onclick?.();
-  }
 </script>
 
 {#if href}
-  <a {href} class={className} onclick={handleClick}>{@render children()}</a>
+  <a {href} class={className} {onclick}>{@render children()}</a>
 {:else}
-  <button type="button" {disabled} class={className} onclick={handleClick}>{@render children()}</button>
+  <button type="button" {disabled} class={className} {onclick}>{@render children()}</button>
 {/if}

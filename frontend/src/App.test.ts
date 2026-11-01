@@ -1100,6 +1100,53 @@ describe("App create selection", () => {
       expect(projectOfLastCall(api.createWorktree)).toBe("images");
     });
 
+    function headerBar(name: string): HTMLElement {
+      const bar = screen.getByRole("region", { name }).querySelector<HTMLElement>("[data-project-header-bar]");
+      if (!bar) throw new Error(`no header bar for ${name}`);
+      return bar;
+    }
+
+    it("raises an open menu's header above the following sticky headers", async () => {
+      useImagesProject();
+      renderApp();
+
+      await openProjectMenu(PROJECT);
+
+      expect(headerBar(PROJECT)).toHaveClass("has-[[data-popup-menu]]:z-10");
+      expect(headerBar(PROJECT).matches(":has([data-popup-menu])")).toBe(true);
+      expect(headerBar("images").matches(":has([data-popup-menu])")).toBe(false);
+    });
+
+    it("keeps a single menu open across header and row menus", async () => {
+      useImagesProject();
+      renderApp();
+
+      await openProjectMenu(PROJECT);
+      await openProjectMenu("images");
+      expect(screen.getAllByRole("button", { name: "Remove project" })).toHaveLength(1);
+      expect(headerBar("images").matches(":has([data-popup-menu])")).toBe(true);
+
+      await fireEvent.click(screen.getByRole("button", { name: "Actions for feature/web" }));
+      expect(screen.queryByRole("button", { name: "Remove project" })).not.toBeInTheDocument();
+      const webmux = screen.getByRole("region", { name: PROJECT });
+      expect(within(webmux).getByRole("button", { name: "Archive" })).toBeInTheDocument();
+
+      await openProjectMenu(PROJECT);
+      expect(within(webmux).queryByRole("button", { name: "Archive" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Remove project" })).toBeInTheDocument();
+    });
+
+    it("closes an open menu when another header's + is clicked", async () => {
+      useImagesProject();
+      renderApp();
+
+      await openProjectMenu(PROJECT);
+      await fireEvent.click(screen.getByRole("button", { name: "New worktree in images" }));
+
+      expect(screen.queryByRole("button", { name: "Remove project" })).not.toBeInTheDocument();
+      expect(await screen.findByText("New Worktree")).toBeInTheDocument();
+    });
+
     it("pulls the header's project and opens it in the IDE", async () => {
       useImagesProject();
       vi.mocked(api.fetchConfig).mockResolvedValue(createConfig({
