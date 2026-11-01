@@ -250,7 +250,7 @@ agents:
     resumeCommand: gemini --resume latest   # optional
 ```
 
-`startCommand` and `resumeCommand` can reference `${PROMPT}`, `${SYSTEM_PROMPT}`, `${WORKTREE_PATH}`, `${REPO_PATH}`, `${BRANCH}`, and `${PROFILE}`. Without a `resumeCommand`, reopening a worktree restarts the agent fresh. An `agents:` section in `.webmux.yaml` or `.webmux.local.yaml` is ignored — move it to the global file.
+`startCommand` and `resumeCommand` can reference `${PROMPT}`, `${SYSTEM_PROMPT}`, `${WORKTREE_PATH}`, `${REPO_PATH}`, `${BRANCH}`, and `${PROFILE}`. Without a `resumeCommand`, reopening a worktree restarts the agent fresh. An `agents:` section in `.webmux.yaml` or `.webmux.local.yaml` is ignored — move it to the global file. Worktrees started on a former project-local custom agent fail to open with `Unknown agent` until you recreate that agent globally under the same id.
 
 ### Dev server ports
 
