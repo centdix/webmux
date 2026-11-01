@@ -83,7 +83,7 @@ describe("WorktreesStore", () => {
 
     await store.refresh();
 
-    expect(store.loaded).toBe(true);
+    expect(store.hasLoaded("alpha")).toBe(true);
     expect(store.find({ project: "beta", branch: "main" })?.label).toBe("beta main");
     expect(store.find({ project: "gamma", branch: "main" })).toBeUndefined();
     expect(store.worktreesOf("alpha").map((w) => w.branch)).toEqual(["main"]);
@@ -142,6 +142,37 @@ describe("WorktreesStore", () => {
 
     expect(store.errorOf("alpha")).toBe("git failed");
     expect(store.worktreesOf("alpha").map((w) => w.branch)).toEqual(["main"]);
+  });
+
+  it("counts a project as loaded only once one of its polls succeeds", async () => {
+    vi.mocked(fetchAllProjectWorktrees)
+      .mockResolvedValueOnce([project("alpha", [], "git failed"), project("beta", [worktree("beta", "main")])])
+      .mockResolvedValueOnce([project("alpha", [worktree("alpha", "main")]), project("beta", [], "git failed")]);
+    const store = new WorktreesStore();
+
+    await store.refresh();
+    expect(store.hasLoaded("alpha")).toBe(false);
+    expect(store.hasLoaded("beta")).toBe(true);
+    expect(store.hasLoaded("gamma")).toBe(false);
+
+    await store.refresh();
+    expect(store.hasLoaded("alpha")).toBe(true);
+    expect(store.hasLoaded("beta")).toBe(true);
+  });
+
+  it("ignores a poll that resolves after a newer one", async () => {
+    let resolveStale!: (lists: ProjectWorktreeList[]) => void;
+    vi.mocked(fetchAllProjectWorktrees)
+      .mockReturnValueOnce(new Promise((resolve) => (resolveStale = resolve)))
+      .mockResolvedValueOnce([project("alpha", [worktree("alpha", "new")])]);
+    const store = new WorktreesStore();
+
+    const stale = store.refresh();
+    await store.refresh();
+    resolveStale([project("alpha", [worktree("alpha", "old")])]);
+    await stale;
+
+    expect(store.worktreesOf("alpha").map((w) => w.branch)).toEqual(["new"]);
   });
 
   it("keeps the last lists when the whole poll fails", async () => {

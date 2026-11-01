@@ -117,7 +117,7 @@
   let linearAvailability = $derived(linearData?.availability ?? "disabled");
   let worktrees = $derived(store.worktreesOf(project));
   let worktreesError = $derived(store.errorOf(project));
-  let hasLoadedWorktrees = $derived(store.loaded && store.hasProject(project));
+  let hasLoadedWorktrees = $derived(store.hasLoaded(project));
   let selectedBranch = $derived(selection.branch);
   // The boot project inherits the unscoped legacy favorites.
   let favoriteKeys = $state(untrack(() => loadFavoriteWorktreeKeys(selection.project)));

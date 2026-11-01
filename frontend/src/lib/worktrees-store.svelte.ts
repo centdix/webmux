@@ -46,7 +46,8 @@ export class WorktreeFlags {
 /** Worktrees of every project, fed by one poll of the hub listing. */
 export class WorktreesStore {
   projects = $state<ProjectWorktreeList[]>([]);
-  loaded = $state(false);
+  /** Prefixes with at least one successful listing. */
+  readonly #loaded = new SvelteSet<string>();
   readonly removing = new WorktreeFlags();
   readonly opening = new WorktreeFlags();
   readonly archiving = new WorktreeFlags();
@@ -57,10 +58,18 @@ export class WorktreesStore {
   readonly #onRefreshed: () => void;
   #intervalMs = DEFAULT_POLL_INTERVAL_MS;
   #restartInterval: (() => void) | null = null;
+  #lastRequest = 0;
+  #lastApplied = 0;
 
   /** `onRefreshed` runs after every refresh, polled or explicit. */
   constructor(onRefreshed: () => void = () => {}) {
     this.#onRefreshed = onRefreshed;
+  }
+
+  /** The project's list is known: one of its polls succeeded. Until then an
+   *  empty list means "not loaded", not "no worktrees". */
+  hasLoaded(project: string): boolean {
+    return this.#loaded.has(project);
   }
 
   hasProject(project: string): boolean {
@@ -84,9 +93,15 @@ export class WorktreesStore {
   }
 
   async refresh(): Promise<void> {
+    const request = ++this.#lastRequest;
     try {
-      this.projects = mergeProjectWorktrees(this.projects, await fetchAllProjectWorktrees());
-      this.loaded = true;
+      const lists = await fetchAllProjectWorktrees();
+      // A slower, older poll must not overwrite a newer one.
+      if (request > this.#lastApplied) {
+        this.#lastApplied = request;
+        this.projects = mergeProjectWorktrees(this.projects, lists);
+        for (const entry of lists) if (entry.error === null) this.#loaded.add(entry.prefix);
+      }
     } catch (err) {
       console.error("Failed to refresh:", err);
     }

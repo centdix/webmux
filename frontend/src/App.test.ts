@@ -625,6 +625,21 @@ describe("App create selection", () => {
     expect(await screen.findByText("Failed to load worktrees: git exploded")).toBeInTheDocument();
   });
 
+  it("keeps the saved selection when the project's first poll fails", async () => {
+    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "feature/saved");
+    vi.mocked(fetchAllProjectWorktrees).mockResolvedValueOnce([
+      { prefix: PROJECT, name: PROJECT, worktrees: [], error: "git exploded" },
+    ]);
+    const selection = new WorktreeSelection(PROJECT);
+
+    render(App, { props: { selection, onNoProjects: vi.fn() } });
+
+    expect(await screen.findByText("Failed to load worktrees: git exploded")).toBeInTheDocument();
+    expect(selection.selected).toEqual({ project: PROJECT, branch: "feature/saved" });
+    expect(window.location.hash).toBe(`#${PROJECT}/feature/saved`);
+    expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("feature/saved");
+  });
+
   it("keeps the current selection when a new worktree is created from an existing selection", async () => {
     const existingWorktree = createWorktree("main");
     const creatingWorktree = createWorktree("feature/new", {
