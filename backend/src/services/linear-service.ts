@@ -425,12 +425,18 @@ export function branchMatchesIssue(
 }
 
 const CACHE_TTL_MS = 300_000;
-let issueCache: { data: FetchIssuesResult; expiry: number } | null = null;
+let issueCache: { data: FetchIssuesResult; fetchedAt: number } | null = null;
+let issueFetchInFlight: Promise<FetchIssuesResult> | null = null;
+/** Bumped on every invalidation so a request started before it cannot cache
+ *  its (possibly stale) result. */
+let issueCacheGeneration = 0;
 let viewerIdCache: string | null = null;
 const inProgressStateIdCache = new Map<string, string>();
 
 export function resetLinearCaches(): void {
   issueCache = null;
+  issueFetchInFlight = null;
+  issueCacheGeneration += 1;
   viewerIdCache = null;
   inProgressStateIdCache.clear();
 }
@@ -511,12 +517,26 @@ async function fetchInProgressStateId(teamId: string): Promise<FetchStateIdResul
   inProgressStateIdCache.set(teamId, result.data);
   return result;
 }
-export async function fetchAssignedIssues(options?: { skipCache?: boolean }): Promise<FetchIssuesResult> {
-  const now = Date.now();
-  if (!options?.skipCache && issueCache && now < issueCache.expiry) {
+/** Assigned issues of the API key's viewer (process-wide, not per project).
+ *  A cached result younger than `maxAgeMs` is reused; concurrent callers share
+ *  one in-flight request. */
+export async function fetchAssignedIssues(options?: { maxAgeMs?: number }): Promise<FetchIssuesResult> {
+  const maxAgeMs = options?.maxAgeMs ?? CACHE_TTL_MS;
+  if (issueCache && Date.now() - issueCache.fetchedAt < maxAgeMs) {
     return issueCache.data;
   }
+  if (issueFetchInFlight) return issueFetchInFlight;
 
+  const request = requestAssignedIssues().finally(() => {
+    if (issueFetchInFlight === request) issueFetchInFlight = null;
+  });
+  issueFetchInFlight = request;
+  return request;
+}
+
+async function requestAssignedIssues(): Promise<FetchIssuesResult> {
+  const now = Date.now();
+  const generation = issueCacheGeneration;
   const response = await postLinearGraphql<AssignedIssuesQueryData>(ASSIGNED_ISSUES_QUERY);
   if (!response.ok) {
     log.error(`[linear] fetch failed: ${response.error}`);
@@ -525,7 +545,7 @@ export async function fetchAssignedIssues(options?: { skipCache?: boolean }): Pr
 
   const result = parseIssuesResponse(response.data);
   if (result.ok) {
-    issueCache = { data: result, expiry: now + CACHE_TTL_MS };
+    if (generation === issueCacheGeneration) issueCache = { data: result, fetchedAt: now };
     log.debug(`[linear] fetched ${result.data.length} assigned issues`);
   } else {
     log.error(`[linear] GraphQL error: ${result.error}`);
@@ -1080,6 +1100,9 @@ export async function createLinearIssue(input: CreateLinearIssueInput): Promise<
   const result = parseIssueCreateResponse(response.data);
   if (result.ok) {
     issueCache = null;
+    // A request started before the create may not include the new issue.
+    issueFetchInFlight = null;
+    issueCacheGeneration += 1;
     log.debug(`[linear] created issue ${result.data.identifier} branch=${result.data.branchName}`);
   } else {
     log.error(`[linear] issueCreate error: ${result.error}`);

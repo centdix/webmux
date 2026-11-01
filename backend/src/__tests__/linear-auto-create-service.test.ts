@@ -1,11 +1,12 @@
-import { beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, setSystemTime } from "bun:test";
 import type { CreateLifecycleWorktreeInput } from "../services/lifecycle-service";
-import type { FetchIssuesResult, LinearIssue } from "../services/linear-service";
+import { resetLinearCaches, type FetchIssuesResult, type LinearIssue } from "../services/linear-service";
 import {
   filterAutoCreateIssues,
   filterAutoOneshotIssues,
   LINEAR_AUTO_CREATE_POLL_INTERVAL_MS,
-  resetProcessedIssues,
+  releaseLinearIssueClaims,
+  resetLinearAutoCreateState,
   runLinearAutoCreateOnce,
   startLinearAutoCreateMonitor,
   type LinearAutoCreateDependencies,
@@ -71,16 +72,16 @@ function createDeps(input: {
   issues?: LinearIssue[] | (() => LinearIssue[]);
   existingBranches?: string[];
   fetchResult?: FetchIssuesResult;
-  onFetch?: (options: { skipCache?: boolean } | undefined) => void;
+  onFetch?: (options: { maxAgeMs?: number } | undefined) => void;
   runOneshotForIssue?: (issueId: string) => Promise<{ branch: string }>;
   onOneshotPickedUp?: (input: { issue: LinearIssue; branch: string }) => Promise<void>;
 } = {}): {
   deps: LinearAutoCreateDependencies;
   created: CreateLifecycleWorktreeInput[];
-  fetchOptions: Array<{ skipCache?: boolean } | undefined>;
+  fetchOptions: Array<{ maxAgeMs?: number } | undefined>;
 } {
   const created: CreateLifecycleWorktreeInput[] = [];
-  const fetchOptions: Array<{ skipCache?: boolean } | undefined> = [];
+  const fetchOptions: Array<{ maxAgeMs?: number } | undefined> = [];
   const issues: LinearIssue[] | (() => LinearIssue[]) = input.issues ?? [];
   const existingBranches = input.existingBranches ?? [];
 
@@ -108,6 +109,8 @@ function createDeps(input: {
           })),
       },
       projectRoot: "/repo",
+      claimedIssues: new Map<string, string>(),
+      failedIssueIds: new Set<string>(),
       fetchIssues: async (options) => {
         fetchOptions.push(options);
         input.onFetch?.(options);
@@ -123,10 +126,6 @@ function createDeps(input: {
 }
 
 describe("filterAutoCreateIssues", () => {
-  beforeEach(() => {
-    resetProcessedIssues();
-  });
-
   it("keeps Todo issues with the webmux label that do not already have a worktree", () => {
     const issue = createIssue();
     const inProgress = createIssue({
@@ -156,10 +155,6 @@ describe("filterAutoCreateIssues", () => {
 });
 
 describe("watchTeamKeys filter", () => {
-  beforeEach(() => {
-    resetProcessedIssues();
-  });
-
   it("keeps every team when watchTeamKeys is undefined or empty", () => {
     const eng = createIssue({ id: "eng", identifier: "ENG-1", branchName: "eng-1", team: { name: "Engineering", key: "ENG" } });
     const ops = createIssue({ id: "ops", identifier: "OPS-1", branchName: "ops-1", team: { name: "Ops", key: "OPS" } });
@@ -187,10 +182,6 @@ describe("watchTeamKeys filter", () => {
 });
 
 describe("filterAutoOneshotIssues", () => {
-  beforeEach(() => {
-    resetProcessedIssues();
-  });
-
   it("matches the webmux_oneshot label case-insensitively", () => {
     const issues = [
       createIssue({ id: "a", identifier: "ENG-1", branchName: "eng-1", labels: [{ name: "webmux_oneshot", color: "#fff" }] }),
@@ -224,17 +215,13 @@ describe("filterAutoOneshotIssues", () => {
 });
 
 describe("runLinearAutoCreateOnce", () => {
-  beforeEach(() => {
-    resetProcessedIssues();
-  });
-
   it("creates worktrees without requiring dashboard activity", async () => {
     const issue = createIssue();
     const { deps, created, fetchOptions } = createDeps({ issues: [issue] });
 
     await runLinearAutoCreateOnce(deps);
 
-    expect(fetchOptions).toEqual([{ skipCache: true }]);
+    expect(fetchOptions).toEqual([{ maxAgeMs: 55_000 }]);
     expect(created).toEqual([
       {
         mode: "new",
@@ -251,7 +238,7 @@ describe("runLinearAutoCreateOnce", () => {
     await runLinearAutoCreateOnce(deps);
     await runLinearAutoCreateOnce(deps);
 
-    expect(fetchOptions).toEqual([{ skipCache: true }, { skipCache: true }]);
+    expect(fetchOptions).toEqual([{ maxAgeMs: 55_000 }, { maxAgeMs: 55_000 }]);
     expect(created).toEqual([
       {
         mode: "new",
@@ -273,6 +260,8 @@ describe("runLinearAutoCreateOnce", () => {
       },
       git: { listWorktrees: () => [] },
       projectRoot: "/repo",
+      claimedIssues: new Map<string, string>(),
+      failedIssueIds: new Set<string>(),
       fetchIssues: async () => ({ ok: true, data: [issue] }),
     };
 
@@ -294,6 +283,8 @@ describe("runLinearAutoCreateOnce", () => {
       },
       git: { listWorktrees: () => [] },
       projectRoot: "/repo",
+      claimedIssues: new Map<string, string>(),
+      failedIssueIds: new Set<string>(),
       fetchIssues: async () => ({ ok: true, data: [issue] }),
       runOneshotForIssue: async () => {
         oneshotCalls += 1;
@@ -344,7 +335,7 @@ describe("runLinearAutoCreateOnce", () => {
 
     await runLinearAutoCreateOnce(deps);
 
-    expect(fetchOptions).toEqual([{ skipCache: true }]);
+    expect(fetchOptions).toEqual([{ maxAgeMs: 55_000 }]);
     expect(created).toEqual([]);
   });
 
@@ -427,6 +418,8 @@ describe("runLinearAutoCreateOnce", () => {
       },
       git: { listWorktrees: () => [] },
       projectRoot: "/repo",
+      claimedIssues: new Map<string, string>(),
+      failedIssueIds: new Set<string>(),
       fetchIssues: async () => ({ ok: true, data: [oneshotIssue] }),
       runOneshotForIssue: async () => { throw new Error("server unreachable"); },
       onOneshotPickedUp: async ({ issue: picked }) => {
@@ -476,11 +469,271 @@ describe("runLinearAutoCreateOnce", () => {
   });
 });
 
-describe("startLinearAutoCreateMonitor", () => {
-  beforeEach(() => {
-    resetProcessedIssues();
+interface ProjectDepsInput {
+  projectRoot: string;
+  created: string[];
+  claimedIssues: Map<string, string>;
+  fetchIssues?: LinearAutoCreateDependencies["fetchIssues"];
+  failCreate?: () => boolean;
+  createGate?: Promise<void>;
+  runOneshotForIssue?: LinearAutoCreateDependencies["runOneshotForIssue"];
+}
+
+function createProjectDeps(input: ProjectDepsInput): LinearAutoCreateDependencies {
+  return {
+    lifecycleService: {
+      async createWorktree(worktreeInput): Promise<{ branch: string; worktreeId: string }> {
+        await input.createGate;
+        if (input.failCreate?.()) throw new Error("Branch already exists");
+        input.created.push(`${input.projectRoot}:${worktreeInput.branch}`);
+        return { branch: worktreeInput.branch ?? "generated-branch", worktreeId: `wt-${input.created.length}` };
+      },
+    },
+    git: { listWorktrees: () => [] },
+    projectRoot: input.projectRoot,
+    claimedIssues: input.claimedIssues,
+    failedIssueIds: new Set<string>(),
+    ...(input.fetchIssues ? { fetchIssues: input.fetchIssues } : {}),
+    ...(input.runOneshotForIssue ? { runOneshotForIssue: input.runOneshotForIssue } : {}),
+  };
+}
+
+describe("linear auto-create across projects", () => {
+  const originalFetch = globalThis.fetch;
+  const originalLinearApiKey = Bun.env.LINEAR_API_KEY;
+  const issue = createIssue();
+  const fetchIssues: LinearAutoCreateDependencies["fetchIssues"] = async () => ({ ok: true, data: [issue] });
+
+  afterEach(() => {
+    setSystemTime();
+    resetLinearCaches();
+    globalThis.fetch = originalFetch;
+    if (originalLinearApiKey === undefined) {
+      delete Bun.env.LINEAR_API_KEY;
+      return;
+    }
+    Bun.env.LINEAR_API_KEY = originalLinearApiKey;
   });
 
+  it("creates exactly one worktree for an issue that matches two projects", async () => {
+    const created: string[] = [];
+    const claimedIssues = new Map<string, string>();
+    const projectA = createProjectDeps({ projectRoot: "/repo-a", created, claimedIssues, fetchIssues });
+    const projectB = createProjectDeps({ projectRoot: "/repo-b", created, claimedIssues, fetchIssues });
+
+    await Promise.all([runLinearAutoCreateOnce(projectA), runLinearAutoCreateOnce(projectB)]);
+    await runLinearAutoCreateOnce(projectA);
+    await runLinearAutoCreateOnce(projectB);
+
+    expect(created).toEqual([`/repo-a:${issue.branchName}`]);
+  });
+
+  it("lets another project pick up an issue after a failure in the first, without the first retrying", async () => {
+    const created: string[] = [];
+    const claimedIssues = new Map<string, string>();
+    let projectAAttempts = 0;
+    const projectA = createProjectDeps({
+      projectRoot: "/repo-a",
+      created,
+      claimedIssues,
+      fetchIssues,
+      failCreate: () => {
+        projectAAttempts += 1;
+        return true;
+      },
+    });
+    const projectB = createProjectDeps({ projectRoot: "/repo-b", created, claimedIssues, fetchIssues });
+
+    await runLinearAutoCreateOnce(projectA);
+    await runLinearAutoCreateOnce(projectB);
+    await runLinearAutoCreateOnce(projectA);
+
+    expect(projectAAttempts).toBe(1);
+    expect(created).toEqual([`/repo-b:${issue.branchName}`]);
+  });
+
+  it("clearing one project's failures on enable does not clear another project's state", async () => {
+    const claimedIssues = new Map<string, string>();
+    const attempts: string[] = [];
+    const failingProject = (projectRoot: string): LinearAutoCreateDependencies =>
+      createProjectDeps({
+        projectRoot,
+        created: [],
+        claimedIssues,
+        fetchIssues,
+        failCreate: () => {
+          attempts.push(projectRoot);
+          return true;
+        },
+      });
+    const projectA = failingProject("/repo-a");
+    const projectB = failingProject("/repo-b");
+
+    await runLinearAutoCreateOnce(projectA);
+    await runLinearAutoCreateOnce(projectB);
+    expect(attempts).toEqual(["/repo-a", "/repo-b"]);
+
+    resetLinearAutoCreateState(projectA);
+    await runLinearAutoCreateOnce(projectA);
+    await runLinearAutoCreateOnce(projectB);
+
+    expect(attempts).toEqual(["/repo-a", "/repo-b", "/repo-a"]);
+    expect(projectB.failedIssueIds.has(issue.id)).toBe(true);
+  });
+
+  it("re-triggers already processed issues when auto-create is re-enabled in a single project", async () => {
+    const created: string[] = [];
+    const project = createProjectDeps({ projectRoot: "/repo-a", created, claimedIssues: new Map(), fetchIssues });
+
+    await runLinearAutoCreateOnce(project);
+    await runLinearAutoCreateOnce(project);
+    expect(created.length).toBe(1);
+
+    resetLinearAutoCreateState(project);
+    await runLinearAutoCreateOnce(project);
+    expect(created.length).toBe(2);
+  });
+
+  it("releases a removed project's claims so another project can pick the issue up", async () => {
+    const created: string[] = [];
+    const claimedIssues = new Map<string, string>();
+    const projectA = createProjectDeps({ projectRoot: "/repo-a", created, claimedIssues, fetchIssues });
+    const projectB = createProjectDeps({ projectRoot: "/repo-b", created, claimedIssues, fetchIssues });
+
+    await runLinearAutoCreateOnce(projectA);
+    releaseLinearIssueClaims(claimedIssues, projectA.projectRoot);
+    await runLinearAutoCreateOnce(projectB);
+
+    expect(created).toEqual([`/repo-a:${issue.branchName}`, `/repo-b:${issue.branchName}`]);
+  });
+
+  it("does not let a failed attempt delete a claim another project took meanwhile", async () => {
+    const created: string[] = [];
+    const claimedIssues = new Map<string, string>();
+    let current: LinearIssue[] = [issue];
+    const flappingFetch: LinearAutoCreateDependencies["fetchIssues"] = async () => ({ ok: true, data: current });
+    const gate = createDeferred<void>();
+    const projectA = createProjectDeps({
+      projectRoot: "/repo-a",
+      created,
+      claimedIssues,
+      fetchIssues: flappingFetch,
+      createGate: gate.promise,
+      failCreate: () => true,
+    });
+    const projectB = createProjectDeps({ projectRoot: "/repo-b", created, claimedIssues, fetchIssues: flappingFetch });
+
+    const slowAttempt = runLinearAutoCreateOnce(projectA);
+    await Bun.sleep(0);
+    // Label removed then re-added while A's attempt is still running.
+    current = [createIssue({ labels: [] })];
+    await runLinearAutoCreateOnce(projectB);
+    current = [issue];
+    await runLinearAutoCreateOnce(projectB);
+    expect(claimedIssues.get(issue.id)).toBe("/repo-b");
+
+    gate.resolve();
+    await slowAttempt;
+
+    expect(claimedIssues.get(issue.id)).toBe("/repo-b");
+    expect(created).toEqual([`/repo-b:${issue.branchName}`]);
+  });
+
+  it("prunes a claim when the issue leaves Todo and triggers again once it is back in Todo", async () => {
+    const created: string[] = [];
+    const claimedIssues = new Map<string, string>();
+    let current: LinearIssue[] = [issue];
+    const project = createProjectDeps({
+      projectRoot: "/repo-a",
+      created,
+      claimedIssues,
+      fetchIssues: async () => ({ ok: true, data: current }),
+    });
+
+    await runLinearAutoCreateOnce(project);
+    expect(claimedIssues.has(issue.id)).toBe(true);
+
+    current = [createIssue({ state: { name: "In Progress", color: "#f59e0b", type: "started" } })];
+    await runLinearAutoCreateOnce(project);
+    expect(claimedIssues.has(issue.id)).toBe(false);
+
+    current = [issue];
+    await runLinearAutoCreateOnce(project);
+    expect(created.length).toBe(2);
+  });
+
+  it("releases the claim when a oneshot launch fails so another project can run it", async () => {
+    const oneshotIssue = createIssue({ labels: [{ name: "webmux_oneshot", color: "#fff" }] });
+    const claimedIssues = new Map<string, string>();
+    const launched: string[] = [];
+    const oneshotFetch: LinearAutoCreateDependencies["fetchIssues"] = async () => ({ ok: true, data: [oneshotIssue] });
+    const projectA = createProjectDeps({
+      projectRoot: "/repo-a",
+      created: [],
+      claimedIssues,
+      fetchIssues: oneshotFetch,
+      runOneshotForIssue: async () => {
+        launched.push("/repo-a");
+        throw new Error("server unreachable");
+      },
+    });
+    const projectB = createProjectDeps({
+      projectRoot: "/repo-b",
+      created: [],
+      claimedIssues,
+      fetchIssues: oneshotFetch,
+      runOneshotForIssue: async () => {
+        launched.push("/repo-b");
+        return { branch: oneshotIssue.branchName };
+      },
+    });
+
+    await runLinearAutoCreateOnce(projectA);
+    expect(claimedIssues.has(oneshotIssue.id)).toBe(false);
+    await runLinearAutoCreateOnce(projectB);
+    await runLinearAutoCreateOnce(projectA);
+
+    expect(launched).toEqual(["/repo-a", "/repo-b"]);
+    expect(claimedIssues.get(oneshotIssue.id)).toBe("/repo-b");
+  });
+
+  it("issues one Linear request per poll interval for N projects", async () => {
+    resetLinearCaches();
+    Bun.env.LINEAR_API_KEY = "test-linear-key";
+    let requestCount = 0;
+    globalThis.fetch = Object.assign(
+      async function fetchMock(): Promise<Response> {
+        requestCount += 1;
+        return new Response(JSON.stringify({ data: { viewer: { assignedIssues: { nodes: [] } } } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+    const created: string[] = [];
+    const claimedIssues = new Map<string, string>();
+    const projects = ["/repo-a", "/repo-b", "/repo-c", "/repo-d"].map((projectRoot) =>
+      createProjectDeps({ projectRoot, created, claimedIssues }),
+    );
+
+    setSystemTime(new Date("2026-11-01T10:00:00.000Z"));
+    await Promise.all(projects.map((deps) => runLinearAutoCreateOnce(deps)));
+    expect(requestCount).toBe(1);
+
+    // Ticks of the per-project loops are not aligned: later ticks within the
+    // same interval reuse the fresh result.
+    setSystemTime(new Date("2026-11-01T10:00:30.000Z"));
+    for (const deps of projects) await runLinearAutoCreateOnce(deps);
+    expect(requestCount).toBe(1);
+
+    setSystemTime(new Date("2026-11-01T10:01:00.000Z"));
+    for (const deps of projects) await runLinearAutoCreateOnce(deps);
+    expect(requestCount).toBe(2);
+  });
+});
+
+describe("startLinearAutoCreateMonitor", () => {
   it("uses a 60 second poll interval", async () => {
     let scheduledInterval = -1;
     const fetchStarted = createDeferred<void>();
@@ -533,5 +786,28 @@ describe("startLinearAutoCreateMonitor", () => {
     stop();
 
     expect(scheduledInterval).toBe(5_000);
+  });
+
+  it("accepts issues fetched up to pollIntervalMs - 5s ago with a custom interval", async () => {
+    const fetchStarted = createDeferred<void>();
+    const { deps, fetchOptions } = createDeps({
+      onFetch: () => fetchStarted.resolve(),
+    });
+
+    const stop = startLinearAutoCreateMonitor(deps, {
+      pollIntervalMs: 20_000,
+      intervalDeps: {
+        scheduleEvery: (handler: () => void) => {
+          handler();
+          return 1;
+        },
+        cancelSchedule: () => {},
+      },
+    });
+
+    await fetchStarted.promise;
+    stop();
+
+    expect(fetchOptions[0]).toEqual({ maxAgeMs: 15_000 });
   });
 });
