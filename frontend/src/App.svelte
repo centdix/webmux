@@ -212,7 +212,8 @@
   let diffDialogLoad: Promise<void> | null = null;
 
   let assignIssue = $state<LinearIssue | null>(null);
-  let detailIssue = $state<LinearIssue | null>(null);
+  /** The project is kept from when the details opened, so they create there even if the selection moves. */
+  let detailIssue = $state<{ issue: LinearIssue; project: string } | null>(null);
 
   function getAvailableBranchCacheKey(targetProject: string, includeRemote: boolean): string {
     return `${targetProject}:${includeRemote ? "remote" : "local"}`;
@@ -607,6 +608,13 @@
     openCreateDialog(activeProject, issue);
   }
 
+  function handleAssignDetailIssue(issue: LinearIssue): void {
+    if (!detailIssue) return;
+    const targetProject = detailIssue.project;
+    detailIssue = null;
+    openCreateDialog(targetProject, issue);
+  }
+
   async function handleCreate(request: CreateWorktreeRequest) {
     const targetProject = createProject;
     const requestId = nextCreateRequestId++;
@@ -815,6 +823,7 @@
     // Ignore shortcuts when a dialog is open (let dialog handle its own keys)
     if (
       createDialogOpen || removeRef || pull.target || removal.target || showAddProjectDialog || postToLinkedConfirm
+      || detailIssue || showSettingsDialog
     ) return;
 
     const mod = e.metaKey || e.ctrlKey;
@@ -1000,7 +1009,7 @@
           issues={linearIssues}
           availability={linearAvailability}
           onassign={handleAssignIssue}
-          onselect={(issue) => (detailIssue = issue)}
+          onselect={(issue) => (detailIssue = { issue, project: activeProject })}
           bind:collapsed={linearCollapsed}
         />
       {/if}
@@ -1320,8 +1329,8 @@
 
 {#if detailIssue}
   <LinearDetailDialog
-    issue={detailIssue}
-    onassign={(issue) => { detailIssue = null; handleAssignIssue(issue); }}
+    issue={detailIssue.issue}
+    onassign={handleAssignDetailIssue}
     onclose={() => (detailIssue = null)}
   />
 {/if}

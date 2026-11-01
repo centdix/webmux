@@ -1596,6 +1596,38 @@ describe("App create selection", () => {
     expect(api.createWorktree).not.toHaveBeenCalled();
   });
 
+  it("creates from a Linear issue's details in the project it was opened from", async () => {
+    useThreeProjects();
+    const docs = useDocsClient();
+    vi.mocked(docs.createWorktree).mockResolvedValue({ primaryBranch: "doc-1", branches: ["doc-1"] });
+
+    renderApp();
+    await screen.findByTitle("main");
+    const docsSection = screen.getByRole("region", { name: "docs" });
+    await fireEvent.click(within(docsSection).getByRole("button", { name: /^feature\/doc\b/i }));
+    await fireEvent.click(await screen.findByRole("button", { name: /^Linear \(1\) · docs\b/ }));
+    await fireEvent.click(await screen.findByRole("button", { name: /Docs issue/ }));
+    const detail = await screen.findByRole("dialog");
+
+    // Shortcuts stay off while the details are open, but the selection can still move.
+    await fireEvent.keyDown(window, { key: "ArrowUp", metaKey: true });
+    expect(screen.getByRole("button", { name: /^Linear \(1\) · docs\b/ })).toBeInTheDocument();
+    const webmuxSection = screen.getByRole("region", { name: "webmux" });
+    await fireEvent.click(within(webmuxSection).getByRole("button", { name: /^feature\/web\b/i }));
+    expect(await screen.findByRole("button", { name: /^Linear \(0\) · webmux\b/ })).toBeInTheDocument();
+
+    await fireEvent.click(within(detail).getByRole("button", { name: "Implement" }));
+    await screen.findByText("New Worktree");
+    await fireEvent.input(screen.getByLabelText(/Branch name/i), { target: { value: "doc-1" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(docs.createWorktree).toHaveBeenCalledTimes(1));
+    expect(docs.createWorktree).toHaveBeenCalledWith({
+      body: expect.objectContaining({ fromLinear: { issueId: "DOC-1" } }),
+    });
+    expect(api.createWorktree).not.toHaveBeenCalled();
+  });
+
   it("shows the web chat UI on desktop when the local setting is enabled", async () => {
     const worktree = createWorktree("feature/chat", {
       mux: "✓",
