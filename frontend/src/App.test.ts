@@ -560,6 +560,31 @@ describe("App create selection", () => {
     expect(window.location.hash).toBe(`#${PROJECT}/feature/saved`);
   });
 
+  it("selects the worktree a changed hash names, and puts back a hash naming an unknown one", async () => {
+    otherProjects.list = [{
+      prefix: "images",
+      name: "images",
+      worktrees: [createWorktree("feature/img", { project: "images" })],
+      error: null,
+    }];
+    vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("main")]);
+    const changeHash = (hash: string): void => {
+      window.history.replaceState(null, "", `/${hash}`);
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    };
+
+    renderApp();
+    await screen.findByTitle("main");
+
+    changeHash("#images/feature/img");
+    expect(await screen.findByTitle("feature/img")).toBeInTheDocument();
+    expect(window.location.hash).toBe("#images/feature/img");
+
+    changeHash(`#${PROJECT}/missing`);
+    expect(window.location.hash).toBe("#images/feature/img");
+    expect(screen.getByTitle("feature/img")).toBeInTheDocument();
+  });
+
   it("does not restore a selection saved for another project", async () => {
     localStorage.setItem("wt-last-selected-worktree:other", "feature/b");
     vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("feature/a"), createWorktree("feature/b")]);
