@@ -33,7 +33,7 @@ export class ProjectPull {
 
   async confirm(): Promise<void> {
     const target = this.target;
-    if (!target) return;
+    if (!target || this.loading) return;
     const { label, repo } = target.repo;
     this.loading = true;
     this.error = "";
@@ -42,13 +42,15 @@ export class ProjectPull {
         body: { ...(this.force ? { force: true } : {}), ...(repo ? { repo } : {}) },
       });
       if (result.status === "updated" || result.status === "already_up_to_date") {
-        this.cancel();
+        if (this.target === target) this.cancel();
         this.#toast({
           tone: result.status === "updated" ? "success" : "info",
           message: result.status === "updated"
             ? `Pulled latest "${label}" from remote`
             : `"${label}" is already up to date`,
         });
+      } else if (this.target !== target) {
+        return;
       } else if (result.status === "merge_failed" && !this.force) {
         this.force = true;
         this.error = `Fast-forward failed: ${result.error ?? "unknown error"}.\nForce pull will reset it to match remote.`;
@@ -56,7 +58,7 @@ export class ProjectPull {
         this.error = result.error ?? result.status;
       }
     } catch (err) {
-      this.error = errorMessage(err);
+      if (this.target === target) this.error = errorMessage(err);
     } finally {
       this.loading = false;
     }

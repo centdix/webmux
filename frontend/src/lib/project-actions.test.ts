@@ -35,6 +35,96 @@ describe("ProjectPull", () => {
     expect(pull.target).toBeNull();
     expect(toast).toHaveBeenCalledWith({ tone: "success", message: 'Pulled latest "shared" from remote' });
   });
+  const mainRepo = { repo: null, label: "main", ideUrl: null };
+
+  it("pulls a linked repo by name and the project's own repo without one", async () => {
+    const pull = new ProjectPull(vi.fn());
+    pullMain.mockResolvedValue({ status: "updated" });
+
+    pull.start({ project: "images", repo: { repo: "shared", label: "shared", ideUrl: null } });
+    await pull.confirm();
+    expect(pullMain).toHaveBeenLastCalledWith({ body: { repo: "shared" } });
+
+    pull.start({ project: "images", repo: mainRepo });
+    await pull.confirm();
+    expect(pullMain).toHaveBeenLastCalledWith({ body: {} });
+  });
+
+  it("closes with an info toast when already up to date", async () => {
+    const toast = vi.fn();
+    const pull = new ProjectPull(toast);
+    pull.start({ project: "images", repo: mainRepo });
+    pullMain.mockResolvedValueOnce({ status: "already_up_to_date" });
+
+    await pull.confirm();
+
+    expect(pull.target).toBeNull();
+    expect(toast).toHaveBeenCalledWith({ tone: "info", message: '"main" is already up to date' });
+  });
+
+  it("keeps the target with the error when the pull fails otherwise", async () => {
+    const pull = new ProjectPull(vi.fn());
+    pull.start({ project: "images", repo: mainRepo });
+    pullMain.mockResolvedValueOnce({ status: "fetch_failed", error: "no remote" });
+
+    await pull.confirm();
+
+    expect(pull.target).not.toBeNull();
+    expect(pull.force).toBe(false);
+    expect(pull.error).toBe("no remote");
+  });
+
+  it("keeps the target with the error when the request throws", async () => {
+    const pull = new ProjectPull(vi.fn());
+    pull.start({ project: "images", repo: mainRepo });
+    pullMain.mockRejectedValueOnce(new Error("offline"));
+
+    await pull.confirm();
+
+    expect(pull.target).not.toBeNull();
+    expect(pull.error).toBe("offline");
+    expect(pull.loading).toBe(false);
+  });
+
+  it("leaves another pull's dialog alone when a cancelled pull finishes", async () => {
+    const toast = vi.fn();
+    const pull = new ProjectPull(toast);
+    let finish: (result: { status: string; error?: string }) => void = () => {};
+    pullMain.mockReturnValueOnce(new Promise((resolve) => (finish = resolve)));
+    pull.start({ project: "images", repo: mainRepo });
+    const first = pull.confirm();
+    pull.cancel();
+    const other = { project: "webmux", repo: mainRepo };
+    pull.start(other);
+
+    await pull.confirm();
+    expect(pullMain).toHaveBeenCalledTimes(1);
+
+    finish({ status: "merge_failed", error: "diverged" });
+    await first;
+    expect(pull.target).toEqual(other);
+    expect(pull.force).toBe(false);
+    expect(pull.error).toBe("");
+    expect(pull.loading).toBe(false);
+  });
+
+  it("toasts a cancelled pull's success without closing another pull's dialog", async () => {
+    const toast = vi.fn();
+    const pull = new ProjectPull(toast);
+    let finish: (result: { status: string }) => void = () => {};
+    pullMain.mockReturnValueOnce(new Promise((resolve) => (finish = resolve)));
+    pull.start({ project: "images", repo: mainRepo });
+    const first = pull.confirm();
+    pull.cancel();
+    const other = { project: "webmux", repo: mainRepo };
+    pull.start(other);
+
+    finish({ status: "updated" });
+    await first;
+
+    expect(pull.target).toEqual(other);
+    expect(toast).toHaveBeenCalledWith({ tone: "success", message: 'Pulled latest "main" from remote' });
+  });
 });
 
 describe("ProjectRemoval", () => {
@@ -67,5 +157,20 @@ describe("ProjectRemoval", () => {
     expect(onRemoved).not.toHaveBeenCalled();
     expect(removal.target).toEqual({ prefix: "images", name: "images" });
     expect(removal.error).toBe("offline");
+  });
+
+  it("keeps the target with the error when removing fails", async () => {
+    const onRemoved = vi.fn();
+    const removal = new ProjectRemoval(onRemoved);
+    vi.mocked(removeProject).mockRejectedValue(new Error("registry locked"));
+    removal.start({ prefix: "images", name: "images" });
+
+    await removal.confirm();
+
+    expect(fetchProjects).not.toHaveBeenCalled();
+    expect(onRemoved).not.toHaveBeenCalled();
+    expect(removal.target).toEqual({ prefix: "images", name: "images" });
+    expect(removal.error).toBe("registry locked");
+    expect(removal.loading).toBe(false);
   });
 });
