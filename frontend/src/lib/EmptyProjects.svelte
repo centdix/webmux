@@ -4,7 +4,7 @@
   let { onProjectAdded }: { onProjectAdded: (prefix: string) => void } = $props();
 </script>
 
-<div class="min-h-screen flex items-center justify-center bg-bg text-primary p-6">
+<div class="min-h-screen flex items-center justify-center bg-surface text-primary p-6">
   <div class="w-full max-w-md">
     <h1 class="text-lg font-semibold mb-2">No projects yet</h1>
     <p class="text-sm text-muted mb-4">
