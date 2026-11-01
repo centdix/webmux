@@ -98,7 +98,7 @@ describe("worktree selection persistence", () => {
   it("stores favorites of every project by worktree key and clears them when empty", () => {
     saveFavoriteWorktreeKeys(new Set(["proj-a:feature/a", "proj-b:feature/a"]));
 
-    expect(loadFavoriteWorktreeKeys()).toEqual(new Set(["proj-a:feature/a", "proj-b:feature/a"]));
+    expect(loadFavoriteWorktreeKeys("proj-a")).toEqual(new Set(["proj-a:feature/a", "proj-b:feature/a"]));
 
     saveFavoriteWorktreeKeys(new Set());
 
@@ -111,17 +111,25 @@ describe("worktree selection persistence", () => {
     localStorage.setItem(`${FAVORITE_WORKTREES_STORAGE_KEY}:proj-b`, JSON.stringify(["main"]));
 
     const expected = new Set(["proj-c:main", "proj-a:feature/a", "proj-a:main", "proj-b:main"]);
-    expect(loadFavoriteWorktreeKeys()).toEqual(expected);
+    expect(loadFavoriteWorktreeKeys("proj-a")).toEqual(expected);
     expect(localStorage.getItem(`${FAVORITE_WORKTREES_STORAGE_KEY}:proj-a`)).toBeNull();
     expect(localStorage.getItem(`${FAVORITE_WORKTREES_STORAGE_KEY}:proj-b`)).toBeNull();
-    expect(loadFavoriteWorktreeKeys()).toEqual(expected);
+    expect(loadFavoriteWorktreeKeys("proj-a")).toEqual(expected);
+  });
+
+  it("migrates the unscoped legacy favorites into the current project once", () => {
+    localStorage.setItem(FAVORITE_WORKTREES_STORAGE_KEY, JSON.stringify(["feature/x"]));
+
+    expect(loadFavoriteWorktreeKeys("proj-a")).toEqual(new Set(["proj-a:feature/x"]));
+    expect(localStorage.getItem(FAVORITE_WORKTREES_STORAGE_KEY)).toBeNull();
+    expect(loadFavoriteWorktreeKeys("proj-b")).toEqual(new Set(["proj-a:feature/x"]));
   });
 
   it("ignores malformed favorite worktrees data", () => {
     localStorage.setItem(FAVORITE_WORKTREE_KEYS_STORAGE_KEY, "not json");
     localStorage.setItem(`${FAVORITE_WORKTREES_STORAGE_KEY}:proj-a`, "{");
 
-    expect(loadFavoriteWorktreeKeys()).toEqual(new Set());
+    expect(loadFavoriteWorktreeKeys("proj-a")).toEqual(new Set());
   });
 
   it("stores and clears the web chat UI preference", () => {

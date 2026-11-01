@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, type Component } from "svelte";
+  import { onMount, untrack, type Component } from "svelte";
   import WorktreeList from "./lib/WorktreeList.svelte";
   import TopBar from "./lib/TopBar.svelte";
   import Terminal from "./lib/Terminal.svelte";
@@ -119,7 +119,8 @@
   let worktreesError = $derived(store.errorOf(project));
   let hasLoadedWorktrees = $derived(store.loaded && store.hasProject(project));
   let selectedBranch = $derived(selection.branch);
-  let favoriteKeys = $state(loadFavoriteWorktreeKeys());
+  // The boot project inherits the unscoped legacy favorites.
+  let favoriteKeys = $state(untrack(() => loadFavoriteWorktreeKeys(selection.project)));
   let favoriteBranches = $derived(branchesInProject(favoriteKeys, project));
   let removingBranches = $derived(branchesInProject(store.removing.keys, project));
   let openingBranches = $derived(branchesInProject(store.opening.keys, project));

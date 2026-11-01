@@ -8,7 +8,7 @@ export const THEME_STORAGE_KEY = "wt-theme";
 export const LAST_SELECTED_WORKTREE_STORAGE_KEY = "wt-last-selected-worktree";
 export const SIDEBAR_WIDTH_STORAGE_KEY = "wt-sidebar-width";
 export const WEB_CHAT_UI_STORAGE_KEY = "wt-use-web-chat-ui";
-/** Legacy per-project favorites (`<key>:<project>` → branches), migrated on load. */
+/** Legacy favorites (`<key>:<project>` or unscoped `<key>` → branches), migrated on load. */
 export const FAVORITE_WORKTREES_STORAGE_KEY = "wt-favorite-worktrees";
 export const FAVORITE_WORKTREE_KEYS_STORAGE_KEY = "wt-favorite-worktree-keys";
 export const LAST_PROJECT_STORAGE_KEY = "wt-last-project";
@@ -153,15 +153,18 @@ function parseStringArray(stored: string | null): string[] {
 }
 
 /** Favorites of every project, as `worktreeKey`s. The first load folds the
- *  per-project branch lists (`wt-favorite-worktrees:<project>`) into it. */
-export function loadFavoriteWorktreeKeys(): Set<string> {
+ *  per-project branch lists (`wt-favorite-worktrees:<project>`) into it, and
+ *  the pre-multi-project unscoped list into `currentProject`. */
+export function loadFavoriteWorktreeKeys(currentProject: string): Set<string> {
   const keys = new Set(parseStringArray(localStorage.getItem(FAVORITE_WORKTREE_KEYS_STORAGE_KEY)));
   const legacyPrefix = `${FAVORITE_WORKTREES_STORAGE_KEY}:`;
   const legacyKeys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
-    .filter((key): key is string => key?.startsWith(legacyPrefix) ?? false);
+    .filter((key): key is string =>
+      key !== null && (key.startsWith(legacyPrefix) || (key === FAVORITE_WORKTREES_STORAGE_KEY && currentProject !== ""))
+    );
   if (legacyKeys.length === 0) return keys;
   for (const legacyKey of legacyKeys) {
-    const project = legacyKey.slice(legacyPrefix.length);
+    const project = legacyKey === FAVORITE_WORKTREES_STORAGE_KEY ? currentProject : legacyKey.slice(legacyPrefix.length);
     for (const branch of parseStringArray(localStorage.getItem(legacyKey))) {
       keys.add(worktreeKey({ project, branch }));
     }
