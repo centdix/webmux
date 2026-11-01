@@ -4,18 +4,23 @@
   import Btn from "./Btn.svelte";
 
   let {
+    projectName,
     issues,
     availability,
     onassign,
     onselect,
+    collapsed = $bindable(true),
   }: {
+    /** Project whose issues these are, shown in the header. */
+    projectName: string;
     issues: LinearIssue[];
     availability: LinearIssueAvailability;
     onassign: (issue: LinearIssue) => void;
     onselect: (issue: LinearIssue) => void;
+    /** Kept by the parent so it survives the panel remounting across projects. */
+    collapsed?: boolean;
   } = $props();
 
-  let collapsed = $state(true);
   let query = $state("");
 
   let filtered = $derived(
@@ -40,7 +45,10 @@
     class="w-full flex items-center justify-between px-4 py-2 text-xs text-muted cursor-pointer bg-transparent border-none hover:bg-hover"
     onclick={() => (collapsed = !collapsed)}
   >
-    <span class="font-semibold">Linear{countLabel}</span>
+    <span class="min-w-0 truncate">
+      <span class="font-semibold">Linear{countLabel}</span>
+      <span class="opacity-80"> · {projectName}</span>
+    </span>
     <span class="text-[10px]">{collapsed ? "▸" : "▾"}</span>
   </button>
 

@@ -112,7 +112,7 @@
   });
   // Polls also pick up config edits and retry a failed config load.
   const store = new WorktreesStore(() => {
-    linear.ensure(selection.project);
+    linear.ensure(activeProject);
     configs.ensure(activeProject);
   });
   const notifications = new NotificationCenter();
@@ -128,15 +128,16 @@
 
   /** The current project: the selected worktree's (the last one when nothing
    *  is selected). The sidebar lists every project regardless; this only
-   *  drives the Linear panel and the initial fallback selection. */
+   *  drives the initial fallback selection. */
   let project = $derived(selection.project);
   /** Project of the selected worktree (the current one when none): the main
-   *  panel, its dialogs and the config they read all target it. */
+   *  panel, its dialogs, the config they read and the Linear panel all target
+   *  it. */
   let activeProject = $derived(selection.selected?.project ?? project);
   /** Where Cmd+K creates: the selected worktree's project, else the first. */
   let defaultCreateProject = $derived(selection.selected?.project ?? store.projects[0]?.prefix ?? project);
   let config = $derived(configs.get(activeProject) ?? DEFAULT_CONFIG);
-  let linearData = $derived(linear.get(project));
+  let linearData = $derived(linear.get(activeProject));
   let linearIssues = $derived(linearData?.issues ?? []);
   let linearAvailability = $derived(linearData?.availability ?? "disabled");
   let hasLoadedWorktrees = $derived(store.hasLoaded(project));
@@ -424,6 +425,7 @@
     pendingCreateCount > 0 || store.hasCreating ? ACTIVE_CREATE_POLL_INTERVAL_MS : DEFAULT_POLL_INTERVAL_MS,
   );
   let showLinearPanel = $derived(linearAvailability !== "disabled");
+  let linearCollapsed = $state(true);
   let worktreeListEmptyMessage = $derived(
     trimmedWorktreeSearch
       ? hiddenArchivedMatchCount > 0
@@ -498,7 +500,7 @@
   });
 
   $effect(() => {
-    linear.ensure(project);
+    linear.ensure(activeProject);
   });
 
   $effect(() => {
@@ -600,8 +602,9 @@
     lockedBaseBranch = null;
   }
 
+  /** The issue comes from the Linear panel, so it is created in its project. */
   function handleAssignIssue(issue: LinearIssue): void {
-    openCreateDialog(project, issue);
+    openCreateDialog(activeProject, issue);
   }
 
   async function handleCreate(request: CreateWorktreeRequest) {
@@ -993,10 +996,12 @@
       </div>
       {#if showLinearPanel}
         <LinearPanel
+          projectName={store.nameOf(activeProject) ?? activeProject}
           issues={linearIssues}
           availability={linearAvailability}
           onassign={handleAssignIssue}
           onselect={(issue) => (detailIssue = issue)}
+          bind:collapsed={linearCollapsed}
         />
       {/if}
       {#if !isMobile}

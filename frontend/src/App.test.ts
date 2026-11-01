@@ -4,6 +4,7 @@ import type {
   AgentsUiWorktreeConversationResponse,
   AppConfig,
   AppNotification,
+  LinearIssue,
   LinearIssuesResponse,
   ProjectWorktreeList,
   WorktreeInfo,
@@ -482,6 +483,7 @@ describe("App create selection", () => {
     localStorage.clear();
     setupBrowserMocks();
 
+    vi.mocked(projectApi).mockImplementation(() => api);
     vi.mocked(api.fetchConfig).mockResolvedValue(createConfig());
     vi.mocked(fetchWorktrees).mockResolvedValue([]);
     vi.mocked(api.fetchAvailableBranches).mockResolvedValue({ branches: [] });
@@ -1513,6 +1515,85 @@ describe("App create selection", () => {
     expect(
       await screen.findByText("No assigned Linear issues right now."),
     ).toBeInTheDocument();
+  });
+
+  function createLinearIssue(identifier: string, title: string): LinearIssue {
+    return {
+      id: identifier,
+      identifier,
+      title,
+      description: null,
+      priority: 2,
+      priorityLabel: "High",
+      url: `https://linear.app/example/issue/${identifier}`,
+      branchName: identifier.toLowerCase(),
+      dueDate: null,
+      updatedAt: "2026-10-01T00:00:00.000Z",
+      state: { name: "Todo", color: "#e2e2e2", type: "unstarted" },
+      team: { name: "Engineering", key: "ENG" },
+      labels: [],
+      project: null,
+    };
+  }
+
+  /** Gives `docs` its own client so its calls are told apart from the others'. */
+  function useDocsClient(): typeof api {
+    const docs: typeof api = {
+      ...api,
+      createWorktree: vi.fn(),
+      fetchLinearIssues: vi.fn(async () => createLinearIssuesResponse({ issues: [createLinearIssue("DOC-1", "Docs issue")] })),
+    };
+    vi.mocked(projectApi).mockImplementation((project) => (project === "docs" ? docs : api));
+    return docs;
+  }
+
+  it("ties the Linear panel to the selected worktree's project, from its cache when coming back", async () => {
+    useThreeProjects();
+    const docs = useDocsClient();
+    vi.mocked(api.fetchLinearIssues).mockResolvedValue(
+      createLinearIssuesResponse({ issues: [createLinearIssue("WEB-1", "Webmux issue")] }),
+    );
+
+    renderApp();
+    await fireEvent.click(await screen.findByRole("button", { name: /^Linear \(1\) · webmux\b/ }));
+    expect(await screen.findByText("Webmux issue")).toBeInTheDocument();
+
+    const docsSection = screen.getByRole("region", { name: "docs" });
+    await fireEvent.click(within(docsSection).getByRole("button", { name: /^feature\/doc\b/i }));
+
+    expect(await screen.findByRole("button", { name: /^Linear \(1\) · docs\b/ })).toBeInTheDocument();
+    expect(await screen.findByText("Docs issue")).toBeInTheDocument();
+    expect(screen.queryByText("Webmux issue")).not.toBeInTheDocument();
+
+    const webmuxSection = screen.getByRole("region", { name: "webmux" });
+    await fireEvent.click(within(webmuxSection).getByRole("button", { name: /^feature\/web\b/i }));
+
+    // Straight from the cache: no flash and no refetch within the throttle window.
+    expect(screen.getByText("Webmux issue")).toBeInTheDocument();
+    expect(api.fetchLinearIssues).toHaveBeenCalledTimes(1);
+    expect(docs.fetchLinearIssues).toHaveBeenCalledTimes(1);
+  });
+
+  it("creates a worktree from a Linear issue in the Linear panel's project", async () => {
+    useThreeProjects();
+    const docs = useDocsClient();
+    vi.mocked(docs.createWorktree).mockResolvedValue({ primaryBranch: "doc-1", branches: ["doc-1"] });
+
+    renderApp();
+    await screen.findByTitle("main");
+    const docsSection = screen.getByRole("region", { name: "docs" });
+    await fireEvent.click(within(docsSection).getByRole("button", { name: /^feature\/doc\b/i }));
+    await fireEvent.click(await screen.findByRole("button", { name: /^Linear \(1\) · docs\b/ }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Implement" }));
+    await screen.findByText("New Worktree");
+    await fireEvent.input(screen.getByLabelText(/Branch name/i), { target: { value: "doc-1" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(docs.createWorktree).toHaveBeenCalledTimes(1));
+    expect(docs.createWorktree).toHaveBeenCalledWith({
+      body: expect.objectContaining({ fromLinear: { issueId: "DOC-1" } }),
+    });
+    expect(api.createWorktree).not.toHaveBeenCalled();
   });
 
   it("shows the web chat UI on desktop when the local setting is enabled", async () => {
