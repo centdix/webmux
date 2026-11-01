@@ -221,7 +221,7 @@
 
   function rowTitle(wt: WorktreeInfo, attention: Attention, opening: boolean): string {
     return [
-      wt.label ? wt.branch : null,
+      wt.label || wt.creating ? wt.branch : null,
       [wt.agentLabel ?? wt.agentName, wt.profile].filter(Boolean).join(" · ") || null,
       wt.source === "oneshot" ? "Autonomous run — auto-closes when done" : null,
       opening ? "Opening…" : attentionLabel(attention, wt),
@@ -363,7 +363,7 @@
         oncontextmenu={(event) => openMenu(event, key)}
       >
         <WorktreeStatusGlyph {attention} />
-        <span class="min-w-0 flex-1 truncate {dim ? 'text-muted' : ''} {attention === 'creating' ? 'italic' : ''}">{wt.label ?? wt.branch}</span>
+        <span class="min-w-0 flex-1 truncate {dim ? 'text-muted' : ''} {attention === 'creating' ? 'italic' : ''}">{wt.creating ? attentionLabel(attention, wt) : (wt.label ?? wt.branch)}</span>
         {#if favorites.has(key)}<span class="shrink-0 text-[10px] text-warning/80" aria-hidden="true">★</span>{/if}
         {#if pr}<PrMark {pr} />{/if}
       </button>

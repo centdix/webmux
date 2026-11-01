@@ -241,9 +241,11 @@ describe("WorktreeList", () => {
 
   it("moves through the menu with the arrow keys and gives the focus back on Escape", async () => {
     renderList({ rows: rowsOf([{ ...createWorktree("feature/keys"), creating: true }]) });
-    row("feature/keys").focus();
+    const creatingRow = screen.getByRole("button", { name: "Creating…" });
+    creatingRow.focus();
 
-    const menu = await openRowMenu("feature/keys");
+    await fireEvent.contextMenu(creatingRow);
+    const menu = screen.getByRole("menu", { name: "feature/keys" });
     expect(within(menu).getByText("feature/keys")).toHaveAttribute("role", "presentation");
     // Creating disables Close: focus starts on the first enabled item.
     expect(document.activeElement).toBe(within(menu).getByRole("menuitem", { name: "Add to favorites" }));
@@ -260,7 +262,7 @@ describe("WorktreeList", () => {
 
     await fireEvent.keyDown(document.activeElement!, { key: "Escape" });
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
-    expect(document.activeElement).toBe(row("feature/keys"));
+    expect(document.activeElement).toBe(creatingRow);
   });
 
   it("closes the ⋯ menu on a second click of ⋯", async () => {
@@ -347,6 +349,14 @@ describe("WorktreeList", () => {
     const button = row("Search ranking");
     expect(button.getAttribute("title")).toContain("feature/random-fallback");
     expect(screen.queryByText("feature/random-fallback")).not.toBeInTheDocument();
+  });
+
+  it("names a row by its creation phase while it is being created, keeping the branch in its tooltip", () => {
+    renderList({ rows: rowsOf([{ ...createWorktree("feature/new"), creating: true, creationPhase: "running_post_create_hook" }]) });
+
+    const button = screen.getByRole("button", { name: "Running post-create hook…" });
+    expect(button.getAttribute("title")).toContain("feature/new");
+    expect(screen.queryByText("feature/new")).not.toBeInTheDocument();
   });
 
   it("shows one status glyph per row, the most urgent state first", () => {
