@@ -798,7 +798,9 @@ export async function syncPrStatus(
 }
 
 /** Start periodic PR status sync. Returns a cleanup function that stops the monitor.
- *  When `isActive` is provided, polling is skipped if no clients are connected. */
+ *  When `isActive` is provided, a tick is skipped whenever it returns false; the
+ *  server passes `dashboardActivity.prSyncGate(prefix)`, which paces each
+ *  project's sync by dashboard focus. */
 export function startPrMonitor(
   getWorktreeGitDirs: () => Promise<Map<string, string>>,
   linkedRepos: LinkedRepoConfig[],
