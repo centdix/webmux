@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectWorktreeList, WorktreeInfo } from "./types";
-import { buildProjectRail, projectInitials, projectRailTitle, projectTint } from "./project-rail";
+import { buildProjectRail, projectInitials, projectRailInitials, projectRailTitle, projectTint } from "./project-rail";
 
 function createWorktree(branch: string, overrides: Partial<WorktreeInfo> = {}): WorktreeInfo {
   return {
@@ -46,9 +46,30 @@ describe("projectInitials", () => {
     expect(projectInitials("x")).toBe("X");
   });
 
-  it("cycles the tints by order", () => {
-    expect(projectTint(0)).toBe(projectTint(4));
-    expect(projectTint(0)).not.toBe(projectTint(1));
+});
+
+describe("projectRailInitials", () => {
+  it("keeps the plain initials when they are unique", () => {
+    expect(projectRailInitials(["image-generator", "webmux"])).toEqual(["IG", "WE"]);
+  });
+
+  it("numbers the later projects whose initials collide, in registered order", () => {
+    expect(projectRailInitials(["web-app", "webmux", "web-api", "wild-ape"])).toEqual(["WA", "WE", "WA2", "WA3"]);
+  });
+
+  it("does not change when an unrelated project is added", () => {
+    expect(projectRailInitials(["web-app", "image-generator", "web-api"])).toEqual(["WA", "IG", "WA2"]);
+  });
+
+  it("skips a suffixed value another project already has as its initials", () => {
+    expect(projectRailInitials(["x", "x2", "x"])).toEqual(["X", "X2", "X3"]);
+  });
+});
+
+describe("projectTint", () => {
+  it("gives the first eight projects distinct tints", () => {
+    const tints = Array.from({ length: 8 }, (_, index) => projectTint(index));
+    expect(new Set(tints).size).toBe(8);
   });
 });
 
@@ -76,6 +97,12 @@ describe("buildProjectRail", () => {
       ["broken", 0, false, "git exploded"],
     ]);
     expect(rail[0]?.initials).toBe("WE");
+  });
+
+  it("disambiguates colliding initials across the rail", () => {
+    const rail = buildProjectRail([createProject("web-app", []), createProject("web-api", [])], new Set());
+
+    expect(rail.map((item) => item.initials)).toEqual(["WA", "WA2"]);
   });
 
   it("counts a worktree being created as running", () => {
