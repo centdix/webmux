@@ -152,7 +152,7 @@ import type { ManagedWorktreeRuntimeState, OneshotMeta, ProjectSnapshot, Worktre
 import { isValidBranchName, isValidWorktreeName } from "./domain/policies";
 import { assembleServeRoutes } from "./domain/project-routes";
 import { createPortRegistrationService, createWebmuxRuntime, type WebmuxRuntime } from "./runtime";
-import { createInstanceRegistry, type InstanceEntry } from "./adapters/instance-registry";
+import { createInstanceRegistry } from "./adapters/instance-registry";
 import { createProjectsRegistry } from "./adapters/projects-registry";
 import { ProjectManager, type ManagedProject, type ProjectLoopController } from "./services/project-manager";
 import { isValidPortLabel } from "./domain/port-registrations";
@@ -2835,19 +2835,9 @@ startSerializedInterval(
   15_000,
 );
 
-// Self-register as a migration sensor: record this server's port + the repo it
-// was started for, so a survivor can detect leftover single-project instances
-// and `webmux project migrate` can recover each one's repo. No prefix/federation
-// here — every project is served in this one process.
-const homeCwd = Bun.env.WEBMUX_PROJECT_DIR ?? process.cwd();
-const homeRoot = isGitRepo(homeCwd) ? projectRoot(homeCwd) : homeCwd;
-
-const selfEntry: InstanceEntry = {
-  port: BOUND_PORT,
-  projectDir: homeRoot,
-  pid: process.pid,
-};
-instanceRegistry.register(selfEntry);
+// Self-register so the CLI (host and sandbox containers) can discover this
+// server's port.
+instanceRegistry.register({ port: BOUND_PORT, pid: process.pid });
 log.info(`[serve] registered instance port=${BOUND_PORT} projects=${manager.list().length}`);
 
 function deregisterSelf(): void {

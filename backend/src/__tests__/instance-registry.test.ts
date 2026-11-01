@@ -21,7 +21,6 @@ describe("instance-registry", () => {
   function makeEntry(overrides: Partial<InstanceEntry> = {}): InstanceEntry {
     return {
       port: 5111,
-      projectDir: "/repo/demo",
       pid: process.pid,
       ...overrides,
     };
@@ -81,15 +80,13 @@ describe("instance-registry", () => {
   it("rejects entries missing required fields", async () => {
     const { dir, registry } = await freshRegistry();
     registry.register(makeEntry({ port: 5111 }));
-    // Missing projectDir.
+    // Missing pid.
     writeFileSync(join(dir, "5112.json"), JSON.stringify({
       port: 5112,
-      pid: process.pid,
     }));
     // Wrong type for port.
     writeFileSync(join(dir, "5113.json"), JSON.stringify({
       port: "nope",
-      projectDir: "/x",
       pid: process.pid,
     }));
 
@@ -112,11 +109,11 @@ describe("instance-registry", () => {
 
   it("overwrites an existing entry when registering the same port twice", async () => {
     const { registry } = await freshRegistry();
-    registry.register(makeEntry({ port: 5111, projectDir: "/repo/alpha" }));
-    registry.register(makeEntry({ port: 5111, projectDir: "/repo/beta" }));
+    registry.register(makeEntry({ port: 5111, pid: 1 }));
+    registry.register(makeEntry({ port: 5111, pid: process.pid }));
 
     const entries = registry.listLive();
     expect(entries).toHaveLength(1);
-    expect(entries[0]?.projectDir).toBe("/repo/beta");
+    expect(entries[0]?.pid).toBe(process.pid);
   });
 });

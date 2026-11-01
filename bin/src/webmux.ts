@@ -364,18 +364,17 @@ async function main(args: string[] = process.argv.slice(2)): Promise<void> {
   // other secret webmux loads, rather than leaking into every session and pane.
   for (const key of await loadEnvFile(webmuxConfigEnvPath())) projectEnvKeys.add(key);
 
-  // When the user didn't pin a port, point CLI commands at the live server for
-  // this project rather than the 5111 default. `webmux serve` walks to a free
-  // port when 5111 is taken, so the running instance is often elsewhere (e.g.
+  // When the user didn't pin a port, point CLI commands at the live server
+  // rather than the 5111 default. The running server is often elsewhere (e.g.
   // a service installed on 5112); server-backed commands like `oneshot` would
   // otherwise fail to connect.
   let effectivePort = parsed.port;
   if (!parsed.portExplicit) {
     const { resolveLiveServerPort } = await import("./instance-port.ts");
-    const resolved = resolveLiveServerPort({ defaultPort: parsed.port, cwd: process.cwd() });
+    const resolved = resolveLiveServerPort({ defaultPort: parsed.port });
     effectivePort = resolved.port;
     if (parsed.debug && resolved.source !== "default") {
-      console.error(`[webmux] resolved port ${resolved.port} from live instance (${resolved.source})`);
+      console.error(`[webmux] resolved port ${resolved.port} from live instance`);
     }
   }
 

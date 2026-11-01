@@ -6,18 +6,11 @@ import { log } from "../lib/log";
 import { webmuxRuntimeStateDir } from "./webmux-paths";
 
 /** A live webmux server, self-registered under the runtime state directory
- *  (`~/.webmux/instances/<port>.json` in production).
- *
- *  This registry is a transitional **migration sensor**: webmux now runs one
- *  multi-project server per machine, so the only reason to track other live
- *  servers is to detect leftover single-project instances (from the old
- *  one-server-per-project model) and consolidate them via `webmux project
- *  migrate`. `projectDir` is the repo that instance was started for — what
- *  migration recovers into the surviving server. Nothing new should be built on
- *  this; it goes away once the migration path is retired. */
+ *  (`~/.webmux/instances/<port>.json` in production). Pure discovery: the CLI
+ *  (on the host and inside sandbox containers) reads it to find the port of the
+ *  running server. */
 export interface InstanceEntry {
   port: number;
-  projectDir: string;
   pid: number;
 }
 
@@ -51,7 +44,6 @@ function isInstanceEntry(value: unknown): value is InstanceEntry {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
   return typeof v.port === "number"
-    && typeof v.projectDir === "string"
     && typeof v.pid === "number";
 }
 

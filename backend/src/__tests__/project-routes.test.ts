@@ -40,7 +40,7 @@ describe("mountProjectRoutes", () => {
 describe("assembleServeRoutes", () => {
   const allProjectRoutes = Object.fromEntries(Object.values(projectApiPaths).map((path) => [path, "project"]));
   const hubRoutes = Object.fromEntries(Object.values(hubApiPaths).map((path) => [path, "hub"]));
-  const prefixes = ["webmux", "init", "worktrees", "migrate"];
+  const prefixes = ["webmux", "init", "worktrees"];
 
   it("keeps every hub route alongside the mounted project routes", () => {
     const routes = assembleServeRoutes(hubRoutes, prefixes.map((prefix) => ({ prefix, routes: allProjectRoutes })));
