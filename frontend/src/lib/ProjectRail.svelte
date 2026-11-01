@@ -53,7 +53,7 @@
             ? 'ring-2 ring-accent/70'
             : 'opacity-75 hover:opacity-100'}"
           title={projectRailTitle(item)}
-          aria-label={item.name}
+          aria-label={projectRailTitle(item)}
           aria-current={isCurrent ? "page" : undefined}
           data-project-rail-item={item.prefix}
           onclick={() => onselect(item.prefix)}

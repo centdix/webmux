@@ -471,10 +471,13 @@ async function openCreateDialogWithBaseAndSubmit(branch: string, baseBranch: str
   await fireEvent.click(screen.getByRole("button", { name: "Create" }));
 }
 
-/** The rail button of a project: choosing it shows that project's list. */
+/** The rail button of a project (named by it, then its badges): choosing it
+ *  shows that project's list. */
 async function chooseProject(name: string): Promise<void> {
   const rail = await screen.findByRole("navigation", { name: "Projects" });
-  await fireEvent.click(await within(rail).findByRole("button", { name }));
+  await fireEvent.click(
+    await within(rail).findByRole("button", { name: (accessibleName) => accessibleName.split(" · ")[0] === name }),
+  );
 }
 
 function railProjectNames(): string[] {
@@ -880,8 +883,8 @@ describe("App create selection", () => {
     renderApp();
     await screen.findByTitle("main");
     const rail = screen.getByRole("navigation", { name: "Projects" });
-    const images = within(rail).getByRole("button", { name: "images" });
-    const docs = within(rail).getByRole("button", { name: "docs" });
+    const images = within(rail).getByRole("button", { name: "images · 2 need you" });
+    const docs = within(rail).getByRole("button", { name: "docs · agents running" });
 
     expect(images.querySelector('[data-rail-badge="needs-you"]')).toHaveTextContent("2");
     expect(images).toHaveAttribute("title", "images · 2 need you");
