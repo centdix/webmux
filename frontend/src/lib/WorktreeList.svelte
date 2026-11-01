@@ -5,9 +5,11 @@
   import WorktreeProjectHeader from "./WorktreeProjectHeader.svelte";
   import LinearBadge from "./LinearBadge.svelte";
   import AgentStatusIcon, { agentIconVisible } from "./AgentStatusIcon.svelte";
+  import AgentStatusCount from "./AgentStatusCount.svelte";
   import { worktreeCreationPhaseLabel } from "./utils";
   import {
     OVERFLOW_STATUS_BAR_STATUSES,
+    OVERFLOW_STATUS_LABELS,
     countAgentStatusesIn,
     keysWithAgentStatus,
     type OverflowStatusBarStatus,
@@ -102,8 +104,14 @@
   let cycleCursor = $state<Record<string, string>>({});
 
   // Measure the rendered bars (each sits `top-2`/`bottom-2` = 8px off the scroll edge)
-  // so the observer's margins occlude exactly the band each bar covers — no magic number.
+  // and the sticky project header so the observer's margins occlude exactly the
+  // band they cover — no magic number.
   const BAR_OFFSET = 8;
+  let stickyHeaderHeight = $state(0);
+  $effect(() => {
+    sections.length;
+    stickyHeaderHeight = listEl?.querySelector<HTMLElement>("[data-project-header-bar]")?.offsetHeight ?? 0;
+  });
   let topBarEl = $state<HTMLElement | null>(null);
   let bottomBarEl = $state<HTMLElement | null>(null);
   let topBarHeight = $state(0);
@@ -115,7 +123,7 @@
     bottomBarHeight = bottomBarEl?.offsetHeight ?? 0;
   });
   let rootMargin = $derived(
-    `-${topBarHeight ? topBarHeight + BAR_OFFSET : 0}px 0px ` +
+    `-${Math.max(stickyHeaderHeight, topBarHeight ? topBarHeight + BAR_OFFSET : 0)}px 0px ` +
       `-${bottomBarHeight ? bottomBarHeight + BAR_OFFSET : 0}px 0px`,
   );
 
@@ -180,12 +188,6 @@
   let hasAbove = $derived(OVERFLOW_STATUS_BAR_STATUSES.some((s) => aboveCounts[s] > 0));
   let hasBelow = $derived(OVERFLOW_STATUS_BAR_STATUSES.some((s) => belowCounts[s] > 0));
 
-  const statusLabels: Record<OverflowStatusBarStatus, string> = {
-    waiting: "waiting",
-    error: "error",
-    "done-unread": "unread",
-  };
-
   function cycleToStatus(status: OverflowStatusBarStatus, direction: "above" | "below"): void {
     const keys = keysWithAgentStatus(
       rows,
@@ -215,17 +217,21 @@
     {#if sections.length === 0}
       <p class="px-3 py-4 text-xs text-muted text-center">{emptyMessage}</p>
     {/if}
-    {#each sections as section (section.prefix)}
+    {#each sections as section, index (section.prefix)}
+      {@const listId = `worktree-list-${section.prefix}`}
       <section aria-label={section.name} data-project={section.prefix}>
         <WorktreeProjectHeader
           name={section.name}
           count={section.rows.length}
           collapsed={section.collapsed}
           error={section.error}
+          {listId}
+          separated={index > 0}
+          statusCounts={countAgentStatusesIn(section.rows, undefined, notified)}
           ontoggle={() => ontogglecollapsed(section.prefix)}
         />
         {#if !section.collapsed}
-          <ul class="list-none">
+          <ul id={listId} class="list-none">
             {#if section.emptyMessage !== null}
               <li class="px-3 py-2 text-xs text-muted">{section.emptyMessage}</li>
             {/if}
@@ -502,15 +508,10 @@
         <button
           type="button"
           class="flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] tabular-nums hover:bg-hover cursor-pointer"
-          title={`Scroll to next ${statusLabels[status]} worktree ${direction}`}
+          title={`Scroll to next ${OVERFLOW_STATUS_LABELS[status]} worktree ${direction}`}
           onclick={() => cycleToStatus(status, direction)}
         >
-          <AgentStatusIcon
-            status={status === "done-unread" ? "done" : status}
-            unread={status === "done-unread"}
-            size={12}
-          />
-          <span>{counts[status]}</span>
+          <AgentStatusCount {status} count={counts[status]} />
         </button>
       {/if}
     {/each}

@@ -1,4 +1,4 @@
-import type { ProjectWorktreeList, WorktreeInfo, WorktreeListRow, WorktreeListSection } from "./types";
+import type { ProjectWorktreeList, WorktreeInfo, WorktreeListRow, WorktreeListSection, WorktreeRef } from "./types";
 import { searchMatch } from "./utils";
 import { worktreeKey } from "./worktree-ref";
 
@@ -50,6 +50,12 @@ export function countArchivedMatches(worktrees: WorktreeInfo[], query: string): 
 export const OVERFLOW_STATUS_BAR_STATUSES = ["waiting", "error", "done-unread"] as const;
 export type OverflowStatusBarStatus = (typeof OVERFLOW_STATUS_BAR_STATUSES)[number];
 
+export const OVERFLOW_STATUS_LABELS: Record<OverflowStatusBarStatus, string> = {
+  waiting: "waiting",
+  error: "error",
+  "done-unread": "unread",
+};
+
 export function rowShowsAgentStatus(worktree: WorktreeInfo): boolean {
   return worktree.mux === "✓" && !worktree.creating;
 }
@@ -70,12 +76,12 @@ export function overflowStatusOf(
 
 export function countAgentStatusesIn(
   rows: WorktreeListRow[],
-  keys: ReadonlySet<string>,
+  keys?: ReadonlySet<string>,
   notifiedKeys: ReadonlySet<string> = new Set(),
 ): Record<OverflowStatusBarStatus, number> {
   const counts: Record<OverflowStatusBarStatus, number> = { waiting: 0, error: 0, "done-unread": 0 };
   for (const { worktree } of rows) {
-    if (!keys.has(worktreeKey(worktree))) continue;
+    if (keys && !keys.has(worktreeKey(worktree))) continue;
     const status = overflowStatusOf(worktree, notifiedKeys);
     if (status) counts[status]++;
   }
@@ -109,7 +115,8 @@ function emptySectionMessage(project: ProjectWorktreeList, showArchived: boolean
 }
 
 /** The sidebar: every project in the given (server) order, each with its
- *  filtered rows. While searching, a project without a match is left out. */
+ *  filtered rows. While searching, a project without a match is left out
+ *  unless its fetch failed (the error stays visible). */
 export function buildWorktreeListSections(
   projects: ProjectWorktreeList[],
   options: WorktreeListSectionsOptions,
@@ -117,7 +124,7 @@ export function buildWorktreeListSections(
   const searching = options.query.trim() !== "";
   return projects.flatMap((project) => {
     const visible = filterWorktrees(project.worktrees, options);
-    if (searching && visible.length === 0) return [];
+    if (searching && visible.length === 0 && project.error === null) return [];
     return [{
       prefix: project.prefix,
       name: project.name,
@@ -133,6 +140,25 @@ export function buildWorktreeListSections(
  *  none): the order keyboard navigation and neighbor selection follow. */
 export function displayedWorktrees(sections: WorktreeListSection[]): WorktreeInfo[] {
   return sections.flatMap((section) => (section.collapsed ? [] : section.rows.map((row) => row.worktree)));
+}
+
+/** Keys Cmd+Up/Down and neighbor selection step through: the displayed rows,
+ *  plus `selected` at its project's place when its row is hidden (collapsed
+ *  project), so stepping from it reaches the visible rows around that project. */
+export function navigationKeys(sections: WorktreeListSection[], selected: WorktreeRef | null): string[] {
+  const keys = displayedWorktrees(sections).map(worktreeKey);
+  if (!selected) return keys;
+  const selectedKey = worktreeKey(selected);
+  if (keys.includes(selectedKey)) return keys;
+  let index = 0;
+  for (const section of sections) {
+    if (section.prefix === selected.project) {
+      keys.splice(index, 0, selectedKey);
+      break;
+    }
+    if (!section.collapsed) index += section.rows.length;
+  }
+  return keys;
 }
 
 export function buildWorktreeListRows(worktrees: WorktreeInfo[]): WorktreeListRow[] {

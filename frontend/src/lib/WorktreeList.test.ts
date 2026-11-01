@@ -271,6 +271,46 @@ describe("WorktreeList", () => {
     expect(ontogglecollapsed).toHaveBeenCalledWith("webmux");
   });
 
+  it("summarises a collapsed project's agent statuses on its header", () => {
+    const waiting = { ...createWorktree("feature/waiting"), agent: "waiting" as const };
+    const failed = { ...createWorktree("feature/failed"), agent: "error" as const };
+    const done = { ...createWorktree("feature/done"), agent: "done" as const };
+    renderList({
+      sections: [
+        createSection([createRow(waiting), createRow(failed), createRow(done)], { collapsed: true }),
+        createSection([createRow(createWorktree("main", "images"))], { prefix: "images", name: "images" }),
+      ],
+      notified: new Set(["webmux:feature/done"]),
+    });
+
+    const header = screen.getByRole("button", { name: "webmux, 3 worktrees, 1 waiting, 1 error, 1 unread" });
+    expect(header).toHaveAttribute("aria-controls", "worktree-list-webmux");
+    expect(header.querySelectorAll("[data-project-status]")).toHaveLength(3);
+    const images = screen.getByRole("button", { name: "images, 1 worktrees" });
+    expect(images).toHaveAttribute("aria-controls", "worktree-list-images");
+    expect(document.getElementById("worktree-list-images")).toBeInTheDocument();
+  });
+
+  it("shows no status summary on an expanded project's header", () => {
+    const waiting = { ...createWorktree("feature/waiting"), agent: "waiting" as const };
+    renderList({ sections: [createSection([createRow(waiting)])] });
+
+    expect(screen.getByRole("button", { name: "webmux, 1 worktrees" }).querySelector("[data-project-status]")).toBeNull();
+  });
+
+  it("separates every project header but the first", () => {
+    renderList({
+      sections: [
+        createSection([createRow(createWorktree("main"))]),
+        createSection([createRow(createWorktree("main", "images"))], { prefix: "images", name: "images" }),
+      ],
+    });
+
+    const bars = document.querySelectorAll("[data-project-header-bar]");
+    expect(bars[0]).not.toHaveClass("border-t");
+    expect(bars[1]).toHaveClass("border-t", "sticky");
+  });
+
   it("shows a project's fetch error and empty message under its header", () => {
     renderList({
       sections: [

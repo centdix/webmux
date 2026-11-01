@@ -7,6 +7,7 @@ import {
   displayedWorktrees,
   filterWorktrees,
   keysWithAgentStatus,
+  navigationKeys,
   sortFavoritesFirst,
   type WorktreeListSectionsOptions,
 } from "./worktree-list";
@@ -159,6 +160,10 @@ describe("countAgentStatusesIn", () => {
     });
   });
 
+  it("counts every row when no key set is given", () => {
+    expect(countAgentStatusesIn(rows)).toEqual({ waiting: 2, error: 1, "done-unread": 0 });
+  });
+
   it("returns zero counts for an empty set", () => {
     expect(countAgentStatusesIn(rows, new Set())).toEqual({ waiting: 0, error: 0, "done-unread": 0 });
   });
@@ -258,6 +263,18 @@ describe("buildWorktreeListSections", () => {
     expect(sections[0]?.rows.map((row) => row.worktree.branch)).toEqual(["feat/search"]);
   });
 
+  it("keeps a failed project while searching so its fetch error stays visible", () => {
+    const sections = buildWorktreeListSections(
+      [...projects, createProject("broken", [], "git exploded")],
+      sectionOptions({ query: "search" }),
+    );
+
+    expect(sections.map((section) => [section.prefix, section.error])).toEqual([
+      ["beta", null],
+      ["broken", "git exploded"],
+    ]);
+  });
+
   it("applies show archived to every project", () => {
     const sections = buildWorktreeListSections(projects, sectionOptions({ showArchived: true, query: "old" }));
 
@@ -301,5 +318,25 @@ describe("displayedWorktrees", () => {
       "beta:b2",
       "gamma:g1",
     ]);
+  });
+});
+
+describe("navigationKeys", () => {
+  const sections = buildWorktreeListSections(
+    [
+      createProject("beta", [createWorktree("b1", { project: "beta" })]),
+      createProject("alpha", [createWorktree("a1", { project: "alpha" }), createWorktree("a2", { project: "alpha" })]),
+      createProject("gamma", [createWorktree("g1", { project: "gamma" })]),
+    ],
+    sectionOptions({ collapsed: new Set(["alpha"]) }),
+  );
+
+  it("lists the displayed rows when the selection is one of them or absent", () => {
+    expect(navigationKeys(sections, null)).toEqual(["beta:b1", "gamma:g1"]);
+    expect(navigationKeys(sections, { project: "gamma", branch: "g1" })).toEqual(["beta:b1", "gamma:g1"]);
+  });
+
+  it("slots a selection hidden in a collapsed project at its section's place", () => {
+    expect(navigationKeys(sections, { project: "alpha", branch: "a2" })).toEqual(["beta:b1", "alpha:a2", "gamma:g1"]);
   });
 });
