@@ -100,6 +100,7 @@ import {
 import { buildCreateWorktreeTargets, LifecycleError } from "./services/lifecycle-service";
 import { buildNativeTerminalLaunch, buildNativeTerminalTmuxCommand } from "./services/native-terminal-service";
 import {
+  createPrSyncState,
   fetchBranchPrStates,
   startAutoRemoveMonitor,
   startPrMonitor,
@@ -221,6 +222,7 @@ const PROJECT_DIR = runtime.projectDir;
 const config: ProjectConfig = runtime.config;
 const git = runtime.git;
 const archiveStateService = runtime.archiveStateService;
+const prSyncState = createPrSyncState();
 const tmux = runtime.tmux;
 const projectRuntime = runtime.projectRuntime;
 const worktreeCreationTracker = runtime.worktreeCreationTracker;
@@ -387,7 +389,7 @@ const autoRemoveDeps: AutoRemoveDependencies = {
   markRemoving: (branch: string) => removingBranches.add(branch),
   unmarkRemoving: (branch: string) => removingBranches.delete(branch),
   getBranchPrStates: () =>
-    fetchBranchPrStates(config.integrations.github.linkedRepos, PROJECT_DIR),
+    fetchBranchPrStates(config.integrations.github.linkedRepos, PROJECT_DIR, prSyncState),
 };
 
 function getFrontendConfig(): {
@@ -1744,7 +1746,7 @@ async function apiPostWorktreeToLinear(name: string, req: Request): Promise<Resp
 }
 
 async function apiSyncWorktreePrs(name: string): Promise<Response> {
-  await syncPrStatus(getWorktreeGitDirs, config.integrations.github.linkedRepos, PROJECT_DIR);
+  await syncPrStatus(getWorktreeGitDirs, config.integrations.github.linkedRepos, PROJECT_DIR, prSyncState);
   const snapshot = await readProjectSnapshot();
   const worktree = snapshot.worktrees.find((w) => w.branch === name);
   if (!worktree) return errorResponse(`Worktree not found: ${name}`, 404);
@@ -2414,7 +2416,7 @@ function parseAgentIdParam(params: Record<string, string>):
   function startLight(): void {
     // Display sync (PR/CI status shown in the dashboard) stays gated on dashboard
     // activity -- that data is only needed while someone is looking.
-    stopPrMonitor = startPrMonitor(getWorktreeGitDirs, config.integrations.github.linkedRepos, PROJECT_DIR, undefined, hasRecentDashboardActivity);
+    stopPrMonitor = startPrMonitor(getWorktreeGitDirs, config.integrations.github.linkedRepos, PROJECT_DIR, prSyncState, undefined, hasRecentDashboardActivity);
     // Auto-remove is headless maintenance: it must run even when the dashboard is
     // closed, so it gets its own ungated sweep instead of riding the display sync.
     stopAutoRemoveMonitor = startAutoRemoveMonitor(async () => {
