@@ -27,6 +27,14 @@ export function isApiPath(pathname: string): boolean {
   return /^(\/[^/]+)?\/api(\/|$)/.test(pathname);
 }
 
+/** Where an old `/<prefix>` or `/<prefix>/...` bookmark of a registered
+ *  project now lives (`/#<prefix>`); `null` for any other path. */
+export function legacyProjectRedirect(pathname: string, isProject: (prefix: string) => boolean): string | null {
+  if (isApiPath(pathname)) return null;
+  const prefix = pathname.split("/")[1] ?? "";
+  return prefix && isProject(prefix) ? `/#${prefix}` : null;
+}
+
 /** Merge the hub routes with every project's mounted routes. Hub entries are
  *  applied last so a project route can never replace one. */
 export function assembleServeRoutes<TEntry>(

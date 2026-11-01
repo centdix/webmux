@@ -148,7 +148,7 @@ import type {
 } from "./domain/agents-ui";
 import type { OneshotMeta, ProjectSnapshot, WorktreeSnapshot } from "./domain/model";
 import { isValidBranchName, isValidWorktreeName } from "./domain/policies";
-import { assembleServeRoutes, isApiPath } from "./domain/project-routes";
+import { assembleServeRoutes, isApiPath, legacyProjectRedirect } from "./domain/project-routes";
 import { createPortRegistrationService, createWebmuxRuntime, type WebmuxRuntime } from "./runtime";
 import { createInstanceRegistry, type InstanceEntry } from "./adapters/instance-registry";
 import { createProjectsRegistry } from "./adapters/projects-registry";
@@ -2735,8 +2735,10 @@ async function globalFetch(req: Request): Promise<Response> {
   }
 
   // Static frontend files in production mode (fallback for unmatched routes)
-  if (STATIC_DIR) return serveStaticFrontend(STATIC_DIR, url.pathname);
-  return new Response("Not Found", { status: 404 });
+  const res = STATIC_DIR ? await serveStaticFrontend(STATIC_DIR, url.pathname) : new Response("Not Found", { status: 404 });
+  if (res.status !== 404) return res;
+  const redirect = legacyProjectRedirect(url.pathname, (prefix) => apps.has(prefix));
+  return redirect ? new Response(null, { status: 302, headers: { Location: redirect } }) : res;
 }
 
 function trackSocket(ws: ServerWebSocket<WsData>): void {

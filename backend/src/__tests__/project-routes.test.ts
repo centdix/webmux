@@ -1,6 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { hubApiPaths, projectApiBasePath, projectApiPaths } from "@webmux/api-contract";
-import { assembleServeRoutes, isApiPath, legacyRuntimeEventsPath, mountProjectRoutes } from "../domain/project-routes";
+import {
+  assembleServeRoutes,
+  isApiPath,
+  legacyProjectRedirect,
+  legacyRuntimeEventsPath,
+  mountProjectRoutes,
+} from "../domain/project-routes";
 
 describe("mountProjectRoutes", () => {
   it("mounts every project route under /api/projects/<prefix>, WebSockets included", () => {
@@ -64,6 +70,22 @@ describe("isApiPath", () => {
   it("leaves SPA and static asset paths alone", () => {
     for (const path of ["/", "/webmux", "/webmux/", "/apis", "/assets/api.js", "/webmux/apiary", "/a/b/api"]) {
       expect(isApiPath(path)).toBe(false);
+    }
+  });
+});
+
+describe("legacyProjectRedirect", () => {
+  const isProject = (prefix: string): boolean => prefix === "webmux";
+
+  it("sends old /<prefix> bookmarks to the project's hash", () => {
+    for (const path of ["/webmux", "/webmux/", "/webmux/feat/x"]) {
+      expect(legacyProjectRedirect(path, isProject)).toBe("/#webmux");
+    }
+  });
+
+  it("leaves unknown prefixes, the root and API paths alone", () => {
+    for (const path of ["/", "/other", "/other/feat", "/api/projects/webmux", "/webmux/api/worktrees", "/webmux/api"]) {
+      expect(legacyProjectRedirect(path, isProject)).toBeNull();
     }
   });
 });
