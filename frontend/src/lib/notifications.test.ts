@@ -87,7 +87,7 @@ describe("NotificationCenter", () => {
     vi.advanceTimersByTime(4000);
 
     expect(center.toasts).toHaveLength(0);
-    expect(shown).toEqual([{ title: "alpha #3", tag: "wm-alpha-3" }]);
+    expect(shown).toEqual([{ title: "alpha #3", tag: "wm-alpha:3" }]);
     Reflect.deleteProperty(document, "hidden");
   });
 });

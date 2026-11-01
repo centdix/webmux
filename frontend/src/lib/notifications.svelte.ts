@@ -65,7 +65,7 @@ export class NotificationCenter {
     if (document.hidden && Notification.permission === "granted") {
       new Notification(notification.message, {
         body: notification.url ?? notification.branch,
-        tag: `wm-${notification.project}-${notification.id}`,
+        tag: `wm-${notificationKey(notification)}`,
       });
     }
   }
