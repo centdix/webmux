@@ -40,6 +40,8 @@ import {
   WorktreeNameParamsSchema,
   WorktreeTabParamsSchema,
   WorktreePortParamsSchema,
+  WorktreeIdParamsSchema,
+  WorktreeIdPortParamsSchema,
   RegisterWorktreePortRequestSchema,
   RegisterWorktreePortResponseSchema,
   WorktreePortListResponseSchema,
@@ -109,6 +111,8 @@ export const projectApiPaths = {
   deleteWorktreeTab: "/worktrees/:name/tabs/:tabId",
   worktreePorts: "/worktrees/:name/ports",
   deleteWorktreePort: "/worktrees/:name/ports/:label",
+  worktreePortsById: "/worktree-ids/:id/ports",
+  deleteWorktreePortById: "/worktree-ids/:id/ports/:label",
   mergeWorktree: "/worktrees/:name/merge",
   fetchWorktreeDiff: "/worktrees/:name/diff",
   fetchLinearIssues: "/linear/issues",
@@ -375,6 +379,34 @@ export const projectContract = c.router({
     method: "DELETE",
     path: projectApiPaths.deleteWorktreePort,
     pathParams: WorktreePortParamsSchema,
+    responses: {
+      200: OkResponseSchema,
+      ...commonErrorResponses,
+    },
+  },
+  registerWorktreePortById: {
+    method: "POST",
+    path: projectApiPaths.worktreePortsById,
+    pathParams: WorktreeIdParamsSchema,
+    body: RegisterWorktreePortRequestSchema,
+    responses: {
+      200: RegisterWorktreePortResponseSchema,
+      ...commonErrorResponses,
+    },
+  },
+  fetchWorktreePortsById: {
+    method: "GET",
+    path: projectApiPaths.worktreePortsById,
+    pathParams: WorktreeIdParamsSchema,
+    responses: {
+      200: WorktreePortListResponseSchema,
+      ...commonErrorResponses,
+    },
+  },
+  deleteWorktreePortById: {
+    method: "DELETE",
+    path: projectApiPaths.deleteWorktreePortById,
+    pathParams: WorktreeIdPortParamsSchema,
     responses: {
       200: OkResponseSchema,
       ...commonErrorResponses,
