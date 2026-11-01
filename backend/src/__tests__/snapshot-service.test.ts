@@ -311,6 +311,37 @@ describe("buildProjectSnapshot", () => {
     ]);
   });
 
+  it("lists worktrees being created before open ones", () => {
+    const runtime = new ProjectRuntime();
+    runtime.upsertWorktree({
+      worktreeId: "wt_alpha",
+      branch: "feature/alpha",
+      path: "/repo/__worktrees/feature-alpha",
+      runtime: "host",
+    });
+    runtime.setSessionState("wt_alpha", { exists: true, sessionName: "wm-project", paneCount: 1 });
+
+    const snapshot = buildProjectSnapshot({
+      projectName: "Project",
+      mainBranch: "main",
+      runtime,
+      notifications: [],
+      creatingWorktrees: [
+        {
+          branch: "feature/zulu",
+          path: "/repo/__worktrees/feature-zulu",
+          profile: "default",
+          agentName: "claude",
+          phase: "creating_worktree",
+          source: "ui",
+        },
+      ],
+    });
+
+    expect(snapshot.worktrees.map((worktree) => worktree.branch)).toEqual(["feature/zulu", "feature/alpha"]);
+    expect(snapshot.worktrees[1]?.mux).toBe(true);
+  });
+
   it("orders open worktrees first, then closed ones by pr state", () => {
     const runtime = new ProjectRuntime();
     const addWorktree = (worktreeId: string, branch: string): void => {

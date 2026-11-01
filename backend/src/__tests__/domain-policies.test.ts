@@ -65,9 +65,19 @@ describe("deriveProjectPrefix", () => {
 describe("compareWorktreeOrder", () => {
   const worktree = (branch: string, fields: Partial<WorktreeOrderFields> = {}): WorktreeOrderFields => ({
     branch,
+    creating: false,
     open: false,
     prStates: [],
     ...fields,
+  });
+
+  it("ranks worktrees being created above open ones, whatever their name", () => {
+    const rows = [
+      worktree("alpha", { open: true }),
+      worktree("zulu", { creating: true, open: true }),
+    ];
+
+    expect([...rows].sort(compareWorktreeOrder).map((row) => row.branch)).toEqual(["zulu", "alpha"]);
   });
 
   it("ranks open worktrees above every closed one", () => {

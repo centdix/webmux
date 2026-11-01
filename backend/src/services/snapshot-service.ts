@@ -112,6 +112,7 @@ function mapCreatingWorktreeSnapshot(
 function orderFieldsOf(worktree: WorktreeSnapshot): WorktreeOrderFields {
   return {
     branch: worktree.branch,
+    creating: worktree.creation !== null,
     open: worktree.mux || worktree.creation !== null,
     prStates: worktree.prs.map((pr) => pr.state),
   };

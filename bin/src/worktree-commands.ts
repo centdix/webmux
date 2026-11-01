@@ -977,8 +977,8 @@ export function formatWorktreeList(rows: ListedWorktreeRow[], options: ParsedLis
     .filter((row) => matchesListSearch(row, query))
     .sort((a, b) =>
       compareWorktreeOrder(
-        { branch: a.branch, open: a.isOpen, prStates: a.prStates },
-        { branch: b.branch, open: b.isOpen, prStates: b.prStates },
+        { branch: a.branch, creating: false, open: a.isOpen, prStates: a.prStates },
+        { branch: b.branch, creating: false, open: b.isOpen, prStates: b.prStates },
       )
     );
   const visibleRows = matchingRows.filter((row) => {
