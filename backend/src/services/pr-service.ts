@@ -82,6 +82,18 @@ type FetchPrsResult =
 /** The fields a single-PR refresh can re-read: everything else is list-only. */
 type PrStatus = Pick<PrEntry, "state" | "isDraft">;
 
+/** Outcome of one `gh` invocation. */
+export type GhRunResult =
+  | { timedOut: true }
+  | { timedOut: false; exitCode: number; stdout: string; stderr: string };
+
+/** Runs `gh` with the given args (without the leading "gh"). */
+export type GhRunner = (args: string[], cwd: string | undefined) => Promise<GhRunResult>;
+
+export interface PrSyncDeps {
+  runGh: GhRunner;
+}
+
 // ── Caches for rate-limit mitigation ─────────────────────────────────────────
 
 /** Last-seen updatedAt per PR URL — used to skip unchanged PRs' review comments. */
@@ -251,6 +263,33 @@ export function parsePrResponse(
 
 // ── I/O functions ─────────────────────────────────────────────────────────────
 
+/** Spawn `gh` with a hard timeout so a hung process never stalls the caller. */
+async function spawnGh(args: string[], cwd: string | undefined): Promise<GhRunResult> {
+  const proc = Bun.spawn(["gh", ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+    ...(cwd ? { cwd } : {}),
+  });
+
+  const timeout = Bun.sleep(GH_TIMEOUT_MS).then(() => {
+    proc.kill();
+    return "timeout" as const;
+  });
+
+  const completed = Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+
+  const raceResult = await Promise.race([completed, timeout]);
+  if (raceResult === "timeout") return { timedOut: true };
+  const [exitCode, stdout, stderr] = raceResult;
+  return { timedOut: false, exitCode, stdout, stderr };
+}
+
+const DEFAULT_PR_SYNC_DEPS: PrSyncDeps = { runGh: spawnGh };
+
 /**
  * Fetch all open PRs from a repo via `gh` CLI.
  * Returns a Result: on success, a map of branch name → PrEntry; on failure, an error string.
@@ -260,10 +299,10 @@ export async function fetchAllPrs(
   repoSlug?: string,
   repoLabel?: string,
   cwd?: string,
+  runGh: GhRunner = spawnGh,
 ): Promise<FetchPrsResult> {
   const label = repoSlug ?? "current";
   const args = [
-    "gh",
     "pr",
     "list",
     "--state",
@@ -275,33 +314,20 @@ export async function fetchAllPrs(
   ];
   if (repoSlug) args.push("--repo", repoSlug);
 
-  const proc = Bun.spawn(args, {
-    stdout: "pipe",
-    stderr: "pipe",
-    ...(cwd ? { cwd } : {}),
-  });
-
-  const timeout = Bun.sleep(GH_TIMEOUT_MS).then(() => {
-    proc.kill();
-    return "timeout" as const;
-  });
-
-  const raceResult = await Promise.race([proc.exited, timeout]);
-  if (raceResult === "timeout") {
+  const result = await runGh(args, cwd);
+  if (result.timedOut) {
     return { ok: false, error: `gh pr list timed out for ${label}` };
   }
 
-  if (raceResult !== 0) {
-    const stderr = (await new Response(proc.stderr).text()).trim();
+  if (result.exitCode !== 0) {
     return {
       ok: false,
-      error: `gh pr list failed for ${label} (exit ${raceResult}): ${stderr}`,
+      error: `gh pr list failed for ${label} (exit ${result.exitCode}): ${result.stderr.trim()}`,
     };
   }
 
   try {
-    const json = await new Response(proc.stdout).text();
-    return { ok: true, data: parsePrResponse(json, repoLabel) };
+    return { ok: true, data: parsePrResponse(result.stdout, repoLabel) };
   } catch (err) {
     return { ok: false, error: `failed to parse gh output for ${label}: ${err}` };
   }
@@ -311,15 +337,16 @@ export async function fetchAllPrs(
  *  Conditional requests (304) don't count against GitHub's rate limit. */
 async function fetchReviewComments(
   prNumber: number,
-  repoSlug?: string,
-  cwd?: string,
+  repoSlug: string | undefined,
+  cwd: string | undefined,
+  runGh: GhRunner,
 ): Promise<PrComment[]> {
   const repoFlag = repoSlug
     ? repoSlug
     : "{owner}/{repo}";
   const apiPath = `repos/${repoFlag}/pulls/${prNumber}/comments?per_page=100`;
   const args = [
-    "gh", "api",
+    "api",
     apiPath,
     "--include",
   ];
@@ -329,21 +356,10 @@ async function fetchReviewComments(
     args.push("--header", `If-None-Match: ${cached.etag}`);
   }
 
-  const proc = Bun.spawn(args, {
-    stdout: "pipe",
-    stderr: "pipe",
-    ...(cwd ? { cwd } : {}),
-  });
+  const result = await runGh(args, cwd);
+  if (result.timedOut) return cached?.comments ?? [];
 
-  const timeout = Bun.sleep(GH_TIMEOUT_MS).then(() => {
-    proc.kill();
-    return "timeout" as const;
-  });
-
-  const raceResult = await Promise.race([proc.exited, timeout]);
-  if (raceResult === "timeout") return cached?.comments ?? [];
-
-  const raw = await new Response(proc.stdout).text();
+  const raw = result.stdout;
 
   // gh api --include prefixes the body with HTTP headers separated by a blank line
   let blankLineIdx = raw.indexOf("\r\n\r\n");
@@ -354,7 +370,7 @@ async function fetchReviewComments(
   }
   if (blankLineIdx === -1) {
     // No headers found — may be an error or empty response
-    if (raceResult !== 0) return cached?.comments ?? [];
+    if (result.exitCode !== 0) return cached?.comments ?? [];
     try {
       return parseReviewComments(raw);
     } catch {
@@ -371,7 +387,7 @@ async function fetchReviewComments(
     return cached?.comments ?? [];
   }
 
-  if (raceResult !== 0) return cached?.comments ?? [];
+  if (result.exitCode !== 0) return cached?.comments ?? [];
 
   // Parse ETag from response headers
   const etagMatch = headerBlock.match(/^etag:\s*(.+)$/mi);
@@ -402,21 +418,10 @@ export function parsePrViewStatus(json: string): PrStatus | null {
 }
 
 /** Fetch the current state of a PR by its URL. Returns null on error. */
-async function fetchPrStatus(url: string): Promise<PrStatus | null> {
-  const proc = Bun.spawn(["gh", "pr", "view", url, "--json", "state,isDraft"], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-
-  const timeout = Bun.sleep(GH_TIMEOUT_MS).then(() => {
-    proc.kill();
-    return "timeout" as const;
-  });
-
-  const raceResult = await Promise.race([proc.exited, timeout]);
-  if (raceResult === "timeout" || raceResult !== 0) return null;
-
-  return parsePrViewStatus(await new Response(proc.stdout).text());
+async function fetchPrStatus(url: string, runGh: GhRunner): Promise<PrStatus | null> {
+  const result = await runGh(["pr", "view", url, "--json", "state,isDraft"], undefined);
+  if (result.timedOut || result.exitCode !== 0) return null;
+  return parsePrViewStatus(result.stdout);
 }
 
 /** Update stored PR state for a worktree whose PR is no longer in the open PR list.
@@ -424,14 +429,14 @@ async function fetchPrStatus(url: string): Promise<PrStatus | null> {
  *  `isDraft` too: an entry can be absent from the open-PR list while still open
  *  (a failed repo fetch, or PR_FETCH_LIMIT truncation), and a draft marked ready
  *  in that window would otherwise keep rendering as a draft. */
-async function refreshStalePrData(gitDir: string): Promise<void> {
+async function refreshStalePrData(gitDir: string, runGh: GhRunner): Promise<void> {
   const entries = await readWorktreePrs(gitDir);
   if (!entries.some((e) => e.state === "open")) return;
 
   const updated = await Promise.all(
     entries.map(async (entry) => {
       if (entry.state !== "open") return entry;
-      const status = await fetchPrStatus(entry.url);
+      const status = await fetchPrStatus(entry.url, runGh);
       return status ? { ...entry, ...status } : entry;
     }),
   );
@@ -444,12 +449,13 @@ export async function syncPrStatus(
   getWorktreeGitDirs: () => Promise<Map<string, string>>,
   linkedRepos: LinkedRepoConfig[],
   projectDir?: string,
+  deps: PrSyncDeps = DEFAULT_PR_SYNC_DEPS,
 ): Promise<void> {
   log.debug(`[pr] starting sync (${1 + linkedRepos.length} repo(s))`);
   // Fetch current repo + all linked repos in parallel.
   const allRepoResults = await Promise.all([
-    fetchAllPrs(undefined, undefined, projectDir),
-    ...linkedRepos.map(({ repo, alias }) => fetchAllPrs(repo, alias, projectDir)),
+    fetchAllPrs(undefined, undefined, projectDir, deps.runGh),
+    ...linkedRepos.map(({ repo, alias }) => fetchAllPrs(repo, alias, projectDir, deps.runGh)),
   ]);
 
   // Log fetch errors; aggregate successes into branch → PrEntry[].
@@ -494,7 +500,7 @@ export async function syncPrStatus(
   if (reviewTuples.length > 0) {
     log.debug(`[pr] fetching review comments for ${reviewTuples.length} PR(s)`);
     const reviewResults = await mapWithConcurrency(reviewTuples, 5, (t) =>
-      fetchReviewComments(t.entry.number, t.repoSlug, projectDir),
+      fetchReviewComments(t.entry.number, t.repoSlug, projectDir, deps.runGh),
     );
     for (let i = 0; i < reviewTuples.length; i++) {
       const entry = reviewTuples[i].entry;
@@ -528,7 +534,7 @@ export async function syncPrStatus(
   const staleRefreshes: Promise<void>[] = [];
   for (const gitDir of uniqueDirs) {
     if (seen.has(gitDir)) continue;
-    staleRefreshes.push(refreshStalePrData(gitDir));
+    staleRefreshes.push(refreshStalePrData(gitDir, deps.runGh));
   }
   await Promise.all(staleRefreshes);
 
