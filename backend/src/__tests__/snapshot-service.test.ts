@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { PrEntry } from "../domain/model";
+import type { CreatingWorktreeState, PrEntry, WorktreeSnapshot } from "../domain/model";
 import { NotificationService } from "../services/notification-service";
 import { ProjectRuntime } from "../services/project-runtime";
 import { buildProjectSnapshot } from "../services/snapshot-service";
@@ -72,6 +72,7 @@ describe("buildProjectSnapshot", () => {
       runtime,
       creatingWorktrees: [
         {
+          worktreeId: "wt_search",
           branch: "feature/search",
           path: "/repo/__worktrees/feature-search",
           profile: "default",
@@ -206,6 +207,7 @@ describe("buildProjectSnapshot", () => {
       notifications: [],
       creatingWorktrees: [
         {
+          worktreeId: "wt_creating_new_flow",
           branch: "feature/new-flow",
           baseBranch: "main",
           path: "/repo/__worktrees/feature/new-flow",
@@ -232,7 +234,7 @@ describe("buildProjectSnapshot", () => {
 
     expect(snapshot.worktrees).toEqual([
       {
-        id: "creating:feature/new-flow",
+        id: "wt_creating_new_flow",
         branch: "feature/new-flow",
         label: null,
         baseBranch: "main",
@@ -271,6 +273,89 @@ describe("buildProjectSnapshot", () => {
     ]);
   });
 
+  it("keeps the creating row's id once its worktree reaches the runtime", () => {
+    const creating = {
+      worktreeId: "wt_pending",
+      branch: "feature/pending",
+      path: "/repo/__worktrees/feature-pending",
+      profile: "default",
+      agentName: "claude",
+      phase: "starting_session",
+      source: "ui",
+    } satisfies CreatingWorktreeState;
+    const runtime = new ProjectRuntime();
+    const build = (): WorktreeSnapshot[] =>
+      buildProjectSnapshot({ projectName: "Project", mainBranch: "main", runtime, notifications: [], creatingWorktrees: [creating] })
+        .worktrees;
+
+    expect(build().map((worktree) => worktree.id)).toEqual(["wt_pending"]);
+
+    runtime.upsertWorktree({ worktreeId: "wt_pending", branch: "feature/pending", path: creating.path, runtime: "host" });
+    const merged = build();
+
+    expect(merged.map((worktree) => worktree.id)).toEqual(["wt_pending"]);
+    expect(merged[0]?.creation).toEqual({ phase: "starting_session" });
+  });
+
+  it("merges a creating worktree into the runtime row with its id, even after a rename", () => {
+    const runtime = new ProjectRuntime();
+    runtime.upsertWorktree({ worktreeId: "wt_pending", branch: "feature/renamed", path: "/repo/__worktrees/a", runtime: "host" });
+    runtime.upsertWorktree({ worktreeId: "wt_other", branch: "feature/pending", path: "/repo/__worktrees/b", runtime: "host" });
+
+    const snapshot = buildProjectSnapshot({
+      projectName: "Project",
+      mainBranch: "main",
+      runtime,
+      notifications: [],
+      creatingWorktrees: [
+        {
+          worktreeId: "wt_pending",
+          branch: "feature/pending",
+          path: "/repo/__worktrees/a",
+          profile: "default",
+          agentName: "claude",
+          phase: "reconciling",
+          source: "ui",
+        },
+      ],
+    });
+
+    expect(snapshot.worktrees.map((worktree) => [worktree.id, worktree.creation?.phase ?? null])).toEqual([
+      ["wt_pending", "reconciling"],
+      ["wt_other", null],
+    ]);
+  });
+
+  it("merges by branch while the new worktree is still listed under its unmanaged id", () => {
+    const runtime = new ProjectRuntime();
+    runtime.upsertWorktree({
+      worktreeId: "unmanaged:/repo/__worktrees/feature-pending",
+      branch: "feature/pending",
+      path: "/repo/__worktrees/feature-pending",
+      runtime: "host",
+    });
+
+    const snapshot = buildProjectSnapshot({
+      projectName: "Project",
+      mainBranch: "main",
+      runtime,
+      notifications: [],
+      creatingWorktrees: [
+        {
+          worktreeId: "wt_pending",
+          branch: "feature/pending",
+          path: "/repo/__worktrees/feature-pending",
+          profile: "default",
+          agentName: "claude",
+          phase: "creating_worktree",
+          source: "ui",
+        },
+      ],
+    });
+
+    expect(snapshot.worktrees.map((worktree) => worktree.id)).toEqual(["wt_pending"]);
+  });
+
   it("keeps merged runtime and creating worktrees sorted by branch", () => {
     const runtime = new ProjectRuntime();
     runtime.upsertWorktree({
@@ -293,6 +378,7 @@ describe("buildProjectSnapshot", () => {
       notifications: [],
       creatingWorktrees: [
         {
+          worktreeId: "wt_creating_alpha",
           branch: "feature/alpha",
           path: "/repo/__worktrees/feature-alpha",
           profile: "default",
@@ -328,6 +414,7 @@ describe("buildProjectSnapshot", () => {
       notifications: [],
       creatingWorktrees: [
         {
+          worktreeId: "wt_creating_zulu",
           branch: "feature/zulu",
           path: "/repo/__worktrees/feature-zulu",
           profile: "default",

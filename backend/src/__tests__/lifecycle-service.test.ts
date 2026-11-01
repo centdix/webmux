@@ -323,7 +323,7 @@ function makeLifecycleService(
   autoName: AutoNameGenerator = new FakeAutoNameService(),
   createCallbacks: {
     onProgress?: (progress: CreateWorktreeProgress) => void | Promise<void>;
-    onFinished?: (branch: string) => void | Promise<void>;
+    onFinished?: (worktreeId: string) => void | Promise<void>;
   } = {},
   sessionDiscovery: SessionDiscoveryGateway = { listSessionIds: async () => [] },
   // `null` explicitly configures no control reporting (passing `undefined` would
@@ -1815,7 +1815,7 @@ describe("LifecycleService", () => {
     const runtime = new ProjectRuntime();
     const tmux = new FakeTmuxGateway();
     const phases: string[] = [];
-    const activeBranches = new Set<string>();
+    const activeIds = new Set<string>();
     const lifecycle = makeLifecycleService(
       repoRoot,
       tmux,
@@ -1827,12 +1827,12 @@ describe("LifecycleService", () => {
       new FakeAutoNameService(),
       {
         onProgress: (progress) => {
-          activeBranches.add(progress.branch);
+          activeIds.add(progress.worktreeId);
           phases.push(`${progress.branch}:${progress.phase}`);
         },
-        onFinished: (branch) => {
-          activeBranches.delete(branch);
-          phases.push(`${branch}:finished`);
+        onFinished: (worktreeId) => {
+          activeIds.delete(worktreeId);
+          phases.push("finished");
         },
       },
     );
@@ -1845,16 +1845,17 @@ describe("LifecycleService", () => {
       "feature/progress:preparing_runtime",
       "feature/progress:starting_session",
       "feature/progress:reconciling",
-      "feature/progress:finished",
+      "finished",
     ]);
-    expect(activeBranches.has("feature/progress")).toBe(false);
+    expect(activeIds.size).toBe(0);
   });
 
   it("clears creation progress when the first phase callback fails", async () => {
     const repoRoot = await initRepo();
     const runtime = new ProjectRuntime();
     const tmux = new FakeTmuxGateway();
-    const finishedBranches: string[] = [];
+    const reportedIds: string[] = [];
+    const finishedIds: string[] = [];
     const lifecycle = makeLifecycleService(
       repoRoot,
       tmux,
@@ -1866,12 +1867,13 @@ describe("LifecycleService", () => {
       new FakeAutoNameService(),
       {
         onProgress: (progress) => {
+          reportedIds.push(progress.worktreeId);
           if (progress.phase === "creating_worktree") {
             throw new Error("progress failed");
           }
         },
-        onFinished: (branch) => {
-          finishedBranches.push(branch);
+        onFinished: (worktreeId) => {
+          finishedIds.push(worktreeId);
         },
       },
     );
@@ -1879,7 +1881,7 @@ describe("LifecycleService", () => {
     await expect(
       lifecycle.createWorktree({ branch: "feature/progress-failure" }),
     ).rejects.toThrow("progress failed");
-    expect(finishedBranches).toEqual(["feature/progress-failure"]);
+    expect(finishedIds).toEqual(reportedIds);
   });
 
   it("uses auto_name to generate the branch when the prompt is present and no branch was provided", async () => {
@@ -1960,6 +1962,83 @@ describe("LifecycleService", () => {
         task: "Fix the login flow for OAuth redirects",
       },
     ]);
+  });
+
+  it("tags every creation phase with the id the worktree's meta ends up with", async () => {
+    const repoRoot = await initRepo();
+    const runtime = new ProjectRuntime();
+    const tmux = new FakeTmuxGateway();
+    const reportedIds = new Set<string>();
+    const finishedIds: string[] = [];
+    const lifecycle = makeLifecycleService(
+      repoRoot,
+      tmux,
+      runtime,
+      new FakeDockerGateway(),
+      new FakeHookRunner(),
+      { ...TEST_CONFIG, autoName: { provider: "claude" as const, systemPrompt: "Generate a branch name" } },
+      new BunGitGateway(),
+      new FakeAutoNameService("fix-login-flow"),
+      {
+        onProgress: (progress) => {
+          reportedIds.add(progress.worktreeId);
+        },
+        onFinished: (worktreeId) => {
+          finishedIds.push(worktreeId);
+        },
+      },
+    );
+
+    const created = await lifecycle.createWorktree({ prompt: "Fix the login flow" });
+
+    const meta = await readWorktreeMeta(
+      new BunGitGateway().resolveWorktreeGitDir(join(repoRoot, "__worktrees", "fix-login-flow")),
+    );
+    expect([...reportedIds]).toEqual([created.worktreeId]);
+    expect(finishedIds).toEqual([created.worktreeId]);
+    expect(meta?.worktreeId).toBe(created.worktreeId);
+    expect(runtime.getWorktreeByBranch("fix-login-flow")?.worktreeId).toBe(created.worktreeId);
+  });
+
+  it("creates each agent's worktree under its own id, reported from the first phase", async () => {
+    const repoRoot = await initRepo();
+    const runtime = new ProjectRuntime();
+    const tmux = new FakeTmuxGateway();
+    const idsByBranch = new Map<string, Set<string>>();
+    const finishedIds: string[] = [];
+    const lifecycle = makeLifecycleService(
+      repoRoot,
+      tmux,
+      runtime,
+      new FakeDockerGateway(),
+      new FakeHookRunner(),
+      TEST_CONFIG,
+      new BunGitGateway(),
+      new FakeAutoNameService(),
+      {
+        onProgress: (progress) => {
+          const ids = idsByBranch.get(progress.branch) ?? new Set<string>();
+          ids.add(progress.worktreeId);
+          idsByBranch.set(progress.branch, ids);
+        },
+        onFinished: (worktreeId) => {
+          finishedIds.push(worktreeId);
+        },
+      },
+    );
+
+    await lifecycle.createWorktrees({ branch: "feature/search", agents: ["claude", "codex"] });
+
+    const git = new BunGitGateway();
+    const claudeMeta = await readWorktreeMeta(git.resolveWorktreeGitDir(join(repoRoot, "__worktrees", "claude-feature", "search")));
+    const codexMeta = await readWorktreeMeta(git.resolveWorktreeGitDir(join(repoRoot, "__worktrees", "codex-feature", "search")));
+    const claudeId = claudeMeta?.worktreeId ?? "";
+    const codexId = codexMeta?.worktreeId ?? "";
+
+    expect(claudeId).not.toBe(codexId);
+    expect(idsByBranch.get("claude-feature/search")).toEqual(new Set([claudeId]));
+    expect(idsByBranch.get("codex-feature/search")).toEqual(new Set([codexId]));
+    expect(finishedIds).toEqual([claudeId, codexId]);
   });
 
   it("force removes a dirty worktree", async () => {

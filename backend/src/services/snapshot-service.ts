@@ -46,7 +46,7 @@ function mapWorktreeSnapshot(
   findAgentLabel?: (agentId: string | null) => string | null,
 ): WorktreeSnapshot {
   return {
-    id: state.worktreeId,
+    id: creating?.worktreeId ?? state.worktreeId,
     branch: state.branch,
     label: state.label,
     ...(state.baseBranch ? { baseBranch: state.baseBranch } : {}),
@@ -81,7 +81,7 @@ function mapCreatingWorktreeSnapshot(
   findAgentLabel?: (agentId: string | null) => string | null,
 ): WorktreeSnapshot {
   return {
-    id: `creating:${creating.branch}`,
+    id: creating.worktreeId,
     branch: creating.branch,
     label: null,
     ...(creating.baseBranch ? { baseBranch: creating.baseBranch } : {}),
@@ -131,22 +131,33 @@ export function buildWorktreeSnapshots(input: BuildWorktreeSnapshotsInput): Work
   const now = input.now ?? (() => new Date());
   const isArchived = input.isArchived ?? (() => false);
   const creatingWorktrees = input.creatingWorktrees ?? [];
-  const creatingByBranch = new Map(creatingWorktrees.map((worktree) => [worktree.branch, worktree]));
   const runtimeWorktrees = input.runtime.listWorktrees();
-  const runtimeBranches = new Set(runtimeWorktrees.map((worktree) => worktree.branch));
-  const worktrees = runtimeWorktrees.map((state) =>
-    mapWorktreeSnapshot(
+  const runtimeIds = new Set(runtimeWorktrees.map((state) => state.worktreeId));
+  const creatingById = new Map(creatingWorktrees.map((worktree) => [worktree.worktreeId, worktree]));
+  // Branch fallback, only for creations not yet listed under their id: between
+  // `git worktree add` and the meta write, a reconcile lists the new worktree
+  // under its unmanaged id.
+  const creatingByBranch = new Map(
+    creatingWorktrees
+      .filter((worktree) => !runtimeIds.has(worktree.worktreeId))
+      .map((worktree) => [worktree.branch, worktree]),
+  );
+  const mergedCreatingIds = new Set<string>();
+  const worktrees = runtimeWorktrees.map((state) => {
+    const creating = creatingById.get(state.worktreeId) ?? creatingByBranch.get(state.branch) ?? null;
+    if (creating) mergedCreatingIds.add(creating.worktreeId);
+    return mapWorktreeSnapshot(
       state,
       now,
-      creatingByBranch.get(state.branch) ?? null,
+      creating,
       isArchived,
       input.findLinearIssue,
       input.findAgentLabel,
-    ),
-  );
+    );
+  });
 
   for (const creating of creatingWorktrees) {
-    if (!runtimeBranches.has(creating.branch)) {
+    if (!mergedCreatingIds.has(creating.worktreeId)) {
       worktrees.push(mapCreatingWorktreeSnapshot(creating, isArchived, input.findLinearIssue, input.findAgentLabel));
     }
   }

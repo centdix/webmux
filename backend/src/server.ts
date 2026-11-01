@@ -545,7 +545,7 @@ function ensureBranchNotRemoving(branch: string): void {
 }
 
 function ensureBranchNotCreating(branch: string): void {
-  if (worktreeCreationTracker.has(branch)) {
+  if (worktreeCreationTracker.hasBranch(branch)) {
     throw new LifecycleError(`Worktree is being created: ${branch}`, 409);
   }
 }

@@ -205,6 +205,7 @@ export type WorktreeCreationPhase =
   | "reconciling";
 
 export interface CreatingWorktreeState {
+  worktreeId: string;
   branch: string;
   baseBranch?: string;
   path: string;

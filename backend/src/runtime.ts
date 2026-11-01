@@ -113,8 +113,8 @@ export function createWebmuxRuntime(options: WebmuxRuntimeOptions): WebmuxRuntim
       worktreeCreationTracker.set(progress);
       options.onCreateProgress?.(progress);
     },
-    onCreateFinished: (branch) => {
-      worktreeCreationTracker.clear(branch);
+    onCreateFinished: (worktreeId) => {
+      worktreeCreationTracker.clear(worktreeId);
     },
   });
 

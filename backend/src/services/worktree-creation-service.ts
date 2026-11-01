@@ -2,6 +2,7 @@ import type { AgentId } from "../domain/config";
 import type { CreatingWorktreeState, WorktreeCreationPhase, WorktreeSource } from "../domain/model";
 
 export interface WorktreeCreationProgress {
+  worktreeId: string;
   branch: string;
   baseBranch?: string;
   path: string;
@@ -16,6 +17,7 @@ export class WorktreeCreationTracker {
 
   set(progress: WorktreeCreationProgress): void {
     const next: CreatingWorktreeState = {
+      worktreeId: progress.worktreeId,
       branch: progress.branch,
       ...(progress.baseBranch ? { baseBranch: progress.baseBranch } : {}),
       path: progress.path,
@@ -24,15 +26,15 @@ export class WorktreeCreationTracker {
       phase: progress.phase,
       source: progress.source,
     };
-    this.worktrees.set(progress.branch, next);
+    this.worktrees.set(progress.worktreeId, next);
   }
 
-  clear(branch: string): boolean {
-    return this.worktrees.delete(branch);
+  clear(worktreeId: string): boolean {
+    return this.worktrees.delete(worktreeId);
   }
 
-  has(branch: string): boolean {
-    return this.worktrees.has(branch);
+  hasBranch(branch: string): boolean {
+    return [...this.worktrees.values()].some((state) => state.branch === branch);
   }
 
   list(): CreatingWorktreeState[] {
