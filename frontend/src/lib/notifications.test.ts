@@ -90,4 +90,21 @@ describe("NotificationCenter", () => {
     expect(shown).toEqual([{ title: "alpha #3", tag: "wm-alpha:3" }]);
     Reflect.deleteProperty(document, "hidden");
   });
+
+  it("tells the notification's own project when a toast auto-dismisses", () => {
+    vi.useFakeTimers();
+    const center = new NotificationCenter();
+    center.receive(notification("alpha", 4), false);
+    center.receive(notification("beta", 5), false);
+    center.receive(notification("beta", 6), false);
+    center.dismissToast("notification:beta:5");
+    center.removeDismissed({ project: "beta", id: 6 });
+    vi.mocked(dismissNotification).mockClear();
+
+    vi.advanceTimersByTime(4000);
+
+    expect(dismissNotification).toHaveBeenCalledTimes(1);
+    expect(dismissNotification).toHaveBeenCalledWith(notification("alpha", 4));
+    expect(center.active).toEqual([]);
+  });
 });

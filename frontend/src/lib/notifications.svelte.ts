@@ -60,7 +60,8 @@ export class NotificationCenter {
     this.history = [notification, ...this.history].slice(0, MAX_HISTORY);
     this.unreadCount++;
     setTimeout(() => {
-      this.active = withoutNotification(this.active, notification);
+      const key = notificationKey(notification);
+      if (this.active.some((entry) => notificationKey(entry) === key)) this.dismiss(notification);
     }, AUTO_DISMISS_MS);
     if (document.hidden && Notification.permission === "granted") {
       new Notification(notification.message, {
