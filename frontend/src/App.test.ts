@@ -682,6 +682,25 @@ describe("App create selection", () => {
     expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("main");
   });
 
+  it("reports the selected worktree's project with every poll", async () => {
+    otherProjects.list = [{
+      prefix: "images",
+      name: "images",
+      worktrees: [createWorktree("feature/img", { project: "images" })],
+      error: null,
+    }];
+
+    renderApp();
+    await waitFor(() => expect(fetchAllProjectWorktrees).toHaveBeenCalledWith(PROJECT));
+
+    await fireEvent.click(await screen.findByRole("button", { name: /^feature\/img\b/i }));
+    expect(await screen.findByTitle("feature/img")).toBeInTheDocument();
+    vi.mocked(fetchAllProjectWorktrees).mockClear();
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    await waitFor(() => expect(fetchAllProjectWorktrees).toHaveBeenCalledWith("images"));
+  });
+
   it("shows a project's fetch error in the sidebar", async () => {
     vi.mocked(fetchAllProjectWorktrees).mockResolvedValueOnce([
       { prefix: PROJECT, name: PROJECT, worktrees: [], error: "git exploded" },

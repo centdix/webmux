@@ -255,6 +255,20 @@ describe("notifications", () => {
     ]);
   });
 
+  it("fetchAllProjectWorktrees reports the focused project only when given", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request) => jsonResponse({ projects: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const api = await loadApi();
+
+    await api.fetchAllProjectWorktrees("alpha");
+    await api.fetchAllProjectWorktrees();
+
+    expect(fetchMock.mock.calls.map(([input]) => urlOf(input))).toEqual([
+      "/api/projects/worktrees?focus=alpha",
+      "/api/projects/worktrees",
+    ]);
+  });
+
   it("dismissNotification posts to the notification's own project", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), {
       status: 200,

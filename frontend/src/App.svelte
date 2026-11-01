@@ -112,10 +112,13 @@
     onError: (_project, err) => console.warn("[linear]", err),
   });
   // Polls also pick up config edits and retry a failed config load.
-  const store = new WorktreesStore(() => {
-    linear.ensure(activeProject);
-    configs.ensure(activeProject);
-  });
+  const store = new WorktreesStore(
+    () => {
+      linear.ensure(activeProject);
+      configs.ensure(activeProject);
+    },
+    () => activeProject,
+  );
   const notifications = new NotificationCenter();
   const showToast = notifications.show.bind(notifications);
   const actions = new WorktreeActions({

@@ -56,14 +56,17 @@ export class WorktreesStore {
   readonly hasCreating = $derived(this.projects.some((project) => project.worktrees.some((w) => w.creating)));
 
   readonly #onRefreshed: () => void;
+  readonly #focus: () => string | undefined;
   #intervalMs = DEFAULT_POLL_INTERVAL_MS;
   #restartInterval: (() => void) | null = null;
   #lastRequest = 0;
   #lastApplied = 0;
 
-  /** `onRefreshed` runs after every refresh, polled or explicit. */
-  constructor(onRefreshed: () => void = () => {}) {
+  /** `onRefreshed` runs after every refresh, polled or explicit. `focus` is
+   *  the project being shown, reported with every poll. */
+  constructor(onRefreshed: () => void = () => {}, focus: () => string | undefined = () => undefined) {
     this.#onRefreshed = onRefreshed;
+    this.#focus = focus;
   }
 
   /** The project's list is known: one of its polls succeeded. Until then an
@@ -91,7 +94,7 @@ export class WorktreesStore {
   async refresh(): Promise<void> {
     const request = ++this.#lastRequest;
     try {
-      const lists = await fetchAllProjectWorktrees();
+      const lists = await fetchAllProjectWorktrees(this.#focus());
       // A slower, older poll must not overwrite a newer one.
       if (request > this.#lastApplied) {
         this.#lastApplied = request;

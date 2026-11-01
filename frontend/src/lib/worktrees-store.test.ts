@@ -73,6 +73,18 @@ describe("WorktreesStore", () => {
     vi.useRealTimers();
   });
 
+  it("reports the project being shown with every poll", async () => {
+    vi.mocked(fetchAllProjectWorktrees).mockResolvedValue([]);
+    let focus = "alpha";
+    const store = new WorktreesStore(undefined, () => focus);
+
+    await store.refresh();
+    focus = "beta";
+    await store.refresh();
+
+    expect(vi.mocked(fetchAllProjectWorktrees).mock.calls).toEqual([["alpha"], ["beta"]]);
+  });
+
   it("indexes a poll by project and finds worktrees by ref", async () => {
     vi.mocked(fetchAllProjectWorktrees).mockResolvedValue([
       project("alpha", [worktree("alpha", "main")]),

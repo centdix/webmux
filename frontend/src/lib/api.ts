@@ -127,9 +127,10 @@ export function postWorktreeToLinear(
 }
 
 /** Every project's worktrees in one hub call, in registry order — the
- *  dashboard's single worktree poll. */
-export async function fetchAllProjectWorktrees(): Promise<ProjectWorktreeList[]> {
-  const response = await hubApi.fetchAllProjectWorktrees();
+ *  dashboard's single worktree poll. `focus` (the project being shown) marks
+ *  the poll as dashboard activity, which speeds up that project's PR sync. */
+export async function fetchAllProjectWorktrees(focus?: string): Promise<ProjectWorktreeList[]> {
+  const response = await hubApi.fetchAllProjectWorktrees({ query: { focus } });
   return response.projects.map((project) => ({
     prefix: project.prefix,
     name: project.name,
