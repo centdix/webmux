@@ -71,6 +71,7 @@
     WorktreesStore,
   } from "./lib/worktrees-store.svelte";
   import { neighborBranch, stepBranch, type WorktreeSelection } from "./lib/worktree-selection.svelte";
+  import { readLocationHash, resolveHashTarget, writeLocationHash } from "./lib/project-location";
   import { WorktreeActions } from "./lib/worktree-actions.svelte";
   import { NotificationCenter } from "./lib/notifications.svelte";
   import { ProjectCache } from "./lib/project-cache.svelte";
@@ -853,10 +854,25 @@
     terminalRef?.sendSelectPane(pane);
   }
 
+  /** The app writes the hash with `replaceState`, which fires no
+   *  `hashchange`, so this only sees the user's edits and same-tab links. */
+  function handleHashChange(): void {
+    const target = resolveHashTarget(
+      readLocationHash(),
+      (prefix) => store.projects.some((entry) => entry.prefix === prefix),
+      (ref) => store.find(ref) !== undefined,
+    );
+    if (target?.kind === "worktree") selectWorktree(target.ref);
+    else if (target?.kind === "project") selection.switchProject(target.project);
+    // An unknown target keeps the selection; the hash goes back to naming it.
+    writeLocationHash(selection.project, selection.branch);
+  }
+
   onMount(() => {
     applyTheme(currentTheme);
     const stopPolling = store.startPolling();
     window.addEventListener("keydown", handleKeydown);
+    window.addEventListener("hashchange", handleHashChange);
     const unsubNotifications = subscribeNotifications(
       handleNotification,
       (dismissal) => notifications.removeDismissed(dismissal),
@@ -878,6 +894,7 @@
     return () => {
       stopPolling();
       window.removeEventListener("keydown", handleKeydown);
+      window.removeEventListener("hashchange", handleHashChange);
       mq.removeEventListener("change", onMqChange);
       unsubNotifications();
     };

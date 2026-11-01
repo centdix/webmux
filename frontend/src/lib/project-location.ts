@@ -1,3 +1,5 @@
+import type { WorktreeRef } from "./types";
+
 /** The `#<project>/<branch>` location hash that reopens a precise worktree.
  *  Project prefixes are slugs (no `/`), so the first `/` splits project from
  *  branch; branch segments are URI-encoded but keep their `/` for readability. */
@@ -46,6 +48,21 @@ export function pickInitialBranch(
 ): string | null {
   if (hash?.project === project && hash.branch) return hash.branch;
   return savedBranch;
+}
+
+/** What a hash edited by hand or set by a same-tab link opens. */
+export type HashTarget = { kind: "worktree"; ref: WorktreeRef } | { kind: "project"; project: string };
+
+/** The worktree, or project, `hash` names when it exists; `null` otherwise. */
+export function resolveHashTarget(
+  hash: LocationHash | null,
+  hasProject: (project: string) => boolean,
+  hasWorktree: (ref: WorktreeRef) => boolean,
+): HashTarget | null {
+  if (!hash || !hasProject(hash.project)) return null;
+  if (!hash.branch) return { kind: "project", project: hash.project };
+  const ref = { project: hash.project, branch: hash.branch };
+  return hasWorktree(ref) ? { kind: "worktree", ref } : null;
 }
 
 export function readLocationHash(): LocationHash | null {

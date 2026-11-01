@@ -5,6 +5,7 @@ import {
   pickInitialBranch,
   pickInitialProject,
   readLocationHash,
+  resolveHashTarget,
   writeLocationHash,
 } from "./project-location";
 
@@ -85,5 +86,24 @@ describe("pickInitialBranch", () => {
     expect(pickInitialBranch({ project: "beta", branch: "feat/x" }, "alpha", "main")).toBe("main");
     expect(pickInitialBranch({ project: "alpha", branch: null }, "alpha", "main")).toBe("main");
     expect(pickInitialBranch(null, "alpha", null)).toBeNull();
+  });
+});
+
+describe("resolveHashTarget", () => {
+  const worktrees = new Set(["alpha:main", "beta:feat/x"]);
+  const hasProject = (project: string): boolean => project === "alpha" || project === "beta";
+  const hasWorktree = (ref: { project: string; branch: string }): boolean => worktrees.has(`${ref.project}:${ref.branch}`);
+  const resolve = (hash: string) => resolveHashTarget(parseLocationHash(hash), hasProject, hasWorktree);
+
+  it("targets a known worktree or project", () => {
+    expect(resolve("#beta/feat/x")).toEqual({ kind: "worktree", ref: { project: "beta", branch: "feat/x" } });
+    expect(resolve("#beta")).toEqual({ kind: "project", project: "beta" });
+  });
+
+  it("targets nothing for an unknown project or branch, or no hash", () => {
+    expect(resolve("#gamma/main")).toBeNull();
+    expect(resolve("#gamma")).toBeNull();
+    expect(resolve("#alpha/missing")).toBeNull();
+    expect(resolve("")).toBeNull();
   });
 });
