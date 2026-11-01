@@ -1,9 +1,9 @@
 import type { Attachment } from "svelte/attachments";
 
-/** Attach to a popup menu's wrapper (the menu and its trigger): a click
- *  outside it or Escape calls `close`. Clicks are caught in the capture
- *  phase, so one landing anywhere else (another menu's trigger included)
- *  closes it even when a handler stops its propagation. */
+/** Attach to a popup menu's wrapper (the menu and its trigger): a click or
+ *  right-click outside it, or Escape, calls `close`. Clicks are caught in the
+ *  capture phase, so one landing anywhere else (another menu's trigger
+ *  included) closes it even when a handler stops its propagation. */
 export function dismissible(close: () => void): Attachment<HTMLElement> {
   return (node) => {
     function handleClick(event: MouseEvent): void {
@@ -15,9 +15,11 @@ export function dismissible(close: () => void): Attachment<HTMLElement> {
     }
 
     document.addEventListener("click", handleClick, true);
+    document.addEventListener("contextmenu", handleClick, true);
     document.addEventListener("keydown", handleKeydown);
     return () => {
       document.removeEventListener("click", handleClick, true);
+      document.removeEventListener("contextmenu", handleClick, true);
       document.removeEventListener("keydown", handleKeydown);
     };
   };
