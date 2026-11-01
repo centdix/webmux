@@ -67,6 +67,10 @@ export class WorktreesStore {
     return this.projects.some((entry) => entry.prefix === project);
   }
 
+  nameOf(project: string): string | null {
+    return this.projects.find((entry) => entry.prefix === project)?.name ?? null;
+  }
+
   worktreesOf(project: string): WorktreeInfo[] {
     return this.projects.find((entry) => entry.prefix === project)?.worktrees ?? [];
   }
