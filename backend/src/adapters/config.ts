@@ -7,8 +7,6 @@ import type {
   AgentKind,
   AutoNameConfig,
   AutoPullConfig,
-  CustomAgentConfig,
-  CustomAgents,
   GitHubIntegrationConfig,
   IdeKind,
   LifecycleHooksConfig,
@@ -21,7 +19,7 @@ import type {
   ProjectConfig,
 } from "../domain/config";
 
-export type { CustomAgentConfig, LinkedRepoConfig, MountSpec, PaneTemplate, ProfileConfig, ProjectConfig };
+export type { LinkedRepoConfig, MountSpec, PaneTemplate, ProfileConfig, ProjectConfig };
 export type DockerProfileConfig = ProfileConfig & { runtime: "docker"; image: string };
 
 interface LoadConfigOptions {
@@ -213,33 +211,6 @@ function parseProfiles(raw: unknown, includeDefaultProfile: boolean): Record<str
   }
 
   return profiles;
-}
-
-function parseCustomAgent(raw: unknown): CustomAgentConfig | null {
-  if (!isRecord(raw)) return null;
-  if (typeof raw.label !== "string" || !raw.label.trim()) return null;
-  if (typeof raw.startCommand !== "string" || !raw.startCommand.trim()) return null;
-
-  return {
-    label: raw.label.trim(),
-    startCommand: raw.startCommand.trim(),
-    ...(typeof raw.resumeCommand === "string" && raw.resumeCommand.trim()
-      ? { resumeCommand: raw.resumeCommand.trim() }
-      : {}),
-  };
-}
-
-export function parseCustomAgents(raw: unknown): CustomAgents {
-  if (!isRecord(raw)) return {};
-
-  return Object.entries(raw).reduce<CustomAgents>((acc, [id, value]) => {
-    if (!id.trim()) return acc;
-    const parsed = parseCustomAgent(value);
-    if (parsed) {
-      acc[id.trim()] = parsed;
-    }
-    return acc;
-  }, {});
 }
 
 function parseStartupEnvs(raw: unknown): Record<string, string | boolean> {
