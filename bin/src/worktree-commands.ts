@@ -15,6 +15,7 @@ import { buildArchivedWorktreePathSet } from "../../backend/src/services/archive
 import { readProjectsRegistryFile, type ProjectsRegistryReadResult } from "../../backend/src/adapters/projects-registry";
 import type { ProjectEntry } from "../../backend/src/domain/projects";
 import { createPortRegistrationService, createWebmuxRuntime } from "../../backend/src/runtime";
+import { loadCustomAgentsStore } from "../../backend/src/services/custom-agents-store";
 import type { CreateLifecycleWorktreeInput, CreateLifecycleWorktreesInput, CreateLifecycleWorktreesResult, CreateWorktreeProgress, PruneWorktreesResult } from "../../backend/src/services/lifecycle-service";
 
 const PHASE_LABELS: Record<WorktreeCreationPhase, string> = {
@@ -1077,7 +1078,11 @@ export async function runWorktreeCommand(
   deps: WorktreeCommandDependencies = {},
 ): Promise<number> {
   const createRuntime: NonNullable<WorktreeCommandDependencies["createRuntime"]> = deps.createRuntime
-    ?? ((options) => createWebmuxRuntime({ ...options, portRegistrations: createPortRegistrationService() }));
+    ?? ((options) => createWebmuxRuntime({
+      ...options,
+      portRegistrations: createPortRegistrationService(),
+      customAgents: loadCustomAgentsStore(),
+    }));
   const stdout = deps.stdout ?? ((message: string) => console.log(message));
   const stderr = deps.stderr ?? ((message: string) => console.error(message));
   const resolveServedProject = deps.resolveServedProject ?? resolveServedProjectPrefix;

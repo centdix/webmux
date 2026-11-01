@@ -45,6 +45,7 @@ import {
   buildManagedShellCommand,
 } from "./agent-service";
 import { getAgentDefinition, type AgentDefinition } from "./agent-registry";
+import type { CustomAgentsStore } from "./custom-agents-store";
 import { makeUnmanagedWorktreeId, type ReconciliationService } from "./reconciliation-service";
 import { buildTmuxPaneSystemPrompt, ensureSessionLayout, isWorktreeOpen, planSessionLayout } from "./session-service";
 import { buildPortRegistrationSystemPrompt } from "./port-prompt";
@@ -142,6 +143,8 @@ export interface LifecycleServiceDependencies {
   controlBaseUrl?: string;
   getControlToken: () => Promise<string>;
   config: ProjectConfig;
+  /** The machine-wide custom agents, read live so edits apply to the next launch. */
+  customAgents: Pick<CustomAgentsStore, "list">;
   archiveState: ArchiveStateService;
   git: GitGateway;
   tmux: TmuxGateway;
@@ -886,7 +889,7 @@ export class LifecycleService {
 
   private resolveAgentDefinition(agentId: AgentId | undefined): AgentDefinition {
     const resolvedAgentId = agentId ?? this.deps.config.workspace.defaultAgent;
-    const agent = getAgentDefinition(this.deps.config, resolvedAgentId);
+    const agent = getAgentDefinition(this.deps.customAgents.list(), resolvedAgentId);
     if (!agent) {
       throw new LifecycleError(`Unknown agent: ${resolvedAgentId}`, 400);
     }

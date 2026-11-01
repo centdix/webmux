@@ -8,6 +8,7 @@ import { BunPortProbe, canBind } from "./adapters/port-probe";
 import { createPortRegistry } from "./adapters/port-registry";
 import { BunTmuxGateway } from "./adapters/tmux";
 import { FileSessionDiscovery } from "./adapters/session-discovery";
+import type { CustomAgentsStore } from "./services/custom-agents-store";
 import { AutoNameService } from "./services/auto-name-service";
 import { ArchiveStateService } from "./services/archive-state-service";
 import { LifecycleService, type CreateWorktreeProgress } from "./services/lifecycle-service";
@@ -28,6 +29,9 @@ export interface WebmuxRuntimeOptions {
   /** The process-wide port registrations: the server's single instance, or an
    *  in-process CLI runtime's own service over the same `~/.webmux/ports.json`. */
   portRegistrations: PortRegistrationService;
+  /** The process-wide custom agents from the global config: the server's single
+   *  store, or a CLI runtime's own copy read at startup. */
+  customAgents: CustomAgentsStore;
 }
 
 export function createPortRegistrationService(): PortRegistrationService {
@@ -51,6 +55,7 @@ export interface WebmuxRuntime {
   port: number;
   projectDir: string;
   config: ProjectConfig;
+  customAgents: CustomAgentsStore;
   archiveStateService: ArchiveStateService;
   git: BunGitGateway;
   portProbe: BunPortProbe;
@@ -94,6 +99,7 @@ export function createWebmuxRuntime(options: WebmuxRuntimeOptions): WebmuxRuntim
     controlBaseUrl: buildControlBaseUrl(port, options.prefix),
     getControlToken: loadControlToken,
     config,
+    customAgents: options.customAgents,
     archiveState: archiveStateService,
     git,
     tmux,
@@ -116,6 +122,7 @@ export function createWebmuxRuntime(options: WebmuxRuntimeOptions): WebmuxRuntim
     port,
     projectDir,
     config,
+    customAgents: options.customAgents,
     archiveStateService,
     git,
     portProbe,

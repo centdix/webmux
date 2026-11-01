@@ -8,6 +8,9 @@ export interface CustomAgentConfig {
   startCommand: string;
   resumeCommand?: string;
 }
+
+/** Custom agents by id, from the machine-wide `~/.config/webmux/config.yaml`. */
+export type CustomAgents = Record<AgentId, CustomAgentConfig>;
 export type PaneKind = "agent" | "shell" | "command";
 export type PaneSplit = "right" | "bottom";
 
@@ -95,7 +98,6 @@ export interface ProjectConfig {
   name: string;
   workspace: WorkspaceConfig;
   profiles: Record<string, ProfileConfig>;
-  agents: Record<AgentId, CustomAgentConfig>;
   startupEnvs: Record<string, string | boolean>;
   integrations: IntegrationConfig;
   lifecycleHooks: LifecycleHooksConfig;

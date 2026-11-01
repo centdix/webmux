@@ -51,11 +51,9 @@ import { ClaudeCliClient } from "./adapters/claude-cli";
 import { CodexAppServerClient, type CodexAppServerNotification } from "./adapters/codex-app-server";
 import {
   getDefaultProfileName,
-  persistLocalCustomAgent,
   persistLocalGitHubConfig,
   persistLocalLinearConfig,
   projectRoot,
-  removeLocalCustomAgent,
   type ProjectConfig,
 } from "./adapters/config";
 import { jsonResponse, errorResponse } from "./lib/http";
@@ -80,7 +78,8 @@ import { NotificationHub } from "./services/notification-hub-service";
 import { buildArchivedWorktreePathSet, normalizeArchivePath } from "./services/archive-service";
 import { resolveAgentChatSupport, resolveAgentTerminalSubmitDelayMs } from "./services/agent-chat-service";
 import { validateCustomAgentInput } from "./services/agent-validation-service";
-import { getAgentDefinition, isBuiltInAgentId, listAgentDetails, listAgentSummaries, normalizeCustomAgentId } from "./services/agent-registry";
+import { getAgentDefinition, listAgentSummaries } from "./services/agent-registry";
+import { loadCustomAgentsStore, type CustomAgentsResult } from "./services/custom-agents-store";
 import {
   attachToIssue,
   branchMatchesIssue,
@@ -163,6 +162,8 @@ const PORT = parseInt(Bun.env.PORT || "5111", 10);
  *  one worktree is never handed to another. */
 const portRegistrationService = createPortRegistrationService();
 portRegistrationService.restartTtls();
+/** Process-wide: the machine-wide custom agents, shared by every served project. */
+const customAgentsStore = loadCustomAgentsStore();
 const STATIC_DIR = Bun.env.WEBMUX_STATIC_DIR || "";
 /** Process-wide: Linear issue ID → projectRoot of the project whose
  *  auto-create claimed it, so an issue matching several projects gets one
@@ -229,6 +230,7 @@ interface ProjectApp {
 function createProjectApp(runtime: WebmuxRuntime, instancePrefix: string): ProjectApp {
 const PROJECT_DIR = runtime.projectDir;
 const config: ProjectConfig = runtime.config;
+const customAgents = runtime.customAgents;
 const git = runtime.git;
 const archiveStateService = runtime.archiveStateService;
 const prSyncState = createPrSyncState();
@@ -430,7 +432,7 @@ function getFrontendConfig(): {
       name,
       ...(profile.systemPrompt ? { systemPrompt: profile.systemPrompt } : {}),
     })),
-    agents: listAgentSummaries(config),
+    agents: listAgentSummaries(customAgents.list()),
     defaultProfileName,
     defaultAgentId: config.workspace.defaultAgent,
     autoName: config.autoName !== null,
@@ -725,7 +727,7 @@ async function readProjectSnapshot(reconcileOptions: ReconcileOptions = {}): Pro
     },
     findAgentLabel: (agentId) => {
       if (!agentId) return null;
-      return getAgentDefinition(config, agentId)?.label ?? agentId;
+      return getAgentDefinition(customAgents.list(), agentId)?.label ?? agentId;
     },
   });
 }
@@ -770,7 +772,7 @@ function resolveWorktreeAgentChatSupport(worktree: WorktreeSnapshot, action: "ch
   return resolveAgentChatSupport({
     agentId: worktree.agentName,
     agentLabel: worktree.agentLabel,
-    agent: worktree.agentName ? getAgentDefinition(config, worktree.agentName) : null,
+    agent: worktree.agentName ? getAgentDefinition(customAgents.list(), worktree.agentName) : null,
     action,
   });
 }
@@ -778,7 +780,7 @@ function resolveWorktreeAgentChatSupport(worktree: WorktreeSnapshot, action: "ch
 function resolveWorktreeTerminalSubmitDelayMs(agentName: WorktreeSnapshot["agentName"]): number {
   return resolveAgentTerminalSubmitDelayMs({
     agentId: agentName,
-    agent: agentName ? getAgentDefinition(config, agentName) : null,
+    agent: agentName ? getAgentDefinition(customAgents.list(), agentName) : null,
   });
 }
 
@@ -1546,84 +1548,6 @@ async function apiMergeWorktree(name: string): Promise<Response> {
   return jsonResponse({ ok: true });
 }
 
-async function apiListAgents(): Promise<Response> {
-  return jsonResponse({ agents: listAgentDetails(config) });
-}
-
-async function apiValidateAgent(req: Request): Promise<Response> {
-  const parsed = await parseJsonBody(req, UpsertCustomAgentRequestSchema);
-  if (!parsed.ok) return parsed.response;
-  return jsonResponse(validateCustomAgentInput(parsed.data));
-}
-
-async function apiCreateAgent(req: Request): Promise<Response> {
-  const parsed = await parseJsonBody(req, UpsertCustomAgentRequestSchema);
-  if (!parsed.ok) return parsed.response;
-  const body = parsed.data;
-  const agentId = normalizeCustomAgentId(body.label);
-
-  if (isBuiltInAgentId(agentId) || config.agents[agentId]) {
-    return errorResponse(`Agent already exists: ${agentId}`, 409);
-  }
-
-  const agentConfig = {
-    label: body.label,
-    startCommand: body.startCommand,
-    ...(body.resumeCommand?.trim() ? { resumeCommand: body.resumeCommand.trim() } : {}),
-  };
-
-  await persistLocalCustomAgent(PROJECT_DIR, agentId, agentConfig);
-  config.agents[agentId] = agentConfig;
-
-  const agent = listAgentDetails(config).find((entry) => entry.id === agentId);
-  if (!agent) {
-    return errorResponse(`Created agent could not be loaded: ${agentId}`, 500);
-  }
-
-  return jsonResponse({ agent });
-}
-
-async function apiUpdateAgent(agentId: string, req: Request): Promise<Response> {
-  if (isBuiltInAgentId(agentId)) {
-    return errorResponse(`Built-in agent cannot be edited: ${agentId}`, 400);
-  }
-  if (!config.agents[agentId]) {
-    return errorResponse(`Unknown agent: ${agentId}`, 404);
-  }
-
-  const parsed = await parseJsonBody(req, UpsertCustomAgentRequestSchema);
-  if (!parsed.ok) return parsed.response;
-  const body = parsed.data;
-  const agentConfig = {
-    label: body.label,
-    startCommand: body.startCommand,
-    ...(body.resumeCommand?.trim() ? { resumeCommand: body.resumeCommand.trim() } : {}),
-  };
-
-  await persistLocalCustomAgent(PROJECT_DIR, agentId, agentConfig);
-  config.agents[agentId] = agentConfig;
-
-  const agent = listAgentDetails(config).find((entry) => entry.id === agentId);
-  if (!agent) {
-    return errorResponse(`Updated agent could not be loaded: ${agentId}`, 500);
-  }
-
-  return jsonResponse({ agent });
-}
-
-async function apiDeleteAgent(agentId: string): Promise<Response> {
-  if (isBuiltInAgentId(agentId)) {
-    return errorResponse(`Built-in agent cannot be deleted: ${agentId}`, 400);
-  }
-  if (!config.agents[agentId]) {
-    return errorResponse(`Unknown agent: ${agentId}`, 404);
-  }
-
-  await removeLocalCustomAgent(PROJECT_DIR, agentId);
-  delete config.agents[agentId];
-  return jsonResponse({ ok: true });
-}
-
 async function apiSetLinearAutoCreate(req: Request): Promise<Response> {
   const parsed = await parseJsonBody(req, ToggleEnabledRequestSchema);
   if (!parsed.ok) return parsed.response;
@@ -1952,24 +1876,6 @@ function parseNotificationIdParam(params: Record<string, string>):
   };
 }
 
-function parseAgentIdParam(params: Record<string, string>):
-  | { ok: true; data: string }
-  | { ok: false; response: Response } {
-  const parsed = parseParams(params, AgentIdParamsSchema);
-  if (!parsed.ok) return parsed;
-  const agentId = parsed.data.id.trim();
-  if (!agentId) {
-    return {
-      ok: false,
-      response: errorResponse("Invalid agent id", 400),
-    };
-  }
-  return {
-    ok: true,
-    data: agentId,
-  };
-}
-
 // --- Server ---
 
   const routes: ProjectRoutes = {
@@ -2003,28 +1909,6 @@ function parseAgentIdParam(params: Record<string, string>):
 
     [projectApiPaths.fetchProject]: {
       GET: () => catching(routeLabel("GET", projectApiPaths.fetchProject), () => apiGetProject()),
-    },
-
-    [projectApiPaths.fetchAgents]: {
-      GET: () => catching(routeLabel("GET", projectApiPaths.fetchAgents), () => apiListAgents()),
-      POST: (req) => catching(routeLabel("POST", projectApiPaths.createAgent), () => apiCreateAgent(req)),
-    },
-
-    [projectApiPaths.validateAgent]: {
-      POST: (req) => catching(routeLabel("POST", projectApiPaths.validateAgent), () => apiValidateAgent(req)),
-    },
-
-    [projectApiPaths.updateAgent]: {
-      PUT: (req) => {
-        const parsed = parseAgentIdParam(req.params);
-        if (!parsed.ok) return parsed.response;
-        return catching(routeLabel("PUT", projectApiPaths.updateAgent, { id: parsed.data }), () => apiUpdateAgent(parsed.data, req));
-      },
-      DELETE: (req) => {
-        const parsed = parseAgentIdParam(req.params);
-        if (!parsed.ok) return parsed.response;
-        return catching(routeLabel("DELETE", projectApiPaths.deleteAgent, { id: parsed.data }), () => apiDeleteAgent(parsed.data));
-      },
     },
 
     [projectApiPaths.attachAgentsWorktreeConversation]: {
@@ -2522,6 +2406,50 @@ async function catchingRoute(label: string, fn: () => Promise<Response>): Promis
   }
 }
 
+function parseAgentIdParam(params: Record<string, string>):
+  | { ok: true; data: string }
+  | { ok: false; response: Response } {
+  const parsed = parseParams(params, AgentIdParamsSchema);
+  if (!parsed.ok) return parsed;
+  const agentId = parsed.data.id.trim();
+  if (!agentId) {
+    return {
+      ok: false,
+      response: errorResponse("Invalid agent id", 400),
+    };
+  }
+  return {
+    ok: true,
+    data: agentId,
+  };
+}
+
+function customAgentsResponse<T>(result: CustomAgentsResult<T>, toBody: (data: T) => unknown): Response {
+  return result.ok ? jsonResponse(toBody(result.data)) : errorResponse(result.error, result.status);
+}
+
+async function apiValidateAgent(req: Request): Promise<Response> {
+  const parsed = await parseJsonBody(req, UpsertCustomAgentRequestSchema);
+  if (!parsed.ok) return parsed.response;
+  return jsonResponse(validateCustomAgentInput(parsed.data));
+}
+
+async function apiCreateAgent(req: Request): Promise<Response> {
+  const parsed = await parseJsonBody(req, UpsertCustomAgentRequestSchema);
+  if (!parsed.ok) return parsed.response;
+  return customAgentsResponse(await customAgentsStore.create(parsed.data), (agent) => ({ agent }));
+}
+
+async function apiUpdateAgent(agentId: string, req: Request): Promise<Response> {
+  const parsed = await parseJsonBody(req, UpsertCustomAgentRequestSchema);
+  if (!parsed.ok) return parsed.response;
+  return customAgentsResponse(await customAgentsStore.update(agentId, parsed.data), (agent) => ({ agent }));
+}
+
+async function apiDeleteAgent(agentId: string): Promise<Response> {
+  return customAgentsResponse(await customAgentsStore.remove(agentId), () => ({ ok: true }));
+}
+
 function toProjectSummary(p: ManagedProject): { prefix: string; name: string; path: string; active: boolean } {
   return { prefix: p.prefix, name: p.entry.name, path: p.entry.path, active: p.active };
 }
@@ -2692,6 +2620,25 @@ function buildServeRoutes(): ProjectRoutes {
     [hubApiPaths.streamNotifications]: {
       GET: () => notificationHub.stream(),
     },
+    [hubApiPaths.fetchAgents]: {
+      GET: () => jsonResponse({ agents: customAgentsStore.details() }),
+      POST: (req) => catchingRoute("POST /api/agents", () => apiCreateAgent(req)),
+    },
+    [hubApiPaths.validateAgent]: {
+      POST: (req) => catchingRoute("POST /api/agents/validate", () => apiValidateAgent(req)),
+    },
+    [hubApiPaths.updateAgent]: {
+      PUT: (req) => {
+        const parsed = parseAgentIdParam(req.params);
+        if (!parsed.ok) return parsed.response;
+        return catchingRoute(`PUT /api/agents/${parsed.data}`, () => apiUpdateAgent(parsed.data, req));
+      },
+      DELETE: (req) => {
+        const parsed = parseAgentIdParam(req.params);
+        if (!parsed.ok) return parsed.response;
+        return catchingRoute(`DELETE /api/agents/${parsed.data}`, () => apiDeleteAgent(parsed.data));
+      },
+    },
   };
   return assembleServeRoutes(hubRoutes, apps.values());
 }
@@ -2797,7 +2744,7 @@ manager = new ProjectManager({
   registry: createProjectsRegistry(),
   port: BOUND_PORT,
   createRuntime: ({ projectDir, port, prefix }) =>
-    createWebmuxRuntime({ projectDir, port, prefix, portRegistrations: portRegistrationService }),
+    createWebmuxRuntime({ projectDir, port, prefix, portRegistrations: portRegistrationService, customAgents: customAgentsStore }),
   createLoops: (project): ProjectLoopController => {
     const app = createProjectApp(project.runtime, project.prefix);
     apps.set(project.prefix, app);
