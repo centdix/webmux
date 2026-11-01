@@ -800,6 +800,38 @@ describe("App create selection", () => {
     expect(window.location.hash).toBe("#images/feature/img");
   });
 
+  it("drops the pending auto-select of a create once the hash moves to another project", async () => {
+    otherProjects.list = [{
+      prefix: "images",
+      name: "images",
+      worktrees: [createWorktree("feature/img", { project: "images" })],
+      error: null,
+    }];
+    const creatingWorktree = createWorktree("feature/new", { creating: true, creationPhase: "creating_worktree" });
+    const createResult = deferred<{ primaryBranch: string; branches: string[] }>();
+    vi.mocked(fetchWorktrees)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([creatingWorktree])
+      .mockResolvedValue([createWorktree("feature/new")]);
+    vi.mocked(api.createWorktree).mockReturnValueOnce(createResult.promise);
+
+    renderApp();
+    await screen.findByText("Select a worktree");
+    await openCreateDialogAndSubmit("feature/new");
+    await waitFor(() => expect(fetchWorktrees).toHaveBeenCalledTimes(2));
+
+    window.history.replaceState(null, "", "/#images");
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    expect(await screen.findByTitle("feature/img")).toBeInTheDocument();
+
+    createResult.resolve({ primaryBranch: "feature/new", branches: ["feature/new"] });
+    await waitFor(() => expect(fetchWorktrees).toHaveBeenCalledTimes(3));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(screen.getByTitle("feature/img")).toBeInTheDocument();
+    expect(window.location.hash).toBe("#images/feature/img");
+  });
+
   function useThreeProjects(): void {
     otherProjects.list = [
       {

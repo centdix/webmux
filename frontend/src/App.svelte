@@ -817,7 +817,7 @@
       (ref) => store.find(ref) !== undefined,
     );
     if (target?.kind === "worktree") selectWorktree(target.ref);
-    else if (target?.kind === "project") selection.switchProject(target.project);
+    else if (target?.kind === "project") switchToProject(target.project);
     // An unknown target keeps the selection; the hash goes back to naming it.
     writeLocationHash(selection.project, selection.branch);
   }
