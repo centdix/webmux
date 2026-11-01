@@ -125,6 +125,13 @@ describe("WorktreeList", () => {
     expect(row("feature/a")).not.toHaveAttribute("aria-current");
   });
 
+  it("shows the ⋯ actions button on every row on mobile, where there is no right-click", () => {
+    renderList({ rows: rowsOf([createWorktree("feature/a"), createWorktree("feature/b")]), isMobile: true });
+
+    expect(screen.getByRole("button", { name: "Actions for feature/a" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Actions for feature/b" })).toBeInTheDocument();
+  });
+
   it("removes from the ⋯ menu without selecting the row", async () => {
     const onselect = vi.fn();
     const onremove = vi.fn();
