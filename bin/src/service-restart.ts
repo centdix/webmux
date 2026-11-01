@@ -15,8 +15,8 @@ export interface ServiceRunner {
 const defaultRunner: ServiceRunner = { run };
 
 export interface InstalledService {
-  /** Full unit name. systemd: "webmux-foo" (no .service suffix). launchd: the
-   *  plist Label, e.g. "com.webmux.foo". */
+  /** Full unit name. systemd: "webmux" (no .service suffix). launchd: the
+   *  plist Label, "com.webmux.webmux". */
   name: string;
   filePath: string;
   platform: ServicePlatform;
