@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { GhRunResult, GhRunner, PrSyncDeps } from "../services/pr-service";
-import { syncPrStatus } from "../services/pr-service";
+import { writeWorktreePrs } from "../adapters/fs";
+import type { PrEntry } from "../domain/model";
+import type { GhRunResult, GhRunner, PrSyncDeps, PrSyncState } from "../services/pr-service";
+import { createPrSyncState, fetchBranchPrStates, syncPrStatus } from "../services/pr-service";
 
 interface FakePr {
   number: number;
@@ -20,6 +22,12 @@ interface GhCall {
  *  `{owner}/{repo}` placeholders) plus repos addressed by an explicit slug. */
 class FakeGh {
   readonly calls: GhCall[] = [];
+  /** Slugs whose calls fail with a GitHub rate-limit error. */
+  readonly rateLimited = new Set<string>();
+  /** Slugs whose calls fail with a non-rate-limit error. */
+  readonly failing = new Set<string>();
+  /** Final state of PRs that are no longer open, keyed `slug#number`. */
+  readonly closedStates = new Map<string, "MERGED" | "CLOSED">();
   private readonly repoByCwd = new Map<string, string>();
   private readonly prsBySlug = new Map<string, FakePr[]>();
 
@@ -41,24 +49,46 @@ class FakeGh {
     return this.calls.filter((c) => c.args[0] === "api" && c.args[1].includes("/comments"));
   }
 
+  graphqlCalls(): GhCall[] {
+    return this.calls.filter((c) => c.args[0] === "api" && c.args[1] === "graphql");
+  }
+
   readonly run: GhRunner = async (args, cwd) => {
     this.calls.push({ args, cwd });
-    if (args[0] === "pr" && args[1] === "list") return this.prList(args, cwd);
-    if (args[0] === "api" && args[1].includes("/comments")) return this.comments(args, cwd);
-    if (args[0] === "pr" && args[1] === "view") {
-      return { timedOut: false, exitCode: 0, stdout: JSON.stringify({ state: "OPEN", isDraft: false }), stderr: "" };
+    const slug = this.slugOf(args, cwd);
+    if (this.rateLimited.has(slug)) {
+      return { timedOut: false, exitCode: 1, stdout: "", stderr: "GraphQL: API rate limit exceeded for user ID 1." };
     }
+    if (this.failing.has(slug)) {
+      return { timedOut: false, exitCode: 1, stdout: "", stderr: "HTTP 502: Bad Gateway" };
+    }
+    if (args[0] === "pr" && args[1] === "list") return this.prList(args, slug);
+    if (args[0] === "api" && args[1].includes("/comments")) return this.comments(args, slug);
+    if (args[0] === "api" && args[1] === "graphql") return this.prStatuses(args, slug);
     return { timedOut: false, exitCode: 1, stdout: "", stderr: `unexpected gh call: ${args.join(" ")}` };
   };
+
+  private slugOf(args: string[], cwd: string | undefined): string {
+    const repoFlag = args.indexOf("--repo");
+    if (repoFlag >= 0) return args[repoFlag + 1];
+    const commentsPath = args[1]?.match(/^repos\/(.+)\/pulls\/\d+\/comments/);
+    if (commentsPath) return this.resolveSlug(commentsPath[1], cwd);
+    const field = (name: string): string =>
+      args.find((a) => a.startsWith(`${name}=`))?.slice(name.length + 1) ?? "";
+    if (args[1] === "graphql") return `${field("owner")}/${field("name")}`;
+    return this.resolveSlug(undefined, cwd);
+  }
 
   private resolveSlug(explicit: string | undefined, cwd: string | undefined): string {
     if (explicit && explicit !== "{owner}/{repo}") return explicit;
     return (cwd && this.repoByCwd.get(cwd)) ?? "";
   }
 
-  private prList(args: string[], cwd: string | undefined): GhRunResult {
-    const repoFlag = args.indexOf("--repo");
-    const slug = this.resolveSlug(repoFlag >= 0 ? args[repoFlag + 1] : undefined, cwd);
+  private prList(args: string[], slug: string): GhRunResult {
+    if (args.includes("all")) {
+      const all = (this.prsBySlug.get(slug) ?? []).map((p) => ({ headRefName: p.branch, state: "OPEN" }));
+      return { timedOut: false, exitCode: 0, stdout: JSON.stringify(all), stderr: "" };
+    }
     const prs = (this.prsBySlug.get(slug) ?? []).map((p) => ({
       number: p.number,
       headRefName: p.branch,
@@ -72,10 +102,17 @@ class FakeGh {
     return { timedOut: false, exitCode: 0, stdout: JSON.stringify(prs), stderr: "" };
   }
 
-  private comments(args: string[], cwd: string | undefined): GhRunResult {
-    const match = args[1].match(/^repos\/(.+)\/pulls\/(\d+)\/comments/);
-    const slug = this.resolveSlug(match?.[1], cwd);
-    const number = Number(match?.[2]);
+  private prStatuses(args: string[], slug: string): GhRunResult {
+    const query = args.find((a) => a.startsWith("query=")) ?? "";
+    const repository: Record<string, { state: string; isDraft: boolean }> = {};
+    for (const [, n] of query.matchAll(/pr(\d+):/g)) {
+      repository[`pr${n}`] = { state: this.closedStates.get(`${slug}#${n}`) ?? "OPEN", isDraft: false };
+    }
+    return { timedOut: false, exitCode: 0, stdout: JSON.stringify({ data: { repository } }), stderr: "" };
+  }
+
+  private comments(args: string[], slug: string): GhRunResult {
+    const number = Number(args[1].match(/\/pulls\/(\d+)\//)?.[1]);
     const etag = this.etagFor(slug, number);
     const headerIdx = args.indexOf("--header");
     const ifNoneMatch = headerIdx >= 0 ? args[headerIdx + 1].replace(/^If-None-Match:\s*/, "") : null;
@@ -106,28 +143,60 @@ afterEach(async () => {
 interface TestProject {
   dir: string;
   slug: string;
+  state: PrSyncState;
+  gitDirs: Map<string, string>;
   getWorktreeGitDirs: () => Promise<Map<string, string>>;
 }
 
-async function makeProject(gh: FakeGh, name: string, prs: FakePr[]): Promise<TestProject> {
+async function makeProject(
+  gh: FakeGh,
+  name: string,
+  prs: FakePr[],
+  extraBranches: string[] = [],
+): Promise<TestProject> {
   const dir = `/projects/${name}`;
   const slug = `org/${name}`;
   gh.addRepo(slug, prs, dir);
   const gitDirs = new Map<string, string>();
-  for (const pr of prs) gitDirs.set(pr.branch, await makeGitDir());
-  return { dir, slug, getWorktreeGitDirs: async () => gitDirs };
+  for (const branch of [...prs.map((p) => p.branch), ...extraBranches]) {
+    gitDirs.set(branch, await makeGitDir());
+  }
+  return { dir, slug, state: createPrSyncState(), gitDirs, getWorktreeGitDirs: async () => gitDirs };
+}
+
+function storedOpenPr(slug: string, repo: string, number: number): PrEntry {
+  return {
+    repo,
+    number,
+    state: "open",
+    isDraft: true,
+    url: `https://github.com/${slug}/pull/${number}`,
+    updatedAt: "t0",
+    ciStatus: "none",
+    ciChecks: [],
+    comments: [],
+  };
+}
+
+function sync(project: TestProject, deps: PrSyncDeps, linked: TestProject[] = []): Promise<void> {
+  const linkedRepos = linked.map((l) => ({ repo: l.slug, alias: l.slug.split("/")[1] }));
+  return syncPrStatus(project.getWorktreeGitDirs, linkedRepos, project.dir, project.state, deps);
+}
+
+function makeDeps(gh: FakeGh, clock: { now: number } = { now: 0 }): PrSyncDeps {
+  return { runGh: gh.run, now: () => clock.now };
 }
 
 describe("syncPrStatus — review comment caches across projects", () => {
   it("does not refetch review comments when two projects sync alternately", async () => {
     const gh = new FakeGh();
-    const deps: PrSyncDeps = { runGh: gh.run };
+    const deps = makeDeps(gh);
     const a = await makeProject(gh, "a", [{ number: 12, branch: "feat-a", updatedAt: "t1" }]);
     const b = await makeProject(gh, "b", [{ number: 7, branch: "feat-b", updatedAt: "t1" }]);
 
     for (let tick = 0; tick < 3; tick++) {
-      await syncPrStatus(a.getWorktreeGitDirs, [], a.dir, deps);
-      await syncPrStatus(b.getWorktreeGitDirs, [], b.dir, deps);
+      await sync(a, deps);
+      await sync(b, deps);
     }
 
     // One initial fetch per project; nothing changed afterwards, so no refetch.
@@ -136,17 +205,17 @@ describe("syncPrStatus — review comment caches across projects", () => {
 
   it("revalidates with the right ETag for equal PR numbers in different repos", async () => {
     const gh = new FakeGh();
-    const deps: PrSyncDeps = { runGh: gh.run };
+    const deps = makeDeps(gh);
     const a = await makeProject(gh, "a", [{ number: 12, branch: "feat", updatedAt: "t1" }]);
     const b = await makeProject(gh, "b", [{ number: 12, branch: "feat", updatedAt: "t1" }]);
 
-    await syncPrStatus(a.getWorktreeGitDirs, [], a.dir, deps);
-    await syncPrStatus(b.getWorktreeGitDirs, [], b.dir, deps);
+    await sync(a, deps);
+    await sync(b, deps);
     gh.setUpdatedAt(a.slug, 12, "t2");
     gh.setUpdatedAt(b.slug, 12, "t2");
     gh.calls.length = 0;
-    await syncPrStatus(a.getWorktreeGitDirs, [], a.dir, deps);
-    await syncPrStatus(b.getWorktreeGitDirs, [], b.dir, deps);
+    await sync(a, deps);
+    await sync(b, deps);
 
     const sentEtags = gh.commentCalls().map((c) => {
       const idx = c.args.indexOf("--header");
@@ -156,5 +225,113 @@ describe("syncPrStatus — review comment caches across projects", () => {
       { cwd: a.dir, header: `If-None-Match: ${gh.etagFor(a.slug, 12)}` },
       { cwd: b.dir, header: `If-None-Match: ${gh.etagFor(b.slug, 12)}` },
     ]);
+  });
+});
+
+describe("syncPrStatus — failed list calls", () => {
+  it("keeps cached comments when a list call fails", async () => {
+    const gh = new FakeGh();
+    const deps = makeDeps(gh);
+    const a = await makeProject(gh, "a", [{ number: 12, branch: "feat", updatedAt: "t1" }]);
+
+    await sync(a, deps);
+    gh.failing.add(a.slug);
+    await sync(a, deps);
+    gh.failing.delete(a.slug);
+    await sync(a, deps);
+
+    expect(gh.commentCalls()).toHaveLength(1);
+  });
+});
+
+describe("syncPrStatus — stale open PR refresh", () => {
+  it("refreshes stale open PRs with one call per repo, not one per PR", async () => {
+    const gh = new FakeGh();
+    const deps = makeDeps(gh);
+    const lib = await makeProject(gh, "lib", []);
+    const branches = ["w1", "w2", "w3", "w4"];
+    const a = await makeProject(gh, "a", [], branches);
+    for (const [i, branch] of branches.entries()) {
+      const gitDir = a.gitDirs.get(branch) ?? "";
+      await writeWorktreePrs(gitDir, [storedOpenPr(a.slug, "", i + 1), storedOpenPr(lib.slug, "lib", i + 100)]);
+      gh.closedStates.set(`${a.slug}#${i + 1}`, "MERGED");
+    }
+
+    await sync(a, deps, [lib]);
+
+    expect(gh.calls.filter((c) => c.args[0] === "pr" && c.args[1] === "view")).toHaveLength(0);
+    expect(gh.graphqlCalls()).toHaveLength(2);
+    const stored = await Bun.file(join(a.gitDirs.get("w1") ?? "", "webmux", "prs.json")).json();
+    expect(stored).toMatchObject([
+      { number: 1, state: "merged", isDraft: false },
+      { number: 100, state: "open", isDraft: false },
+    ]);
+  });
+});
+
+describe("syncPrStatus — rate-limit backoff", () => {
+  it("does not fan out per worktree when the list call is rate limited", async () => {
+    const gh = new FakeGh();
+    const deps = makeDeps(gh);
+    const branches = ["w1", "w2", "w3"];
+    const a = await makeProject(gh, "a", [], branches);
+    for (const [i, branch] of branches.entries()) {
+      await writeWorktreePrs(a.gitDirs.get(branch) ?? "", [storedOpenPr(a.slug, "", i + 1)]);
+    }
+    gh.rateLimited.add(a.slug);
+
+    await sync(a, deps);
+
+    expect(gh.calls).toHaveLength(1);
+  });
+
+  it("skips a rate-limited repo while backing off, then resumes and resets", async () => {
+    const gh = new FakeGh();
+    const clock = { now: 0 };
+    const deps = makeDeps(gh, clock);
+    const a = await makeProject(gh, "a", [{ number: 12, branch: "feat", updatedAt: "t1" }]);
+    const listCalls = (): number => gh.calls.filter((c) => c.args[0] === "pr").length;
+
+    gh.rateLimited.add(a.slug);
+    await sync(a, deps); // rate limited: back off 10s
+    expect(listCalls()).toBe(1);
+
+    clock.now = 5_000;
+    await sync(a, deps);
+    expect(listCalls()).toBe(1);
+
+    clock.now = 10_000;
+    await sync(a, deps); // still rate limited: back off 20s
+    expect(listCalls()).toBe(2);
+
+    clock.now = 25_000;
+    await sync(a, deps);
+    expect(listCalls()).toBe(2);
+
+    gh.rateLimited.delete(a.slug);
+    clock.now = 30_000;
+    await sync(a, deps); // succeeds: backoff reset
+    expect(listCalls()).toBe(3);
+    expect(gh.commentCalls()).toHaveLength(1);
+
+    clock.now = 30_001;
+    await sync(a, deps);
+    expect(listCalls()).toBe(4);
+  });
+
+  it("skips the auto-remove PR state fetch while the repo is backing off", async () => {
+    const gh = new FakeGh();
+    const clock = { now: 0 };
+    const deps = makeDeps(gh, clock);
+    const a = await makeProject(gh, "a", [{ number: 12, branch: "feat", updatedAt: "t1" }]);
+
+    gh.rateLimited.add(a.slug);
+    expect(await fetchBranchPrStates([], a.dir, a.state, deps)).toBeNull();
+    expect(await fetchBranchPrStates([], a.dir, a.state, deps)).toBeNull();
+    expect(gh.calls).toHaveLength(1);
+
+    gh.rateLimited.delete(a.slug);
+    clock.now = 10_000;
+    expect(await fetchBranchPrStates([], a.dir, a.state, deps)).toEqual(new Map([["feat", ["open"]]]));
   });
 });

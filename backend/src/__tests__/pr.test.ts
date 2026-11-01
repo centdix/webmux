@@ -3,9 +3,12 @@ import { mapWithConcurrency, startSerializedInterval } from "../lib/async";
 import {
   dedupeLatestChecks,
   mapChecks,
+  isRateLimitError,
+  nextBackoff,
   parsePrResponse,
-  parsePrViewStatus,
+  parsePrStatusBatch,
   parseReviewComments,
+  prKey,
   summarizeChecks,
 } from "../services/pr-service";
 
@@ -135,24 +138,69 @@ describe("parsePrResponse — draft state", () => {
   });
 });
 
-describe("parsePrViewStatus — stale-entry refresh", () => {
-  it("re-reads the draft flag of a PR that is still open", () => {
+describe("parsePrStatusBatch — stale-entry refresh", () => {
+  it("re-reads state and draft flag per PR number", () => {
     // A PR absent from the open-PR list but still open (failed repo fetch or
     // limit truncation) must not keep a stale draft flag.
-    expect(parsePrViewStatus(JSON.stringify({ state: "OPEN", isDraft: false })))
-      .toEqual({ state: "open", isDraft: false });
-    expect(parsePrViewStatus(JSON.stringify({ state: "OPEN", isDraft: true })))
-      .toEqual({ state: "open", isDraft: true });
+    const json = JSON.stringify({
+      data: {
+        repository: {
+          pr1: { state: "OPEN", isDraft: true },
+          pr2: { state: "OPEN", isDraft: false },
+          pr3: { state: "MERGED", isDraft: false },
+        },
+      },
+    });
+    expect(parsePrStatusBatch(json)).toEqual(new Map([
+      [1, { state: "open", isDraft: true }],
+      [2, { state: "open", isDraft: false }],
+      [3, { state: "merged", isDraft: false }],
+    ]));
   });
 
-  it("reports a merged PR as not draft", () => {
-    expect(parsePrViewStatus(JSON.stringify({ state: "MERGED", isDraft: false })))
-      .toEqual({ state: "merged", isDraft: false });
+  it("omits PRs the response could not resolve", () => {
+    const json = JSON.stringify({ data: { repository: { pr1: null, pr2: { state: "CLOSED" } } } });
+    expect(parsePrStatusBatch(json)).toEqual(new Map([[2, { state: "closed", isDraft: false }]]));
   });
 
   it("returns null for unusable output", () => {
-    expect(parsePrViewStatus("not json")).toBeNull();
-    expect(parsePrViewStatus(JSON.stringify({ isDraft: true }))).toBeNull();
+    expect(parsePrStatusBatch("not json")).toBeNull();
+    expect(parsePrStatusBatch(JSON.stringify({ data: { repository: null } }))).toBeNull();
+    expect(parsePrStatusBatch(JSON.stringify({ errors: [{ type: "RATE_LIMITED" }] }))).toBeNull();
+  });
+});
+
+describe("prKey", () => {
+  it("keys by the real repo so equal PR numbers in different repos differ", () => {
+    const a = prKey({ repo: "", number: 12, url: "https://github.com/org/a/pull/12" });
+    const b = prKey({ repo: "", number: 12, url: "https://github.com/org/b/pull/12" });
+    expect(a).toBe("github.com/org/a#12");
+    expect(b).toBe("github.com/org/b#12");
+  });
+});
+
+describe("isRateLimitError", () => {
+  it("detects primary, secondary and HTTP 429 rate limits", () => {
+    expect(isRateLimitError("GraphQL: API rate limit exceeded for user ID 1.")).toBe(true);
+    expect(isRateLimitError("gh: You have exceeded a secondary rate limit. (HTTP 403)")).toBe(true);
+    expect(isRateLimitError("HTTP/2.0 429 Too Many Requests")).toBe(true);
+    expect(isRateLimitError("HTTP 429: Too Many Requests")).toBe(true);
+  });
+
+  it("ignores other failures", () => {
+    expect(isRateLimitError("HTTP 404: Not Found")).toBe(false);
+    expect(isRateLimitError("HTTP 403: Resource not accessible by integration")).toBe(false);
+  });
+});
+
+describe("nextBackoff", () => {
+  it("doubles from 10s and caps at 5 minutes", () => {
+    let backoff = nextBackoff(undefined, 0);
+    expect(backoff).toEqual({ failures: 1, until: 10_000 });
+    backoff = nextBackoff(backoff, 0);
+    expect(backoff).toEqual({ failures: 2, until: 20_000 });
+    for (let i = 0; i < 10; i++) backoff = nextBackoff(backoff, 0);
+    expect(backoff.until).toBe(300_000);
   });
 });
 

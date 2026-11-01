@@ -77,7 +77,7 @@ interface GhPrEntry {
 
 type FetchPrsResult =
   | { ok: true; data: Map<string, PrEntry> }
-  | { ok: false; error: string };
+  | { ok: false; error: string; rateLimited: boolean };
 
 /** The fields a single-PR refresh can re-read: everything else is list-only. */
 type PrStatus = Pick<PrEntry, "state" | "isDraft">;
@@ -92,18 +92,42 @@ export type GhRunner = (args: string[], cwd: string | undefined) => Promise<GhRu
 
 export interface PrSyncDeps {
   runGh: GhRunner;
+  now: () => number;
 }
 
-// ── Caches for rate-limit mitigation ─────────────────────────────────────────
+// ── Per-project state for rate-limit mitigation ──────────────────────────────
 
-/** Last-seen updatedAt per PR URL — used to skip unchanged PRs' review comments. */
-const prUpdatedAtCache = new Map<string, string>();
+/** Review comments last fetched for one PR, reused while `updatedAt` is unchanged
+ *  and revalidated with `etag` (a 304 doesn't count against the rate limit). */
+interface CachedReviewComments {
+  /** Repo label the PR was listed under ("" for the project repo, else the alias). */
+  repo: string;
+  updatedAt: string;
+  comments: PrComment[];
+  etag: string | null;
+}
 
-/** Cached review comments per PR URL — reused when updatedAt hasn't changed. */
-const prCommentsCache = new Map<string, PrComment[]>();
+/** Exponential backoff for one repo label after GitHub reported a rate limit. */
+export interface RepoBackoff {
+  failures: number;
+  until: number;
+}
 
-/** ETag cache for gh api review comment responses. Keyed by API path. */
-const etagCache = new Map<string, { etag: string; comments: PrComment[] }>();
+/** Caches and backoff owned by one project. Must not be shared across projects:
+ *  each sync evicts entries for PRs its repos no longer list as open. */
+export interface PrSyncState {
+  /** Keyed by `prKey` (real host/owner/repo + PR number). */
+  reviewComments: Map<string, CachedReviewComments>;
+  /** Keyed by repo label ("" for the project repo, else the linked-repo alias). */
+  backoff: Map<string, RepoBackoff>;
+}
+
+export function createPrSyncState(): PrSyncState {
+  return { reviewComments: new Map(), backoff: new Map() };
+}
+
+const BACKOFF_BASE_MS = 10_000;
+const BACKOFF_MAX_MS = 5 * 60_000;
 
 // ── Pure helper functions (exported for unit testing) ─────────────────────────
 
@@ -261,6 +285,69 @@ export function parsePrResponse(
   return prs;
 }
 
+interface PrRef {
+  host: string;
+  owner: string;
+  name: string;
+  number: number;
+}
+
+/** Parse `https://<host>/<owner>/<repo>/pull/<n>`. Returns null for anything else. */
+export function parsePrUrl(url: string): PrRef | null {
+  const match = url.match(/^https?:\/\/([^/]+)\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
+  if (!match) return null;
+  return { host: match[1], owner: match[2], name: match[3], number: parseInt(match[4], 10) };
+}
+
+/** Cache key for a PR: the real repo it lives in plus its number, so equal PR
+ *  numbers in different repos never collide. */
+export function prKey(entry: Pick<PrEntry, "repo" | "number" | "url">): string {
+  const ref = parsePrUrl(entry.url);
+  return ref ? `${ref.host}/${ref.owner}/${ref.name}#${ref.number}` : `${entry.repo}#${entry.number}`;
+}
+
+/** Whether `gh` output reports a GitHub primary or secondary rate limit. */
+export function isRateLimitError(output: string): boolean {
+  return /rate limit|HTTP\/?[\d.]* 429/i.test(output);
+}
+
+/** Next backoff after another rate-limited call: 10s, 20s, 40s, … capped at 5 min. */
+export function nextBackoff(prev: RepoBackoff | undefined, now: number): RepoBackoff {
+  const failures = (prev?.failures ?? 0) + 1;
+  const delay = Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** (failures - 1));
+  return { failures, until: now + delay };
+}
+
+/** GraphQL query reading state/isDraft of several PRs of one repo in one call. */
+export function buildPrStatusBatchQuery(numbers: number[]): string {
+  const fields = numbers.map((n) => `pr${n}: pullRequest(number: ${n}) { state isDraft }`);
+  return `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ${fields.join(" ")} } }`;
+}
+
+/** Parse the response of `buildPrStatusBatchQuery`: PR number → status. PRs the
+ *  response doesn't resolve are omitted. Returns null when unusable. */
+export function parsePrStatusBatch(json: string): Map<number, PrStatus> | null {
+  try {
+    const data = JSON.parse(json) as { data?: { repository?: Record<string, unknown> | null } };
+    const repository = data.data?.repository;
+    if (!repository || typeof repository !== "object") return null;
+    const statuses = new Map<number, PrStatus>();
+    for (const [alias, value] of Object.entries(repository)) {
+      const match = alias.match(/^pr(\d+)$/);
+      if (!match || !value || typeof value !== "object") continue;
+      const pr = value as { state?: unknown; isDraft?: unknown };
+      if (typeof pr.state !== "string") continue;
+      statuses.set(parseInt(match[1], 10), {
+        state: pr.state.toLowerCase() as PrEntry["state"],
+        isDraft: pr.isDraft === true,
+      });
+    }
+    return statuses;
+  } catch {
+    return null;
+  }
+}
+
 // ── I/O functions ─────────────────────────────────────────────────────────────
 
 /** Spawn `gh` with a hard timeout so a hung process never stalls the caller. */
@@ -288,7 +375,38 @@ async function spawnGh(args: string[], cwd: string | undefined): Promise<GhRunRe
   return { timedOut: false, exitCode, stdout, stderr };
 }
 
-const DEFAULT_PR_SYNC_DEPS: PrSyncDeps = { runGh: spawnGh };
+type GhOutcome = "ok" | "rate_limited" | "failed";
+
+function ghOutcome(result: { ok: true } | { ok: false; rateLimited: boolean }): GhOutcome {
+  if (result.ok) return "ok";
+  return result.rateLimited ? "rate_limited" : "failed";
+}
+
+const DEFAULT_PR_SYNC_DEPS: PrSyncDeps = { runGh: spawnGh, now: Date.now };
+
+function isBackingOff(state: PrSyncState, repoLabel: string, now: number): boolean {
+  const backoff = state.backoff.get(repoLabel);
+  return backoff !== undefined && now < backoff.until;
+}
+
+/** Reset a repo's backoff after a successful call, or extend it after a rate limit.
+ *  Other failures leave it unchanged. */
+function recordGhOutcome(
+  state: PrSyncState,
+  repoLabel: string,
+  outcome: GhOutcome,
+  now: number,
+): void {
+  if (outcome === "ok") {
+    state.backoff.delete(repoLabel);
+  } else if (outcome === "rate_limited") {
+    const backoff = nextBackoff(state.backoff.get(repoLabel), now);
+    state.backoff.set(repoLabel, backoff);
+    log.warn(
+      `[pr] GitHub rate limit for repo "${repoLabel || "current"}"; backing off ${Math.round((backoff.until - now) / 1000)}s`,
+    );
+  }
+}
 
 /**
  * Fetch all open PRs from a repo via `gh` CLI.
@@ -316,31 +434,58 @@ export async function fetchAllPrs(
 
   const result = await runGh(args, cwd);
   if (result.timedOut) {
-    return { ok: false, error: `gh pr list timed out for ${label}` };
+    return { ok: false, error: `gh pr list timed out for ${label}`, rateLimited: false };
   }
 
   if (result.exitCode !== 0) {
     return {
       ok: false,
       error: `gh pr list failed for ${label} (exit ${result.exitCode}): ${result.stderr.trim()}`,
+      rateLimited: isRateLimitError(result.stderr),
     };
   }
 
   try {
     return { ok: true, data: parsePrResponse(result.stdout, repoLabel) };
   } catch (err) {
-    return { ok: false, error: `failed to parse gh output for ${label}: ${err}` };
+    return { ok: false, error: `failed to parse gh output for ${label}: ${err}`, rateLimited: false };
   }
 }
 
-/** Fetch inline review comments for a single PR via `gh api` with ETag caching.
- *  Conditional requests (304) don't count against GitHub's rate limit. */
+interface RepoTarget {
+  /** "" for the project repo, else the linked-repo alias. */
+  label: string;
+  /** undefined for the project repo (resolved by `gh` from the cwd). */
+  slug: string | undefined;
+}
+
+function repoTargets(linkedRepos: LinkedRepoConfig[]): RepoTarget[] {
+  return [
+    { label: "", slug: undefined },
+    ...linkedRepos.map(({ repo, alias }) => ({ label: alias, slug: repo })),
+  ];
+}
+
+function sortByCreatedAt(comments: PrComment[]): PrComment[] {
+  return comments.sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+  );
+}
+
+type ReviewCommentsResult =
+  | { kind: "fetched"; comments: PrComment[]; etag: string | null }
+  | { kind: "not_modified" }
+  | { kind: "failed"; rateLimited: boolean };
+
+/** Fetch inline review comments for a single PR via `gh api`, revalidating with
+ *  `etag` when given. Conditional requests (304) don't count against GitHub's rate limit. */
 async function fetchReviewComments(
   prNumber: number,
   repoSlug: string | undefined,
+  etag: string | null,
   cwd: string | undefined,
   runGh: GhRunner,
-): Promise<PrComment[]> {
+): Promise<ReviewCommentsResult> {
   const repoFlag = repoSlug
     ? repoSlug
     : "{owner}/{repo}";
@@ -351,15 +496,18 @@ async function fetchReviewComments(
     "--include",
   ];
 
-  const cached = etagCache.get(apiPath);
-  if (cached) {
-    args.push("--header", `If-None-Match: ${cached.etag}`);
+  if (etag) {
+    args.push("--header", `If-None-Match: ${etag}`);
   }
 
   const result = await runGh(args, cwd);
-  if (result.timedOut) return cached?.comments ?? [];
+  if (result.timedOut) return { kind: "failed", rateLimited: false };
 
   const raw = result.stdout;
+  const failedCall = (): ReviewCommentsResult => ({
+    kind: "failed",
+    rateLimited: isRateLimitError(`${result.stderr}\n${raw}`),
+  });
 
   // gh api --include prefixes the body with HTTP headers separated by a blank line
   let blankLineIdx = raw.indexOf("\r\n\r\n");
@@ -370,11 +518,11 @@ async function fetchReviewComments(
   }
   if (blankLineIdx === -1) {
     // No headers found — may be an error or empty response
-    if (result.exitCode !== 0) return cached?.comments ?? [];
+    if (result.exitCode !== 0) return failedCall();
     try {
-      return parseReviewComments(raw);
+      return { kind: "fetched", comments: parseReviewComments(raw), etag: null };
     } catch {
-      return cached?.comments ?? [];
+      return { kind: "failed", rateLimited: false };
     }
   }
 
@@ -384,87 +532,142 @@ async function fetchReviewComments(
   // Check for 304 Not Modified
   if (headerBlock.includes("304 Not Modified")) {
     log.debug(`[pr] etag cache hit for PR #${prNumber}`);
-    return cached?.comments ?? [];
+    return { kind: "not_modified" };
   }
 
-  if (result.exitCode !== 0) return cached?.comments ?? [];
+  if (result.exitCode !== 0) return failedCall();
 
   // Parse ETag from response headers
   const etagMatch = headerBlock.match(/^etag:\s*(.+)$/mi);
 
   try {
-    const comments = parseReviewComments(body);
-    if (etagMatch) {
-      etagCache.set(apiPath, { etag: etagMatch[1].trim(), comments });
-    }
-    return comments;
-  } catch {
-    return cached?.comments ?? [];
-  }
-}
-
-/** Parse `gh pr view --json state,isDraft` output. Returns null when unusable. */
-export function parsePrViewStatus(json: string): PrStatus | null {
-  try {
-    const data = JSON.parse(json) as { state?: unknown; isDraft?: unknown };
-    if (typeof data.state !== "string") return null;
     return {
-      state: data.state.toLowerCase() as PrEntry["state"],
-      isDraft: data.isDraft === true,
+      kind: "fetched",
+      comments: parseReviewComments(body),
+      etag: etagMatch ? etagMatch[1].trim() : null,
     };
   } catch {
-    return null;
+    return { kind: "failed", rateLimited: false };
   }
 }
 
-/** Fetch the current state of a PR by its URL. Returns null on error. */
-async function fetchPrStatus(url: string, runGh: GhRunner): Promise<PrStatus | null> {
-  const result = await runGh(["pr", "view", url, "--json", "state,isDraft"], undefined);
-  if (result.timedOut || result.exitCode !== 0) return null;
-  return parsePrViewStatus(result.stdout);
+type PrStatusesResult =
+  | { ok: true; data: Map<number, PrStatus> }
+  | { ok: false; rateLimited: boolean };
+
+/** Read the current state of several PRs of one repo with a single GraphQL call. */
+async function fetchPrStatuses(
+  ref: Pick<PrRef, "host" | "owner" | "name">,
+  numbers: number[],
+  runGh: GhRunner,
+): Promise<PrStatusesResult> {
+  const result = await runGh([
+    "api", "graphql",
+    "--hostname", ref.host,
+    "-f", `query=${buildPrStatusBatchQuery(numbers)}`,
+    "-f", `owner=${ref.owner}`,
+    "-f", `name=${ref.name}`,
+  ], undefined);
+  if (result.timedOut) return { ok: false, rateLimited: false };
+
+  // gh exits non-zero when one alias fails to resolve but still prints the rest.
+  const statuses = parsePrStatusBatch(result.stdout);
+  if (statuses) return { ok: true, data: statuses };
+  return {
+    ok: false,
+    rateLimited: result.exitCode !== 0 && isRateLimitError(`${result.stderr}\n${result.stdout}`),
+  };
 }
 
-/** Update stored PR state for a worktree whose PR is no longer in the open PR list.
- *  Fetches the actual current state for any entry still marked "open". Refreshes
- *  `isDraft` too: an entry can be absent from the open-PR list while still open
- *  (a failed repo fetch, or PR_FETCH_LIMIT truncation), and a draft marked ready
+/** Update stored PR state for worktrees whose PRs are no longer in the open PR list.
+ *  Re-reads every entry still marked "open", with one call per repo (not per PR).
+ *  Refreshes `isDraft` too: an entry can be absent from the open-PR list while still
+ *  open (a failed repo fetch, or PR_FETCH_LIMIT truncation), and a draft marked ready
  *  in that window would otherwise keep rendering as a draft. */
-async function refreshStalePrData(gitDir: string, runGh: GhRunner): Promise<void> {
-  const entries = await readWorktreePrs(gitDir);
-  if (!entries.some((e) => e.state === "open")) return;
+async function refreshStalePrData(
+  gitDirs: string[],
+  state: PrSyncState,
+  deps: PrSyncDeps,
+): Promise<void> {
+  const stored = await Promise.all(
+    gitDirs.map(async (gitDir) => ({ gitDir, entries: await readWorktreePrs(gitDir) })),
+  );
+  const stale = stored.filter(({ entries }) => entries.some((e) => e.state === "open"));
+  if (stale.length === 0) return;
 
-  const updated = await Promise.all(
-    entries.map(async (entry) => {
-      if (entry.state !== "open") return entry;
-      const status = await fetchPrStatus(entry.url, runGh);
-      return status ? { ...entry, ...status } : entry;
+  const now = deps.now();
+  const byRepo = new Map<string, { ref: PrRef; repoLabel: string; numbers: Set<number> }>();
+  for (const { entries } of stale) {
+    for (const entry of entries) {
+      if (entry.state !== "open" || isBackingOff(state, entry.repo, now)) continue;
+      const ref = parsePrUrl(entry.url);
+      if (!ref) continue;
+      const repoKey = `${ref.host}/${ref.owner}/${ref.name}`;
+      const group = byRepo.get(repoKey) ?? { ref, repoLabel: entry.repo, numbers: new Set<number>() };
+      group.numbers.add(ref.number);
+      byRepo.set(repoKey, group);
+    }
+  }
+
+  const statuses = new Map<string, PrStatus>();
+  await Promise.all(
+    [...byRepo].map(async ([repoKey, group]) => {
+      const result = await fetchPrStatuses(group.ref, [...group.numbers], deps.runGh);
+      recordGhOutcome(state, group.repoLabel, ghOutcome(result), now);
+      if (!result.ok) return;
+      for (const [number, status] of result.data) statuses.set(`${repoKey}#${number}`, status);
     }),
   );
 
-  await writeWorktreePrs(gitDir, updated);
+  await Promise.all(
+    stale.map(({ gitDir, entries }) =>
+      writeWorktreePrs(
+        gitDir,
+        entries.map((entry) => {
+          if (entry.state !== "open") return entry;
+          const status = statuses.get(prKey(entry));
+          return status ? { ...entry, ...status } : entry;
+        }),
+      ),
+    ),
+  );
 }
 
-/** Sync PR status into per-worktree webmux storage for all worktrees that have open PRs. */
+/** Sync PR status into per-worktree webmux storage for all worktrees that have open PRs.
+ *  `state` holds this project's caches and backoff and must not be shared with
+ *  another project. */
 export async function syncPrStatus(
   getWorktreeGitDirs: () => Promise<Map<string, string>>,
   linkedRepos: LinkedRepoConfig[],
-  projectDir?: string,
+  projectDir: string | undefined,
+  state: PrSyncState,
   deps: PrSyncDeps = DEFAULT_PR_SYNC_DEPS,
 ): Promise<void> {
   log.debug(`[pr] starting sync (${1 + linkedRepos.length} repo(s))`);
-  // Fetch current repo + all linked repos in parallel.
-  const allRepoResults = await Promise.all([
-    fetchAllPrs(undefined, undefined, projectDir, deps.runGh),
-    ...linkedRepos.map(({ repo, alias }) => fetchAllPrs(repo, alias, projectDir, deps.runGh)),
-  ]);
+  const now = deps.now();
+  // Fetch current repo + all linked repos in parallel, skipping repos in backoff.
+  const allRepoResults = await Promise.all(
+    repoTargets(linkedRepos).map(async ({ label, slug }) => {
+      if (isBackingOff(state, label, now)) {
+        log.debug(`[pr] skipping ${slug ?? "current"}: rate-limit backoff`);
+        return { label, result: null };
+      }
+      const result = await fetchAllPrs(slug, label, projectDir, deps.runGh);
+      recordGhOutcome(state, label, ghOutcome(result), now);
+      return { label, result };
+    }),
+  );
 
   // Log fetch errors; aggregate successes into branch → PrEntry[].
   const branchPrs = new Map<string, PrEntry[]>();
-  for (const result of allRepoResults) {
+  const listedRepos = new Set<string>();
+  for (const { label, result } of allRepoResults) {
+    if (!result) continue;
     if (!result.ok) {
       log.error(`[pr] ${result.error}`);
       continue;
     }
+    listedRepos.add(label);
     for (const [branch, entry] of result.data) {
       const existing = branchPrs.get(branch) ?? [];
       existing.push(entry);
@@ -477,40 +680,53 @@ export async function syncPrStatus(
 
   // Fetch inline review comments only for PRs matching active worktrees.
   // PRs that haven't been updated reuse cached comments (saves API calls).
-  const reviewTuples: { entry: PrEntry; repoSlug: string | undefined }[] = [];
+  const reviewTuples: {
+    entry: PrEntry;
+    key: string;
+    cached: CachedReviewComments | undefined;
+    repoSlug: string | undefined;
+  }[] = [];
   for (const [branch, entries] of branchPrs) {
     if (!activeBranches.has(branch)) continue;
     for (const entry of entries) {
       if (entry.state !== "open") continue;
-      const cachedUpdatedAt = prUpdatedAtCache.get(entry.url);
-      if (cachedUpdatedAt === entry.updatedAt && prCommentsCache.has(entry.url)) {
+      const key = prKey(entry);
+      const cached = state.reviewComments.get(key);
+      if (cached?.updatedAt === entry.updatedAt) {
         log.debug(`[pr] skipping comments for PR #${entry.number} (unchanged)`);
-        const cached = prCommentsCache.get(entry.url)!;
-        entry.comments = [...entry.comments, ...cached].sort(
-          (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-        );
+        entry.comments = sortByCreatedAt([...entry.comments, ...cached.comments]);
       } else {
         const repoSlug = entry.repo
           ? linkedRepos.find((lr) => lr.alias === entry.repo)?.repo
           : undefined;
-        reviewTuples.push({ entry, repoSlug });
+        reviewTuples.push({ entry, key, cached, repoSlug });
       }
     }
   }
   if (reviewTuples.length > 0) {
     log.debug(`[pr] fetching review comments for ${reviewTuples.length} PR(s)`);
     const reviewResults = await mapWithConcurrency(reviewTuples, 5, (t) =>
-      fetchReviewComments(t.entry.number, t.repoSlug, projectDir, deps.runGh),
+      fetchReviewComments(t.entry.number, t.repoSlug, t.cached?.etag ?? null, projectDir, deps.runGh),
     );
+    const rateLimitedRepos = new Set<string>();
     for (let i = 0; i < reviewTuples.length; i++) {
-      const entry = reviewTuples[i].entry;
-      const reviewComments = reviewResults[i];
-      prUpdatedAtCache.set(entry.url, entry.updatedAt);
-      prCommentsCache.set(entry.url, reviewComments);
-      entry.comments = [...entry.comments, ...reviewComments].sort(
-        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-      );
+      const { entry, key, cached } = reviewTuples[i];
+      const result = reviewResults[i];
+      const comments = result.kind === "fetched" ? result.comments : cached?.comments ?? [];
+      if (result.kind === "failed" && result.rateLimited) {
+        // Leave the cache untouched so the PR is retried once the backoff ends.
+        rateLimitedRepos.add(entry.repo);
+      } else {
+        state.reviewComments.set(key, {
+          repo: entry.repo,
+          updatedAt: entry.updatedAt,
+          comments,
+          etag: result.kind === "fetched" ? result.etag : cached?.etag ?? null,
+        });
+      }
+      entry.comments = sortByCreatedAt([...entry.comments, ...comments]);
     }
+    for (const repo of rateLimitedRepos) recordGhOutcome(state, repo, "rate_limited", deps.now());
   }
   const seen = new Set<string>();
 
@@ -524,40 +740,23 @@ export async function syncPrStatus(
 
   if (seen.size > 0) {
     log.debug(
-      `[pr] synced ${seen.size} worktree(s) with PR data from ${allRepoResults.length} repo(s)`,
+      `[pr] synced ${seen.size} worktree(s) with PR data from ${listedRepos.size} repo(s)`,
     );
   }
 
   // For worktrees not matched by the open-PR sync, refresh any stale "open"
   // entries so merged/closed PRs are reflected in stored worktree PR state.
-  const uniqueDirs = new Set(worktreeGitDirs.values());
-  const staleRefreshes: Promise<void>[] = [];
-  for (const gitDir of uniqueDirs) {
-    if (seen.has(gitDir)) continue;
-    staleRefreshes.push(refreshStalePrData(gitDir, deps.runGh));
-  }
-  await Promise.all(staleRefreshes);
+  const unseenDirs = [...new Set(worktreeGitDirs.values())].filter((gitDir) => !seen.has(gitDir));
+  await refreshStalePrData(unseenDirs, state, deps);
 
-  // Evict cache entries for PRs that are no longer open.
-  const currentPrUrls = new Set<string>();
-  const currentApiPaths = new Set<string>();
+  // Evict cached comments for PRs no longer open — only in repos whose list call
+  // succeeded this sync, so a failed or skipped call never wipes the cache.
+  const openKeys = new Set<string>();
   for (const entries of branchPrs.values()) {
-    for (const entry of entries) {
-      currentPrUrls.add(entry.url);
-      const repoSlug = entry.repo
-        ? linkedRepos.find((lr) => lr.alias === entry.repo)?.repo ?? "{owner}/{repo}"
-        : "{owner}/{repo}";
-      currentApiPaths.add(`repos/${repoSlug}/pulls/${entry.number}/comments?per_page=100`);
-    }
+    for (const entry of entries) openKeys.add(prKey(entry));
   }
-  for (const url of prUpdatedAtCache.keys()) {
-    if (!currentPrUrls.has(url)) prUpdatedAtCache.delete(url);
-  }
-  for (const url of prCommentsCache.keys()) {
-    if (!currentPrUrls.has(url)) prCommentsCache.delete(url);
-  }
-  for (const key of etagCache.keys()) {
-    if (!currentApiPaths.has(key)) etagCache.delete(key);
+  for (const [key, cached] of state.reviewComments) {
+    if (listedRepos.has(cached.repo) && !openKeys.has(key)) state.reviewComments.delete(key);
   }
 }
 
@@ -566,7 +765,8 @@ export async function syncPrStatus(
 export function startPrMonitor(
   getWorktreeGitDirs: () => Promise<Map<string, string>>,
   linkedRepos: LinkedRepoConfig[],
-  projectDir?: string,
+  projectDir: string | undefined,
+  state: PrSyncState,
   intervalMs: number = 10_000,
   isActive?: () => boolean,
 ): () => void {
@@ -575,7 +775,7 @@ export function startPrMonitor(
       log.debug("[pr] skipping PR sync: no active clients");
       return;
     }
-    await syncPrStatus(getWorktreeGitDirs, linkedRepos, projectDir).catch(
+    await syncPrStatus(getWorktreeGitDirs, linkedRepos, projectDir, state).catch(
       (err: unknown) => {
         log.error(`[pr] sync error: ${err}`);
       },
@@ -590,39 +790,55 @@ export function startPrMonitor(
  *  (open-only), this sees merged/closed PRs, so the auto-remove sweep can detect a
  *  merge even when no earlier open-state sync ever recorded the PR.
  *
- *  Returns null if any repo query failed: a failed query is indistinguishable from
- *  "this branch has no PR here", and since auto-remove reads this live (no persisted
- *  fallback), proceeding on partial data could drop an open cross-repo PR and wrongly
- *  remove a merged-in-main worktree. Callers must treat null as "skip this sweep". */
+ *  Returns null if any repo query failed or is in rate-limit backoff: a failed query
+ *  is indistinguishable from "this branch has no PR here", and since auto-remove reads
+ *  this live (no persisted fallback), proceeding on partial data could drop an open
+ *  cross-repo PR and wrongly remove a merged-in-main worktree. Callers must treat
+ *  null as "skip this sweep". */
 export async function fetchBranchPrStates(
   linkedRepos: LinkedRepoConfig[],
-  projectDir?: string,
+  projectDir: string | undefined,
+  state: PrSyncState,
+  deps: PrSyncDeps = DEFAULT_PR_SYNC_DEPS,
 ): Promise<Map<string, PrEntry["state"][]> | null> {
-  const perRepo = await Promise.all([
-    fetchRepoBranchStates(undefined, projectDir),
-    ...linkedRepos.map(({ repo }) => fetchRepoBranchStates(repo, projectDir)),
-  ]);
-  if (perRepo.some((entries) => entries === null)) return null;
+  const now = deps.now();
+  const targets = repoTargets(linkedRepos);
+  if (targets.some(({ label }) => isBackingOff(state, label, now))) {
+    log.debug("[auto-remove] skipping PR state fetch: rate-limit backoff");
+    return null;
+  }
+  const perRepo = await Promise.all(
+    targets.map(async ({ label, slug }) => {
+      const result = await fetchRepoBranchStates(slug, projectDir, deps.runGh);
+      recordGhOutcome(state, label, ghOutcome(result), now);
+      return result;
+    }),
+  );
 
   const states = new Map<string, PrEntry["state"][]>();
-  for (const entries of perRepo) {
-    for (const { branch, state } of entries!) {
+  for (const result of perRepo) {
+    if (!result.ok) return null;
+    for (const { branch, state: prState } of result.data) {
       const existing = states.get(branch) ?? [];
-      existing.push(state);
+      existing.push(prState);
       states.set(branch, existing);
     }
   }
   return states;
 }
 
-/** Returns null (not []) on any failure so the caller can distinguish a failed
- *  query from a repo that genuinely has no matching PRs. */
+type RepoBranchStatesResult =
+  | { ok: true; data: Array<{ branch: string; state: PrEntry["state"] }> }
+  | { ok: false; rateLimited: boolean };
+
+/** Returns a failure (not []) so the caller can distinguish a failed query from a
+ *  repo that genuinely has no matching PRs. */
 async function fetchRepoBranchStates(
   repoSlug: string | undefined,
   cwd: string | undefined,
-): Promise<Array<{ branch: string; state: PrEntry["state"] }> | null> {
+  runGh: GhRunner,
+): Promise<RepoBranchStatesResult> {
   const args = [
-    "gh",
     "pr",
     "list",
     "--state",
@@ -637,31 +853,24 @@ async function fetchRepoBranchStates(
   ];
   if (repoSlug) args.push("--repo", repoSlug);
 
-  const proc = Bun.spawn(args, {
-    stdout: "pipe",
-    stderr: "pipe",
-    ...(cwd ? { cwd } : {}),
-  });
-
-  const timeout = Bun.sleep(GH_TIMEOUT_MS).then(() => {
-    proc.kill();
-    return "timeout" as const;
-  });
-
-  const raceResult = await Promise.race([proc.exited, timeout]);
-  if (raceResult === "timeout" || raceResult !== 0) return null;
+  const result = await runGh(args, cwd);
+  if (result.timedOut) return { ok: false, rateLimited: false };
+  if (result.exitCode !== 0) return { ok: false, rateLimited: isRateLimitError(result.stderr) };
 
   try {
-    const raw = JSON.parse(await new Response(proc.stdout).text()) as Array<{
+    const raw = JSON.parse(result.stdout) as Array<{
       headRefName: string;
       state: string;
     }>;
-    return raw.map((r) => ({
-      branch: r.headRefName,
-      state: r.state.toLowerCase() as PrEntry["state"],
-    }));
+    return {
+      ok: true,
+      data: raw.map((r) => ({
+        branch: r.headRefName,
+        state: r.state.toLowerCase() as PrEntry["state"],
+      })),
+    };
   } catch {
-    return null;
+    return { ok: false, rateLimited: false };
   }
 }
 
