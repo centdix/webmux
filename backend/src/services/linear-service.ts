@@ -427,12 +427,16 @@ export function branchMatchesIssue(
 const CACHE_TTL_MS = 300_000;
 let issueCache: { data: FetchIssuesResult; fetchedAt: number } | null = null;
 let issueFetchInFlight: Promise<FetchIssuesResult> | null = null;
+/** Bumped on every invalidation so a request started before it cannot cache
+ *  its (possibly stale) result. */
+let issueCacheGeneration = 0;
 let viewerIdCache: string | null = null;
 const inProgressStateIdCache = new Map<string, string>();
 
 export function resetLinearCaches(): void {
   issueCache = null;
   issueFetchInFlight = null;
+  issueCacheGeneration += 1;
   viewerIdCache = null;
   inProgressStateIdCache.clear();
 }
@@ -532,6 +536,7 @@ export async function fetchAssignedIssues(options?: { maxAgeMs?: number }): Prom
 
 async function requestAssignedIssues(): Promise<FetchIssuesResult> {
   const now = Date.now();
+  const generation = issueCacheGeneration;
   const response = await postLinearGraphql<AssignedIssuesQueryData>(ASSIGNED_ISSUES_QUERY);
   if (!response.ok) {
     log.error(`[linear] fetch failed: ${response.error}`);
@@ -540,7 +545,7 @@ async function requestAssignedIssues(): Promise<FetchIssuesResult> {
 
   const result = parseIssuesResponse(response.data);
   if (result.ok) {
-    issueCache = { data: result, fetchedAt: now };
+    if (generation === issueCacheGeneration) issueCache = { data: result, fetchedAt: now };
     log.debug(`[linear] fetched ${result.data.length} assigned issues`);
   } else {
     log.error(`[linear] GraphQL error: ${result.error}`);
@@ -1097,6 +1102,7 @@ export async function createLinearIssue(input: CreateLinearIssueInput): Promise<
     issueCache = null;
     // A request started before the create may not include the new issue.
     issueFetchInFlight = null;
+    issueCacheGeneration += 1;
     log.debug(`[linear] created issue ${result.data.identifier} branch=${result.data.branchName}`);
   } else {
     log.error(`[linear] issueCreate error: ${result.error}`);

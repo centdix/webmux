@@ -394,6 +394,47 @@ describe("fetchAssignedIssues caching", () => {
     expect(firstResult.ok).toBe(true);
   });
 
+  it("does not cache a result from a request started before an issue was created", async () => {
+    const staleFetch = fetchAssignedIssues();
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = Object.assign(
+      async function createMock(_input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+        const body = typeof init?.body === "string" ? init.body : "";
+        if (body.includes("query Viewer")) return jsonResponse({ data: { viewer: { id: "viewer-1" } } });
+        if (body.includes("query TeamStates")) {
+          return jsonResponse({
+            data: { team: { states: { nodes: [{ id: "state-in-progress", name: "In Progress", type: "started" }] } } },
+          });
+        }
+        return jsonResponse({
+          data: {
+            issueCreate: {
+              success: true,
+              issue: {
+                id: "issue-2",
+                identifier: "ENG-2",
+                title: "New issue",
+                url: "https://linear.app/acme/issue/ENG-2",
+                branchName: "user/eng-2-new-issue",
+              },
+            },
+          },
+        });
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+    const created = await createLinearIssue({ title: "New issue", description: "", teamId: "team-1" });
+    expect(created.ok).toBe(true);
+    globalThis.fetch = realFetch;
+
+    releaseResponses();
+    await staleFetch;
+    expect(callCount).toBe(1);
+
+    await fetchAssignedIssues();
+    expect(callCount).toBe(2);
+  });
+
   it("refetches only when the cached result is older than maxAgeMs", async () => {
     releaseResponses();
     setSystemTime(new Date("2026-11-01T10:00:00.000Z"));
