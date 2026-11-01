@@ -1,7 +1,7 @@
 import type { LinkedLinearIssue, PrEntry, ProjectWorktreeList, WorktreeInfo } from "../lib/types";
 import { worktreeKey } from "../lib/worktree-ref";
 
-function wt(project: string, branch: string, overrides: Partial<WorktreeInfo> = {}): WorktreeInfo {
+export function wt(project: string, branch: string, overrides: Partial<WorktreeInfo> = {}): WorktreeInfo {
   return {
     project,
     branch,
@@ -33,7 +33,7 @@ function wt(project: string, branch: string, overrides: Partial<WorktreeInfo> = 
   };
 }
 
-function pr(number: number, overrides: Partial<PrEntry> = {}): PrEntry {
+export function pr(number: number, overrides: Partial<PrEntry> = {}): PrEntry {
   return {
     repo: "",
     number,
@@ -48,7 +48,7 @@ function pr(number: number, overrides: Partial<PrEntry> = {}): PrEntry {
   };
 }
 
-function comments(count: number): PrEntry["comments"] {
+export function comments(count: number): PrEntry["comments"] {
   return Array.from({ length: count }, (_, i) => ({
     type: "inline" as const,
     author: i % 2 ? "rubenfiszel" : "hugocasa",

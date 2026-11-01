@@ -15,7 +15,9 @@
     onselect,
     onmenu,
     trailing,
+    actions,
     below,
+    class: className = "",
   }: {
     wt: WorktreeInfo;
     key: string;
@@ -28,15 +30,18 @@
     onmenu: (event: MouseEvent) => void;
     /** Right-aligned marks on the name line. */
     trailing?: Snippet;
+    /** Interactive marks after the name button (links, popovers). */
+    actions?: Snippet;
     /** Optional second line (reason, details). */
     below?: Snippet;
+    class?: string;
   } = $props();
 
   let dim = $derived(attention === "closed" || attention === "creating" || wt.archived);
 </script>
 
 <div
-  class="group relative rounded-md {selected ? 'bg-active shadow-[inset_2px_0_0_var(--color-accent)]' : 'hover:bg-hover'}"
+  class="group relative rounded-md {selected ? 'bg-active shadow-[inset_2px_0_0_var(--color-accent)]' : 'hover:bg-hover'} {className}"
   data-key={key}
 >
   <div class="flex min-h-7 items-center">
@@ -55,6 +60,7 @@
       {#if favorite}<span class="shrink-0 text-[10px] text-warning/80" title="Pinned">★</span>{/if}
       {@render trailing?.()}
     </button>
+    {@render actions?.()}
     {#if selected}
       <IconBtn icon="more" label="Actions for {wt.branch}" class="mr-0.5" onclick={onmenu} />
     {/if}
