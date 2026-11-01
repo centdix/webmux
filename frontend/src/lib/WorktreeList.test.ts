@@ -163,6 +163,18 @@ describe("WorktreeList", () => {
     expect(onarchive).toHaveBeenCalledWith({ project: "webmux", branch: "feature/menu-actions" });
   });
 
+  it("drops the menu when its row leaves the list, so it does not come back with it", async () => {
+    const rows = rowsOf([createWorktree("feature/a"), createWorktree("feature/b")]);
+    const { rerender } = renderList({ rows });
+
+    await openRowMenu("feature/a");
+    await rerender({ rows: rowsOf([createWorktree("feature/b")]) });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    await rerender({ rows });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
   it("offers Open instead of Close on a closed worktree", async () => {
     const onopen = vi.fn();
     renderList({ rows: rowsOf([{ ...createWorktree("feature/closed"), mux: "" }]), onopen });

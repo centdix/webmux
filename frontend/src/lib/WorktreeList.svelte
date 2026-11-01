@@ -84,6 +84,10 @@
 
   let menu = $state<{ key: string; x: number; y: number } | null>(null);
   let menuWorktree = $derived(menu ? shownRows.find((row) => worktreeKey(row.worktree) === menu?.key)?.worktree : undefined);
+  // A menu whose row left the list (project switch, search) closes for good.
+  $effect(() => {
+    if (menu && !menuWorktree) menu = null;
+  });
 
   /** Right-click opens at the pointer, the ⋯ button under itself. */
   function openMenu(event: MouseEvent, key: string): void {
