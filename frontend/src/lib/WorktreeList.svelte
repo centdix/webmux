@@ -82,21 +82,27 @@
   /** Rows on screen, top to bottom. */
   let shownRows = $derived([...rows.active, ...(showArchived ? rows.archived : [])]);
 
-  let menu = $state<{ key: string; x: number; y: number } | null>(null);
+  let menu = $state<{ key: string; x: number; y: number; trigger: HTMLElement } | null>(null);
   let menuWorktree = $derived(menu ? shownRows.find((row) => worktreeKey(row.worktree) === menu?.key)?.worktree : undefined);
   // A menu whose row left the list (project switch, search) closes for good.
   $effect(() => {
     if (menu && !menuWorktree) menu = null;
   });
 
-  /** Right-click opens at the pointer, the ⋯ button under itself. */
+  /** Right-click opens at the pointer; the ⋯ button and the keyboard
+   *  (Shift+F10, the ContextMenu key) under the button or row. A second click
+   *  on ⋯ closes it. */
   function openMenu(event: MouseEvent, key: string): void {
     event.preventDefault();
-    if (event.type === "click" && event.currentTarget instanceof HTMLElement) {
-      const rect = event.currentTarget.getBoundingClientRect();
-      menu = { key, x: rect.left, y: rect.bottom + 2 };
+    if (!(event.currentTarget instanceof HTMLElement)) return;
+    const trigger = event.currentTarget;
+    if (event.type === "click" && menu?.trigger === trigger) {
+      menu = null;
+    } else if (event.type === "contextmenu" && (event.button === 2 || event.ctrlKey)) {
+      menu = { key, x: event.clientX, y: event.clientY, trigger };
     } else {
-      menu = { key, x: event.clientX, y: event.clientY };
+      const rect = trigger.getBoundingClientRect();
+      menu = { key, x: rect.left, y: rect.bottom + 2, trigger };
     }
   }
 
@@ -288,7 +294,7 @@
   {@const key = menu.key}
   {@const isCreating = wt.creating}
   {@const isFavorite = favorites.has(key)}
-  <ContextMenu x={menu.x} y={menu.y} label={wt.label ?? wt.branch} onclose={() => (menu = null)}>
+  <ContextMenu x={menu.x} y={menu.y} label={wt.label ?? wt.branch} trigger={menu.trigger} onclose={() => (menu = null)}>
     {#if wt.mux === "✓"}
       <MenuItem disabled={isCreating} onclick={() => runMenuAction(wt, onclose)}>Close</MenuItem>
     {:else}

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { Snippet } from "svelte";
+  import { getContext, type Snippet } from "svelte";
+  import { IN_MENU } from "./ContextMenu.svelte";
 
   let {
     href,
@@ -16,13 +17,16 @@
     children: Snippet;
   } = $props();
 
+  const inMenu = getContext<(() => boolean) | undefined>(IN_MENU);
+  let role = $derived(inMenu?.() ? "menuitem" : undefined);
+
   let className = $derived(
     `block w-full px-2 py-1.5 rounded text-left text-xs no-underline hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed ${danger ? "text-danger" : "text-primary"}`,
   );
 </script>
 
 {#if href}
-  <a {href} class={className} {onclick}>{@render children()}</a>
+  <a {href} {role} class={className} {onclick}>{@render children()}</a>
 {:else}
-  <button type="button" {disabled} class={className} {onclick}>{@render children()}</button>
+  <button type="button" {role} {disabled} class={className} {onclick}>{@render children()}</button>
 {/if}

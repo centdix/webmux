@@ -30,12 +30,15 @@
     ["Open a closed worktree", "Cmd+Enter"],
   ];
 
-  let shortcutsAt = $state<{ x: number; y: number } | null>(null);
+  let shortcutsAt = $state<{ x: number; y: number; trigger: HTMLElement } | null>(null);
 
-  function openShortcuts(event: MouseEvent): void {
-    if (!(event.currentTarget instanceof HTMLElement)) return;
+  function toggleShortcuts(event: MouseEvent): void {
+    if (shortcutsAt || !(event.currentTarget instanceof HTMLElement)) {
+      shortcutsAt = null;
+      return;
+    }
     const rect = event.currentTarget.getBoundingClientRect();
-    shortcutsAt = { x: rect.right + 6, y: rect.bottom };
+    shortcutsAt = { x: rect.right + 6, y: rect.bottom, trigger: event.currentTarget };
   }
 </script>
 
@@ -85,14 +88,21 @@
   <div class="flex shrink-0 flex-col items-center gap-1.5 py-2.5">
     <IconBtn icon="plus" label="Add project" class="h-8 w-8 rounded-lg border border-dashed border-edge" onclick={onaddproject} />
     {#if showShortcuts}
-      <IconBtn icon="help" label="Keyboard shortcuts" onclick={openShortcuts} />
+      <IconBtn icon="help" label="Keyboard shortcuts" onclick={toggleShortcuts} />
     {/if}
     <IconBtn icon="gear" label="Settings" onclick={onsettings} />
   </div>
 </nav>
 
 {#if shortcutsAt}
-  <ContextMenu x={shortcutsAt.x} y={shortcutsAt.y} label="Keyboard shortcuts" role="dialog" onclose={() => (shortcutsAt = null)}>
+  <ContextMenu
+    x={shortcutsAt.x}
+    y={shortcutsAt.y}
+    label="Keyboard shortcuts"
+    role="dialog"
+    trigger={shortcutsAt.trigger}
+    onclose={() => (shortcutsAt = null)}
+  >
     <dl class="flex flex-col gap-1 px-2 pb-1 text-[11px]">
       {#each SHORTCUTS as [action, keys] (action)}
         <div class="flex justify-between gap-4">

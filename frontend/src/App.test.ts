@@ -932,7 +932,7 @@ describe("App create selection", () => {
     renderApp();
     await screen.findByTitle("main");
     await chooseProject("docs");
-    await fireEvent.click(within(await openRowMenu("feature/doc")).getByRole("button", { name: "Create sub-worktree" }));
+    await fireEvent.click(within(await openRowMenu("feature/doc")).getByRole("menuitem", { name: "Create sub-worktree" }));
     expect(await screen.findByText("New Sub-Worktree")).toBeInTheDocument();
     await fireEvent.input(screen.getByLabelText(/Branch name/i), { target: { value: "feature/doc-child" } });
     await fireEvent.click(screen.getByRole("button", { name: "Create" }));
@@ -951,7 +951,7 @@ describe("App create selection", () => {
     renderApp();
     await screen.findByTitle("main");
     await chooseProject("docs");
-    await fireEvent.click(within(await openRowMenu("feature/doc")).getByRole("button", { name: "Create sub-worktree" }));
+    await fireEvent.click(within(await openRowMenu("feature/doc")).getByRole("menuitem", { name: "Create sub-worktree" }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.queryByText("New Sub-Worktree")).not.toBeInTheDocument();
 
@@ -972,7 +972,7 @@ describe("App create selection", () => {
     renderApp();
     await screen.findByTitle("main");
     await chooseProject("docs");
-    await fireEvent.click(within(await openRowMenu("feature/doc")).getByRole("button", { name: "Create sub-worktree" }));
+    await fireEvent.click(within(await openRowMenu("feature/doc")).getByRole("menuitem", { name: "Create sub-worktree" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Failed to load the docs config: offline");
     expect(screen.queryByText("New Sub-Worktree")).not.toBeInTheDocument();
@@ -989,7 +989,7 @@ describe("App create selection", () => {
     await screen.findByTitle("main");
     await chooseProject("docs");
     async function runRowAction(label: string): Promise<void> {
-      await fireEvent.click(within(await openRowMenu("feature/doc")).getByRole("button", { name: label }));
+      await fireEvent.click(within(await openRowMenu("feature/doc")).getByRole("menuitem", { name: label }));
     }
 
     await runRowAction("Close");
@@ -1192,7 +1192,7 @@ describe("App create selection", () => {
 
       await fireEvent.click(await screen.findByRole("button", { name: "Actions for feature/web" }));
       expect(screen.queryByRole("button", { name: "Remove project" })).not.toBeInTheDocument();
-      expect(within(screen.getByRole("menu")).getByRole("button", { name: "Archive" })).toBeInTheDocument();
+      expect(within(screen.getByRole("menu")).getByRole("menuitem", { name: "Archive" })).toBeInTheDocument();
 
       await openProjectMenu(PROJECT);
       expect(screen.queryByRole("menu")).not.toBeInTheDocument();
@@ -1206,7 +1206,7 @@ describe("App create selection", () => {
       const menu = await openRowMenu("feature/web");
 
       expect(screen.queryByRole("button", { name: "Remove project" })).not.toBeInTheDocument();
-      expect(within(menu).getByRole("button", { name: "Archive" })).toBeInTheDocument();
+      expect(within(menu).getByRole("menuitem", { name: "Archive" })).toBeInTheDocument();
     });
 
     it("pulls the header's project and opens it in the IDE", async () => {
@@ -1392,7 +1392,7 @@ describe("App create selection", () => {
 
     renderApp();
     await screen.findByTitle("main");
-    await fireEvent.click(within(await openRowMenu("feature/other")).getByRole("button", { name: "Edit label…" }));
+    await fireEvent.click(within(await openRowMenu("feature/other")).getByRole("menuitem", { name: "Edit label…" }));
     await fireEvent.input(screen.getByLabelText("Label"), { target: { value: "Other work" } });
     await fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
@@ -1525,7 +1525,7 @@ describe("App create selection", () => {
 
     await screen.findByTitle("feature/active");
     await fireEvent.click(screen.getByRole("button", { name: /actions for feature\/active/i }));
-    await fireEvent.click(screen.getByRole("button", { name: "Change profile…" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Change profile…" }));
     await fireEvent.click(screen.getByRole("radio", { name: "full" }));
     await fireEvent.click(screen.getByRole("button", { name: "Switch" }));
 
@@ -1937,7 +1937,7 @@ describe("App create selection", () => {
     await screen.findByTitle("feature/linked");
 
     await fireEvent.click(screen.getByRole("button", { name: /actions for feature\/linked/i }));
-    await fireEvent.click(screen.getByRole("button", { name: "Post conversation to ENG-42" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Post conversation to ENG-42" }));
 
     const dialog = await screen.findByRole("dialog");
     await fireEvent.click(within(dialog).getByRole("button", { name: "Post" }));
@@ -1976,7 +1976,7 @@ describe("App create selection", () => {
     await screen.findByTitle("feature/linked");
 
     await fireEvent.click(screen.getByRole("button", { name: /actions for feature\/linked/i }));
-    await fireEvent.click(screen.getByRole("button", { name: "Post conversation to ENG-42" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Post conversation to ENG-42" }));
     const dialog = await screen.findByRole("dialog");
     await fireEvent.click(within(dialog).getByRole("button", { name: "Post" }));
 
@@ -1985,7 +1985,7 @@ describe("App create selection", () => {
     });
 
     await fireEvent.click(screen.getByRole("button", { name: /actions for feature\/linked/i }));
-    const pendingMenuItem = await screen.findByRole("button", { name: "Posting to Linear…" });
+    const pendingMenuItem = await screen.findByRole("menuitem", { name: "Posting to Linear…" });
     expect(pendingMenuItem).toBeDisabled();
     await fireEvent.click(pendingMenuItem);
     expect(postWorktreeToLinear).toHaveBeenCalledTimes(1);

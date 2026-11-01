@@ -136,7 +136,7 @@ describe("WorktreeList", () => {
     });
 
     await fireEvent.click(screen.getByRole("button", { name: "Actions for feature/list-actions" }));
-    await fireEvent.click(within(screen.getByRole("menu")).getByRole("button", { name: "Remove" }));
+    await fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "Remove" }));
 
     expect(onremove).toHaveBeenCalledWith({ project: "webmux", branch: "feature/list-actions" });
     expect(onselect).not.toHaveBeenCalled();
@@ -148,7 +148,7 @@ describe("WorktreeList", () => {
     renderList({ rows: rowsOf([createWorktree("feature/menu-actions")]), onarchive });
 
     const menu = await openRowMenu("feature/menu-actions");
-    const labels = within(menu).getAllByRole("button").map((button) => button.textContent?.trim());
+    const labels = within(menu).getAllByRole("menuitem").map((item) => item.textContent?.trim());
     expect(labels).toEqual([
       "Close",
       "Add to favorites",
@@ -159,7 +159,7 @@ describe("WorktreeList", () => {
       "Remove",
     ]);
 
-    await fireEvent.click(within(menu).getByRole("button", { name: "Archive" }));
+    await fireEvent.click(within(menu).getByRole("menuitem", { name: "Archive" }));
     expect(onarchive).toHaveBeenCalledWith({ project: "webmux", branch: "feature/menu-actions" });
   });
 
@@ -175,13 +175,70 @@ describe("WorktreeList", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
+  it("opens at the pointer on right-click and under the row from the keyboard, keeping inside the viewport", async () => {
+    renderList({ rows: rowsOf([createWorktree("feature/kbd")]) });
+    vi.spyOn(row("feature/kbd"), "getBoundingClientRect").mockReturnValue(new DOMRect(30, 80, 200, 20));
+
+    await fireEvent.contextMenu(row("feature/kbd"), { button: 2, clientX: 200, clientY: 300 });
+    const menu = screen.getByRole("menu", { name: "feature/kbd" });
+    expect(menu.style.left).toBe("200px");
+    expect(menu.style.top).toBe("300px");
+
+    const innerWidth = window.innerWidth;
+    window.innerWidth = 150;
+    await fireEvent(window, new Event("resize"));
+    expect(menu.style.left).toBe("146px");
+    window.innerWidth = innerWidth;
+
+    await fireEvent.keyDown(document, { key: "Escape" });
+    await fireEvent.contextMenu(row("feature/kbd"), { button: 0, shiftKey: true });
+    expect(screen.getByRole("menu").style.left).toBe("30px");
+    expect(screen.getByRole("menu").style.top).toBe("102px");
+  });
+
+  it("moves through the menu with the arrow keys and gives the focus back on Escape", async () => {
+    renderList({ rows: rowsOf([{ ...createWorktree("feature/keys"), creating: true }]) });
+    row("feature/keys").focus();
+
+    const menu = await openRowMenu("feature/keys");
+    expect(within(menu).getByText("feature/keys")).toHaveAttribute("role", "presentation");
+    // Creating disables Close: focus starts on the first enabled item.
+    expect(document.activeElement).toBe(within(menu).getByRole("menuitem", { name: "Add to favorites" }));
+    await fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(within(menu).getByRole("menuitem", { name: "Edit label…" }));
+    await fireEvent.keyDown(document.activeElement!, { key: "End" });
+    expect(document.activeElement).toBe(within(menu).getByRole("menuitem", { name: "Remove" }));
+    await fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(within(menu).getByRole("menuitem", { name: "Add to favorites" }));
+    await fireEvent.keyDown(document.activeElement!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(within(menu).getByRole("menuitem", { name: "Remove" }));
+    await fireEvent.keyDown(document.activeElement!, { key: "Home" });
+    expect(document.activeElement).toBe(within(menu).getByRole("menuitem", { name: "Add to favorites" }));
+
+    await fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(row("feature/keys"));
+  });
+
+  it("closes the ⋯ menu on a second click of ⋯", async () => {
+    renderList({ rows: rowsOf([createWorktree("feature/toggle")]), selected: { project: "webmux", branch: "feature/toggle" } });
+    const more = screen.getByRole("button", { name: "Actions for feature/toggle" });
+
+    await fireEvent.click(more);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(more).toHaveAttribute("aria-expanded", "true");
+    await fireEvent.click(more);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(more).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("offers Open instead of Close on a closed worktree", async () => {
     const onopen = vi.fn();
     renderList({ rows: rowsOf([{ ...createWorktree("feature/closed"), mux: "" }]), onopen });
 
     const menu = await openRowMenu("feature/closed");
-    expect(within(menu).queryByRole("button", { name: "Close" })).not.toBeInTheDocument();
-    await fireEvent.click(within(menu).getByRole("button", { name: "Open" }));
+    expect(within(menu).queryByRole("menuitem", { name: "Close" })).not.toBeInTheDocument();
+    await fireEvent.click(within(menu).getByRole("menuitem", { name: "Open" }));
 
     expect(onopen).toHaveBeenCalledWith({ project: "webmux", branch: "feature/closed" });
   });
@@ -192,10 +249,10 @@ describe("WorktreeList", () => {
     const onposttolinear = vi.fn();
     renderList({ rows: rowsOf([createWorktree("feature/sub-base", "images")]), oncreatesubworktree, oneditlabel, onposttolinear });
 
-    await fireEvent.click(within(await openRowMenu("feature/sub-base")).getByRole("button", { name: "Create sub-worktree" }));
-    await fireEvent.click(within(await openRowMenu("feature/sub-base")).getByRole("button", { name: "Edit label…" }));
+    await fireEvent.click(within(await openRowMenu("feature/sub-base")).getByRole("menuitem", { name: "Create sub-worktree" }));
+    await fireEvent.click(within(await openRowMenu("feature/sub-base")).getByRole("menuitem", { name: "Edit label…" }));
     await fireEvent.click(
-      within(await openRowMenu("feature/sub-base")).getByRole("button", { name: "Post conversation to ENG-42" }),
+      within(await openRowMenu("feature/sub-base")).getByRole("menuitem", { name: "Post conversation to ENG-42" }),
     );
 
     const ref = { project: "images", branch: "feature/sub-base" };
@@ -215,9 +272,9 @@ describe("WorktreeList", () => {
     expect(within(row("feature/fav")).getByText("★")).toBeInTheDocument();
     expect(within(row("feature/plain")).queryByText("★")).not.toBeInTheDocument();
 
-    await fireEvent.click(within(await openRowMenu("feature/fav")).getByRole("button", { name: "Remove from favorites" }));
+    await fireEvent.click(within(await openRowMenu("feature/fav")).getByRole("menuitem", { name: "Remove from favorites" }));
     expect(ontogglefavorite).toHaveBeenCalledWith({ project: "webmux", branch: "feature/fav" });
-    await fireEvent.click(within(await openRowMenu("feature/plain")).getByRole("button", { name: "Add to favorites" }));
+    await fireEvent.click(within(await openRowMenu("feature/plain")).getByRole("menuitem", { name: "Add to favorites" }));
     expect(ontogglefavorite).toHaveBeenCalledWith({ project: "webmux", branch: "feature/plain" });
   });
 
@@ -238,7 +295,7 @@ describe("WorktreeList", () => {
       archiving: new Set<string>(["webmux:feature/archiving"]),
     });
 
-    expect(within(await openRowMenu("feature/archiving")).getByRole("button", { name: "Archive" })).toBeDisabled();
+    expect(within(await openRowMenu("feature/archiving")).getByRole("menuitem", { name: "Archive" })).toBeDisabled();
   });
 
   it("names a row by its label, keeping the branch in its tooltip", () => {
