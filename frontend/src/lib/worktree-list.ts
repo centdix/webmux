@@ -87,8 +87,9 @@ export function sortFavoritesFirst(worktrees: WorktreeInfo[], favorites: Readonl
 
 /** The current project's rows: those matching the search, favorites first,
  *  split into active and archived (each nesting its own sub-worktrees).
- *  Creations still naming their branch always show, right after the favorites:
- *  where their worktree lands once named, as creating rows sort first. */
+ *  Creations still naming their branch always show, right after the favorites,
+ *  near where a top-level creating row sorts (search and nesting can still
+ *  place their worktree elsewhere once named). */
 export function buildProjectListRows(
   worktrees: WorktreeInfo[],
   pendingCreations: PendingCreationInfo[],
@@ -106,7 +107,7 @@ export function buildProjectListRows(
   return {
     active: [
       ...active.slice(0, pendingAt),
-      ...pendingCreations.map((pending): ActiveListRow => ({ pending, depth: 0 })),
+      ...pendingCreations.map((pending): ActiveListRow => ({ kind: "pending", pending, depth: 0 })),
       ...active.slice(pendingAt),
     ],
     archived: buildWorktreeListRows(matching.filter((worktree) => worktree.archived)),
@@ -116,12 +117,12 @@ export function buildProjectListRows(
 /** A row's `{#each}` key: its worktree id, which a pending creation already
  *  has, so the row keeps its element once the worktree exists. */
 export function listRowKey(row: ActiveListRow): string {
-  return worktreeRowKey("pending" in row ? row.pending : row.worktree);
+  return worktreeRowKey(row.kind === "pending" ? row.pending : row.worktree);
 }
 
 /** The rows that are worktrees, leaving out creations still naming their branch. */
 export function worktreeRowsOf(rows: ActiveListRow[]): WorktreeListRow[] {
-  return rows.filter((row): row is WorktreeListRow => "worktree" in row);
+  return rows.filter((row): row is WorktreeListRow => row.kind === "worktree");
 }
 
 export function buildWorktreeListRows(worktrees: WorktreeInfo[]): WorktreeListRow[] {
@@ -147,7 +148,7 @@ export function buildWorktreeListRows(worktrees: WorktreeInfo[]): WorktreeListRo
   function append(worktree: WorktreeInfo, depth: number): void {
     if (visited.has(worktree.branch)) return;
     visited.add(worktree.branch);
-    rows.push({ worktree, depth });
+    rows.push({ kind: "worktree", worktree, depth });
 
     for (const child of childrenByParent.get(worktree.branch) ?? []) {
       append(child, depth + 1);

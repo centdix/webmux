@@ -81,7 +81,7 @@ describe("buildWorktreeListRows", () => {
 });
 
 function createRow(branch: string, overrides: Partial<WorktreeInfo> = {}): WorktreeListRow {
-  return { worktree: createWorktree(branch, { mux: "✓", ...overrides }), depth: 0 };
+  return { kind: "worktree", worktree: createWorktree(branch, { mux: "✓", ...overrides }), depth: 0 };
 }
 
 describe("sortFavoritesFirst", () => {
@@ -199,7 +199,7 @@ function createPending(id: string): PendingCreationInfo {
 }
 
 function branchesOf(rows: ActiveListRow[]): Array<[string, number]> {
-  return rows.map((row) => ["pending" in row ? `(pending ${row.pending.id})` : row.worktree.branch, row.depth]);
+  return rows.map((row) => [row.kind === "pending" ? `(pending ${row.pending.id})` : row.worktree.branch, row.depth]);
 }
 
 describe("buildProjectListRows", () => {
@@ -258,15 +258,15 @@ describe("buildProjectListRows", () => {
 
 describe("listRowKey", () => {
   it("keys a pending creation and the worktree it becomes alike", () => {
-    expect(listRowKey({ pending: createPending("wt-x"), depth: 0 })).toBe(
-      listRowKey({ worktree: { ...createWorktree("fix-login"), id: "wt-x" }, depth: 0 }),
+    expect(listRowKey({ kind: "pending", pending: createPending("wt-x"), depth: 0 })).toBe(
+      listRowKey({ kind: "worktree", worktree: { ...createWorktree("fix-login"), id: "wt-x" }, depth: 0 }),
     );
   });
 });
 
 describe("worktreeRowsOf", () => {
   it("leaves out creations still naming their branch", () => {
-    const worktreeRow = { worktree: createWorktree("main"), depth: 0 };
-    expect(worktreeRowsOf([{ pending: createPending("wt-a"), depth: 0 }, worktreeRow])).toEqual([worktreeRow]);
+    const worktreeRow: WorktreeListRow = { kind: "worktree", worktree: createWorktree("main"), depth: 0 };
+    expect(worktreeRowsOf([{ kind: "pending", pending: createPending("wt-a"), depth: 0 }, worktreeRow])).toEqual([worktreeRow]);
   });
 });

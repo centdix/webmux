@@ -2081,6 +2081,41 @@ describe("LifecycleService", () => {
     expect(tracker.list()).toEqual([]);
   });
 
+  it("moves every agent from naming to a creating row with its branch once the branch is named", async () => {
+    const repoRoot = await initRepo();
+    const tracker = new WorktreeCreationTracker();
+    const pendingWhileFirstCreates: string[][] = [];
+    const creatingWhileFirstCreates: string[][] = [];
+    const lifecycle = makeLifecycleService(
+      repoRoot,
+      new FakeTmuxGateway(),
+      new ProjectRuntime(),
+      new FakeDockerGateway(),
+      new FakeHookRunner(),
+      AUTO_NAME_CONFIG,
+      new BunGitGateway(),
+      new FakeAutoNameService("fix-login-flow"),
+      {
+        onProgress: (progress) => {
+          tracker.set(progress);
+          if (progress.agent === "claude" && progress.phase === "starting_session") {
+            pendingWhileFirstCreates.push(tracker.listPending().map((pending) => pending.agentName));
+            creatingWhileFirstCreates.push(tracker.list().map((creating) => `${creating.agentName}:${creating.branch}`));
+          }
+        },
+        onFinished: (worktreeId) => {
+          tracker.clear(worktreeId);
+        },
+      },
+    );
+
+    await lifecycle.createWorktrees({ prompt: "Fix the login flow", agents: ["claude", "codex"] });
+
+    expect(pendingWhileFirstCreates).toEqual([[]]);
+    expect(creatingWhileFirstCreates).toEqual([["claude:claude-fix-login-flow", "codex:codex-fix-login-flow"]]);
+    expect(tracker.list()).toEqual([]);
+  });
+
   it("does not report naming_branch when the branch is given", async () => {
     const repoRoot = await initRepo();
     const phases: string[] = [];

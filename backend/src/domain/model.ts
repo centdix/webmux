@@ -233,7 +233,7 @@ export interface PendingCreationSnapshot {
   profile: string;
   agentName: AgentId;
   agentLabel: string | null;
-  phase: WorktreeCreationPhase;
+  phase: "naming_branch";
   source: WorktreeSource;
 }
 

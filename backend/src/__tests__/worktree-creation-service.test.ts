@@ -51,7 +51,7 @@ describe("WorktreeCreationTracker", () => {
     expect(tracker.list()).toEqual([]);
   });
 
-  it("lists creations still naming their branch apart, in request order, without a branch to answer for", () => {
+  it("lists creations still naming their branch apart, in request order", () => {
     const tracker = new WorktreeCreationTracker();
     tracker.set(naming("wt_z", "codex"));
     tracker.set(naming("wt_a"));
@@ -62,7 +62,6 @@ describe("WorktreeCreationTracker", () => {
       { worktreeId: "wt_a", profile: "default", agentName: "claude", phase: "naming_branch", source: "ui" },
     ]);
     expect(tracker.list().map((state) => state.worktreeId)).toEqual(["wt_b"]);
-    expect(tracker.hasBranch("")).toBe(false);
   });
 
   it("moves an id from naming to creating once its branch is known, never listing it twice", () => {

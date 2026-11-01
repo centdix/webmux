@@ -157,12 +157,14 @@ export interface ProjectWorktreeList {
 }
 
 export interface WorktreeListRow {
+  kind: "worktree";
   worktree: WorktreeInfo;
   depth: number;
 }
 
 /** A sidebar row for a creation still naming its branch. */
 export interface PendingListRow {
+  kind: "pending";
   pending: PendingCreationInfo;
   depth: 0;
 }

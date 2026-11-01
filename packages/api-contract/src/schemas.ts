@@ -400,7 +400,7 @@ export const PendingWorktreeCreationSchema = z.object({
   profile: z.string(),
   agentName: AgentIdSchema,
   agentLabel: z.string().nullable(),
-  phase: WorktreeCreationPhaseSchema,
+  phase: z.literal("naming_branch"),
   source: WorktreeSourceSchema,
 });
 

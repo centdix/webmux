@@ -926,6 +926,31 @@ describe("App create selection", () => {
     expect(screen.getAllByRole("button", { name: "New worktree" })).toHaveLength(2);
   });
 
+  it("shows no empty state for a project whose only worktree is still naming its branch", async () => {
+    useThreeProjects();
+    otherProjects.list[1] = {
+      ...otherProjects.list[1]!,
+      worktrees: [],
+      pendingCreations: [{
+        project: "docs",
+        id: "wt-new",
+        profile: "default",
+        agentName: "claude",
+        agentLabel: "Claude",
+        phase: "naming_branch",
+        source: "ui",
+      }],
+    };
+
+    renderApp();
+    await screen.findByTitle("main");
+    await chooseProject("docs");
+
+    await waitFor(() => expect(window.location.hash).toBe("#docs"));
+    expect(screen.getByRole("button", { name: "Naming branch…" })).toBeInTheDocument();
+    expect(screen.queryByText("No worktrees in docs yet")).not.toBeInTheDocument();
+  });
+
   it("badges rail projects with what needs you and running agents", async () => {
     useThreeProjects();
     otherProjects.list[0] = {

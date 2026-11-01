@@ -49,7 +49,7 @@ function createPending(id: string): PendingCreationInfo {
 }
 
 function createRow(worktree: WorktreeInfo, depth = 0): WorktreeListRow {
-  return { worktree, depth };
+  return { kind: "worktree", worktree, depth };
 }
 
 function rowsOf(active: WorktreeInfo[], archived: WorktreeInfo[] = []): ProjectListRows {
@@ -235,7 +235,7 @@ describe("WorktreeList", () => {
 
   it("shows a creation still naming its branch as a row that cannot be selected and has no actions", async () => {
     const onselect = vi.fn();
-    renderList({ rows: { active: [{ pending: createPending("wt-new"), depth: 0 }], archived: [] }, onselect, isMobile: true });
+    renderList({ rows: { active: [{ kind: "pending", pending: createPending("wt-new"), depth: 0 }], archived: [] }, onselect, isMobile: true });
 
     const button = screen.getByRole("button", { name: "Naming branch…" });
     expect(button).toBeDisabled();
@@ -252,7 +252,7 @@ describe("WorktreeList", () => {
   });
 
   it("keeps a pending row's elements when its worktree arrives under the same id", async () => {
-    const { rerender } = renderList({ rows: { active: [{ pending: createPending("wt-new"), depth: 0 }], archived: [] } });
+    const { rerender } = renderList({ rows: { active: [{ kind: "pending", pending: createPending("wt-new"), depth: 0 }], archived: [] } });
     const pendingButton = screen.getByRole("button", { name: "Naming branch…" });
     const pendingItem = pendingButton.closest("li");
 

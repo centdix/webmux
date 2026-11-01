@@ -1121,7 +1121,7 @@
       </div>
     {:else}
       <div class="flex-1 flex flex-col items-center justify-center gap-3 text-muted text-sm">
-        {#if hasLoadedWorktrees && store.worktreesOf(activeProject).length === 0 && store.errorOf(activeProject) === null}
+        {#if hasLoadedWorktrees && store.worktreesOf(activeProject).length === 0 && store.pendingCreationsOf(activeProject).length === 0 && store.errorOf(activeProject) === null}
           <p>No worktrees in {activeProjectName} yet</p>
           <Btn variant="accent-outline" onclick={() => openCreateDialog(activeProject)}>New worktree</Btn>
         {:else}
