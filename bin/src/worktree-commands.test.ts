@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readProjectsRegistryFile } from "../../backend/src/adapters/projects-registry";
 import { buildProjectSessionName, buildWorktreeWindowName } from "../../backend/src/adapters/tmux";
 import type { CreateLifecycleWorktreeInput, CreateLifecycleWorktreesInput } from "../../backend/src/services/lifecycle-service";
 import {
@@ -1117,7 +1118,7 @@ describe("runWorktreeCommand", () => {
       const exitCode = await runWorktreeCommand(
         { command: "list", args, projectDir: "/not-a-project", port: 5111 },
         {
-          listProjects: () => entries,
+          readProjects: () => ({ ok: true, entries }),
           pathExists: (path) => path !== "/deleted",
           createRuntime: ({ projectDir }) => {
             projectDirs.push(projectDir);
@@ -1224,7 +1225,7 @@ describe("runWorktreeCommand", () => {
       const exitCode = await runWorktreeCommand(
         { command: "list", args: ["--all-projects"], projectDir: "/not-a-project", port: 5111 },
         {
-          listProjects: () => [],
+          readProjects: () => ({ ok: true, entries: [] }),
           createRuntime: () => { throw new Error("unexpected"); },
           stdout: (msg) => stdout.push(msg),
         },
@@ -1232,6 +1233,31 @@ describe("runWorktreeCommand", () => {
 
       expect(exitCode).toBe(0);
       expect(stdout).toEqual(["No projects registered. Use `webmux project add` to add one."]);
+    });
+    it("reports a corrupt registry instead of an empty one", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "webmux-cli-registry-"));
+      const file = join(dir, "projects.json");
+      await Bun.write(file, "{ not json");
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      try {
+        const exitCode = await runWorktreeCommand(
+          { command: "list", args: ["--all-projects"], projectDir: "/not-a-project", port: 5111 },
+          {
+            readProjects: () => readProjectsRegistryFile(file),
+            createRuntime: () => { throw new Error("unexpected"); },
+            stdout: (msg) => stdout.push(msg),
+            stderr: (msg) => stderr.push(msg),
+          },
+        );
+
+        expect(exitCode).toBe(1);
+        expect(stdout).toEqual([]);
+        expect(stderr).toHaveLength(1);
+        expect(stderr[0]).toStartWith(`Invalid JSON in ${file}`);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
     });
   });
 

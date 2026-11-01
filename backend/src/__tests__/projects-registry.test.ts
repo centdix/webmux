@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createProjectsRegistry } from "../adapters/projects-registry";
+import { createProjectsRegistry, readProjectsRegistryFile } from "../adapters/projects-registry";
 import type { ProjectEntry } from "../domain/projects";
 
 describe("projects-registry", () => {
@@ -82,5 +82,40 @@ describe("projects-registry", () => {
     registry.add(makeEntry({ path: "/a" }));
     registry.remove("/does-not-exist");
     expect(registry.list().map((e) => e.path)).toEqual(["/a"]);
+  });
+
+  describe("readProjectsRegistryFile", () => {
+    it("reads a missing file as an empty registry", async () => {
+      const { file } = await freshRegistry();
+      expect(readProjectsRegistryFile(file)).toEqual({ ok: true, entries: [] });
+    });
+
+    it("returns the well-formed entries", async () => {
+      const { file, registry } = await freshRegistry();
+      registry.add(makeEntry());
+      expect(readProjectsRegistryFile(file)).toEqual({ ok: true, entries: [makeEntry()] });
+    });
+
+    it("reports malformed JSON with the file path", async () => {
+      const { file } = await freshRegistry();
+      writeFileSync(file, "not json");
+      const result = readProjectsRegistryFile(file);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toStartWith(`Invalid JSON in ${file}`);
+    });
+
+    it("reports a non-array payload with the file path", async () => {
+      const { file } = await freshRegistry();
+      writeFileSync(file, JSON.stringify({ not: "an array" }));
+      expect(readProjectsRegistryFile(file)).toEqual({ ok: false, error: `Invalid ${file}: expected a JSON array` });
+    });
+
+    it("reports an unreadable file with the file path", async () => {
+      const { file } = await freshRegistry();
+      mkdirSync(file);
+      const result = readProjectsRegistryFile(file);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toStartWith(`Cannot read ${file}`);
+    });
   });
 });

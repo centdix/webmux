@@ -12,7 +12,7 @@ import type { WorktreeCreationPhase } from "../../backend/src/domain/model";
 import { compareWorktreeOrder, isValidWorktreeName } from "../../backend/src/domain/policies";
 import { isValidPortLabel } from "../../backend/src/domain/port-registrations";
 import { buildArchivedWorktreePathSet } from "../../backend/src/services/archive-service";
-import { createProjectsRegistry } from "../../backend/src/adapters/projects-registry";
+import { readProjectsRegistryFile, type ProjectsRegistryReadResult } from "../../backend/src/adapters/projects-registry";
 import type { ProjectEntry } from "../../backend/src/domain/projects";
 import { createPortRegistrationService, createWebmuxRuntime } from "../../backend/src/runtime";
 import type { CreateLifecycleWorktreeInput, CreateLifecycleWorktreesInput, CreateLifecycleWorktreesResult, CreateWorktreeProgress, PruneWorktreesResult } from "../../backend/src/services/lifecycle-service";
@@ -100,7 +100,7 @@ interface WorktreeCommandDependencies {
   resolveCurrentBranch?: (projectDir: string) => string | null;
   /** Projects listed by `list --all-projects`. Defaults to the persisted
    *  registry (`~/.webmux/projects.json`). */
-  listProjects?: () => ProjectEntry[];
+  readProjects?: () => ProjectsRegistryReadResult;
   /** Whether a registered project's folder still exists (`list --all-projects`). */
   pathExists?: (path: string) => boolean;
 }
@@ -1171,9 +1171,13 @@ export async function runWorktreeCommand(
       }
 
       if (parsed.allProjects) {
-        const listProjects = deps.listProjects ?? (() => createProjectsRegistry().list());
+        const projects = (deps.readProjects ?? readProjectsRegistryFile)();
+        if (!projects.ok) {
+          stderr(projects.error);
+          return 1;
+        }
         return await listAllProjectsWorktrees(
-          listProjects(),
+          projects.entries,
           (projectDir) => createRuntime({ projectDir, port: context.port }),
           deps.pathExists ?? existsSync,
           stdout,
