@@ -91,20 +91,34 @@ describe("NotificationCenter", () => {
     Reflect.deleteProperty(document, "hidden");
   });
 
-  it("tells the notification's own project when a toast auto-dismisses", () => {
+  it("keeps an auto-dismissed toast's notification on the server and in the bell", () => {
     vi.useFakeTimers();
     const center = new NotificationCenter();
     center.receive(notification("alpha", 4), false);
-    center.receive(notification("beta", 5), false);
-    center.receive(notification("beta", 6), false);
-    center.dismissToast("notification:beta:5");
-    center.removeDismissed({ project: "beta", id: 6 });
-    vi.mocked(dismissNotification).mockClear();
 
     vi.advanceTimersByTime(4000);
 
-    expect(dismissNotification).toHaveBeenCalledTimes(1);
-    expect(dismissNotification).toHaveBeenCalledWith(notification("alpha", 4));
     expect(center.active).toEqual([]);
+    expect(dismissNotification).not.toHaveBeenCalled();
+    expect(center.history).toEqual([notification("alpha", 4)]);
+  });
+
+  it("does not re-toast or reorder notifications replayed on reconnect", () => {
+    const center = new NotificationCenter();
+    const replay = (): void => {
+      for (let id = 1; id <= 6; id++) center.receiveInitial(notification("alpha", id));
+      for (let id = 1; id <= 6; id++) center.receiveInitial(notification("beta", id));
+    };
+    replay();
+    center.receive(notification("alpha", 7), false);
+    const historyBefore = center.history.map((n) => `${n.project}:${n.id}`);
+    const unreadBefore = center.unreadCount;
+
+    center.receiveInitial(notification("alpha", 7));
+    replay();
+
+    expect(center.toasts.map((toast) => toast.id)).toEqual(["notification:alpha:7"]);
+    expect(center.history.map((n) => `${n.project}:${n.id}`)).toEqual(historyBefore);
+    expect(center.unreadCount).toBe(unreadBefore);
   });
 });

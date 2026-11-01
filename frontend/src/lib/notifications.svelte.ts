@@ -51,17 +51,20 @@ export class NotificationCenter {
   uiToasts = $state<UiToastItem[]>([]);
   readonly toasts: ToastItem[] = $derived([...this.active.map(notificationToast), ...this.uiToasts]);
   #nextToastId = 0;
+  /** `notificationKey`s received this session, so a replay on stream
+   *  reconnect leaves the bell as it is. */
+  readonly #seen = new Set<string>();
 
   /** `viewing`: the user is looking at that worktree right now, so it doesn't
    *  get an unread mark. */
   receive(notification: AppNotification, viewing: boolean): void {
+    this.#seen.add(notificationKey(notification));
     this.active = [...this.active, notification];
     if (!viewing) this.unreadWorktrees.add(worktreeKey(notification));
     this.history = [notification, ...this.history].slice(0, MAX_HISTORY);
     this.unreadCount++;
     setTimeout(() => {
-      const key = notificationKey(notification);
-      if (this.active.some((entry) => notificationKey(entry) === key)) this.dismiss(notification);
+      this.active = withoutNotification(this.active, notification);
     }, AUTO_DISMISS_MS);
     if (document.hidden && Notification.permission === "granted") {
       new Notification(notification.message, {
@@ -74,7 +77,8 @@ export class NotificationCenter {
   /** Replayed history on (re)connect: fills the bell without toasting. */
   receiveInitial(notification: AppNotification): void {
     const key = notificationKey(notification);
-    if (this.history.some((entry) => notificationKey(entry) === key)) return;
+    if (this.#seen.has(key)) return;
+    this.#seen.add(key);
     this.history = [notification, ...this.history].slice(0, MAX_HISTORY);
   }
 
