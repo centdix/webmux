@@ -6,14 +6,20 @@ import type { ThemeKey } from "./themes";
 export const SSH_STORAGE_KEY = "wt-ssh-host";
 export const THEME_STORAGE_KEY = "wt-theme";
 export const LAST_SELECTED_WORKTREE_STORAGE_KEY = "wt-last-selected-worktree";
-export const SIDEBAR_WIDTH_STORAGE_KEY = "wt-sidebar-width";
+/** Rail included; the legacy key saved the list's width alone. */
+export const SIDEBAR_WIDTH_STORAGE_KEY = "wt-sidebar-width-with-rail";
+export const LEGACY_SIDEBAR_WIDTH_STORAGE_KEY = "wt-sidebar-width";
 export const WEB_CHAT_UI_STORAGE_KEY = "wt-use-web-chat-ui";
 /** Legacy favorites (`<key>:<project>` or unscoped `<key>` → branches), migrated on load. */
 export const FAVORITE_WORKTREES_STORAGE_KEY = "wt-favorite-worktrees";
 export const FAVORITE_WORKTREE_KEYS_STORAGE_KEY = "wt-favorite-worktree-keys";
 export const LAST_PROJECT_STORAGE_KEY = "wt-last-project";
-// 48px project rail + the 220px list.
-const DEFAULT_SIDEBAR_WIDTH = 268;
+const PROJECT_RAIL_WIDTH = 48;
+// The project rail + the 220px list.
+const DEFAULT_SIDEBAR_WIDTH = PROJECT_RAIL_WIDTH + 220;
+// The list keeps at least 140px beside the rail.
+export const MIN_SIDEBAR_WIDTH = PROJECT_RAIL_WIDTH + 140;
+export const MAX_SIDEBAR_WIDTH = 500;
 
 export function prLabel(pr: Pick<PrEntry, "repo" | "number">): string {
   return pr.repo ? `${pr.repo} #${pr.number}` : `PR #${pr.number}`;
@@ -208,13 +214,26 @@ export function applyTheme(key: ThemeKey): void {
   localStorage.setItem(THEME_STORAGE_KEY, key);
 }
 
+export function clampSidebarWidth(width: number): number {
+  return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width));
+}
+
+function parseSidebarWidth(stored: string | null): number | null {
+  const n = stored ? parseInt(stored, 10) : NaN;
+  return !Number.isNaN(n) && n > 0 ? n : null;
+}
+
+/** The saved width, or a pre-rail one widened by the rail (moved to the new
+ *  key once). */
 export function loadSavedSidebarWidth(): number {
-  const stored = localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
-  if (stored) {
-    const n = parseInt(stored, 10);
-    if (!Number.isNaN(n) && n > 0) return n;
-  }
-  return DEFAULT_SIDEBAR_WIDTH;
+  const saved = parseSidebarWidth(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
+  if (saved !== null) return clampSidebarWidth(saved);
+  const legacy = parseSidebarWidth(localStorage.getItem(LEGACY_SIDEBAR_WIDTH_STORAGE_KEY));
+  if (legacy === null) return DEFAULT_SIDEBAR_WIDTH;
+  const migrated = clampSidebarWidth(legacy + PROJECT_RAIL_WIDTH);
+  saveSidebarWidth(migrated);
+  localStorage.removeItem(LEGACY_SIDEBAR_WIDTH_STORAGE_KEY);
+  return migrated;
 }
 
 export function saveSidebarWidth(width: number): void {

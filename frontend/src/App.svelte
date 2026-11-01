@@ -45,6 +45,9 @@
     applyTheme,
     loadSavedSidebarWidth,
     saveSidebarWidth,
+    clampSidebarWidth,
+    MIN_SIDEBAR_WIDTH,
+    MAX_SIDEBAR_WIDTH,
     loadUseWebChatUi,
     saveUseWebChatUi,
     loadFavoriteWorktreeKeys,
@@ -316,18 +319,9 @@
   });
 
   // Sidebar resize
-  // The project rail takes 48px; the list keeps at least 140px.
-  const MIN_SIDEBAR_WIDTH = 188;
-  const MAX_SIDEBAR_WIDTH = 500;
   const SIDEBAR_KEYBOARD_STEP = 10;
-  let sidebarWidth = $state(
-    Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, loadSavedSidebarWidth())),
-  );
+  let sidebarWidth = $state(loadSavedSidebarWidth());
   let isResizingSidebar = $state(false);
-
-  function clampSidebarWidth(w: number): number {
-    return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, w));
-  }
 
   function handleResizeStart(e: PointerEvent) {
     e.preventDefault();

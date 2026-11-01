@@ -3,6 +3,9 @@ import type { AppConfig, PrEntry } from "./types";
 import {
   LAST_PROJECT_STORAGE_KEY,
   LAST_SELECTED_WORKTREE_STORAGE_KEY,
+  LEGACY_SIDEBAR_WIDTH_STORAGE_KEY,
+  MAX_SIDEBAR_WIDTH,
+  SIDEBAR_WIDTH_STORAGE_KEY,
   WEB_CHAT_UI_STORAGE_KEY,
   FAVORITE_WORKTREES_STORAGE_KEY,
   FAVORITE_WORKTREE_KEYS_STORAGE_KEY,
@@ -10,6 +13,7 @@ import {
   loadFavoriteWorktreeKeys,
   loadLastProject,
   loadSavedSelectedWorktree,
+  loadSavedSidebarWidth,
   loadUseWebChatUi,
   makeIdeUrl,
   projectRepos,
@@ -19,8 +23,41 @@ import {
   saveFavoriteWorktreeKeys,
   saveLastProject,
   saveSelectedWorktree,
+  saveSidebarWidth,
   saveUseWebChatUi,
 } from "./utils";
+
+describe("sidebar width persistence", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("defaults, and reads back a saved width within bounds", () => {
+    expect(loadSavedSidebarWidth()).toBe(268);
+    saveSidebarWidth(300.4);
+    expect(loadSavedSidebarWidth()).toBe(300);
+    localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, "9000");
+    expect(loadSavedSidebarWidth()).toBe(MAX_SIDEBAR_WIDTH);
+  });
+
+  it("widens a width saved before the project rail by the rail, once", () => {
+    localStorage.setItem(LEGACY_SIDEBAR_WIDTH_STORAGE_KEY, "250");
+
+    expect(loadSavedSidebarWidth()).toBe(298);
+    expect(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)).toBe("298");
+    expect(localStorage.getItem(LEGACY_SIDEBAR_WIDTH_STORAGE_KEY)).toBeNull();
+    expect(loadSavedSidebarWidth()).toBe(298);
+  });
+
+  it("keeps a migrated width within bounds and prefers the new key", () => {
+    localStorage.setItem(LEGACY_SIDEBAR_WIDTH_STORAGE_KEY, "480");
+    expect(loadSavedSidebarWidth()).toBe(MAX_SIDEBAR_WIDTH);
+    expect(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)).toBe(String(MAX_SIDEBAR_WIDTH));
+
+    localStorage.setItem(LEGACY_SIDEBAR_WIDTH_STORAGE_KEY, "200");
+    expect(loadSavedSidebarWidth()).toBe(MAX_SIDEBAR_WIDTH);
+  });
+});
 
 describe("worktree selection persistence", () => {
   beforeEach(() => {
