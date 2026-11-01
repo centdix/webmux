@@ -1,7 +1,15 @@
 import { describe, expect, it } from "bun:test";
-import { WorktreeCreationTracker, type WorktreeCreationProgress } from "../services/worktree-creation-service";
+import {
+  WorktreeCreationTracker,
+  type NamingBranchProgress,
+  type ResolvedWorktreeCreationProgress,
+} from "../services/worktree-creation-service";
 
-function progress(worktreeId: string, branch: string, fields: Partial<WorktreeCreationProgress> = {}): WorktreeCreationProgress {
+function progress(
+  worktreeId: string,
+  branch: string,
+  fields: Partial<ResolvedWorktreeCreationProgress> = {},
+): ResolvedWorktreeCreationProgress {
   return {
     worktreeId,
     branch,
@@ -12,6 +20,10 @@ function progress(worktreeId: string, branch: string, fields: Partial<WorktreeCr
     source: "ui",
     ...fields,
   };
+}
+
+function naming(worktreeId: string, agent = "claude"): NamingBranchProgress {
+  return { worktreeId, profile: "default", agent, phase: "naming_branch", source: "ui" };
 }
 
 describe("WorktreeCreationTracker", () => {
@@ -37,5 +49,37 @@ describe("WorktreeCreationTracker", () => {
     expect(tracker.clear("wt_a")).toBe(true);
     expect(tracker.hasBranch("feature/a")).toBe(false);
     expect(tracker.list()).toEqual([]);
+  });
+
+  it("lists creations still naming their branch apart, in request order, without a branch to answer for", () => {
+    const tracker = new WorktreeCreationTracker();
+    tracker.set(naming("wt_z", "codex"));
+    tracker.set(naming("wt_a"));
+    tracker.set(progress("wt_b", "feature/b"));
+
+    expect(tracker.listPending()).toEqual([
+      { worktreeId: "wt_z", profile: "default", agentName: "codex", phase: "naming_branch", source: "ui" },
+      { worktreeId: "wt_a", profile: "default", agentName: "claude", phase: "naming_branch", source: "ui" },
+    ]);
+    expect(tracker.list().map((state) => state.worktreeId)).toEqual(["wt_b"]);
+    expect(tracker.hasBranch("")).toBe(false);
+  });
+
+  it("moves an id from naming to creating once its branch is known, never listing it twice", () => {
+    const tracker = new WorktreeCreationTracker();
+    tracker.set(naming("wt_a"));
+    tracker.set(progress("wt_a", "fix-login"));
+
+    expect(tracker.listPending()).toEqual([]);
+    expect(tracker.list().map((state) => [state.worktreeId, state.branch])).toEqual([["wt_a", "fix-login"]]);
+    expect(tracker.hasBranch("fix-login")).toBe(true);
+  });
+
+  it("forgets a naming creation once cleared", () => {
+    const tracker = new WorktreeCreationTracker();
+    tracker.set(naming("wt_a"));
+
+    expect(tracker.clear("wt_a")).toBe(true);
+    expect(tracker.listPending()).toEqual([]);
   });
 });

@@ -265,6 +265,8 @@ export function saveUseWebChatUi(enabled: boolean): void {
 
 export function worktreeCreationPhaseLabel(phase: WorktreeCreationPhase | null): string {
   switch (phase) {
+    case "naming_branch":
+      return "Naming branch";
     case "creating_worktree":
       return "Creating worktree";
     case "preparing_runtime":

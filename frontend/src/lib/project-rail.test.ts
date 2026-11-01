@@ -36,7 +36,7 @@ function createWorktree(branch: string, overrides: Partial<WorktreeInfo> = {}): 
 }
 
 function createProject(prefix: string, worktrees: WorktreeInfo[], error: string | null = null): ProjectWorktreeList {
-  return { prefix, name: prefix, worktrees, error };
+  return { prefix, name: prefix, worktrees, pendingCreations: [], error };
 }
 
 describe("projectInitials", () => {
@@ -109,6 +109,20 @@ describe("buildProjectRail", () => {
 
   it("counts a worktree being created as running", () => {
     const [item] = buildProjectRail([createProject("webmux", [createWorktree("new", { creating: true })])], new Set());
+
+    expect(item?.running).toBe(true);
+  });
+
+  it("counts a creation still naming its branch as running", () => {
+    const [item] = buildProjectRail(
+      [{
+        ...createProject("webmux", []),
+        pendingCreations: [
+          { project: "webmux", id: "wt-new", profile: "default", agentName: "claude", agentLabel: null, phase: "naming_branch", source: "ui" },
+        ],
+      }],
+      new Set(),
+    );
 
     expect(item?.running).toBe(true);
   });

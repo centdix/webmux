@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/sve
 import { tick, type ComponentProps } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WorktreeList from "./WorktreeList.svelte";
-import type { PrEntry, ProjectListRows, WorktreeInfo, WorktreeListRow } from "./types";
+import type { PendingCreationInfo, PrEntry, ProjectListRows, WorktreeInfo, WorktreeListRow } from "./types";
 
 function createWorktree(branch: string, project = "webmux"): WorktreeInfo {
   return {
@@ -42,6 +42,10 @@ function createWorktree(branch: string, project = "webmux"): WorktreeInfo {
     tabs: [],
     activeTabId: null,
   };
+}
+
+function createPending(id: string): PendingCreationInfo {
+  return { project: "webmux", id, profile: "default", agentName: "claude", agentLabel: "Claude Code", phase: "naming_branch", source: "ui" };
 }
 
 function createRow(worktree: WorktreeInfo, depth = 0): WorktreeListRow {
@@ -227,6 +231,40 @@ describe("WorktreeList", () => {
     await rerender({ rows: rowsOf([{ ...before, branch: "feature/renamed" }]) });
 
     expect(row("feature/renamed")).toBe(element);
+  });
+
+  it("shows a creation still naming its branch as a row that cannot be selected and has no actions", async () => {
+    const onselect = vi.fn();
+    renderList({ rows: { active: [{ pending: createPending("wt-new"), depth: 0 }], archived: [] }, onselect, isMobile: true });
+
+    const button = screen.getByRole("button", { name: "Naming branch…" });
+    expect(button).toBeDisabled();
+    expect(button.getAttribute("title")).toBe("Claude Code · default\nNaming branch…");
+    expect(button.querySelector('[data-attention="creating"]')).not.toBeNull();
+    expect(screen.queryByRole("button", { name: /^Actions for/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("No worktrees yet.")).not.toBeInTheDocument();
+
+    await fireEvent.click(button);
+    await fireEvent.contextMenu(button);
+
+    expect(onselect).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("keeps a pending row's elements when its worktree arrives under the same id", async () => {
+    const { rerender } = renderList({ rows: { active: [{ pending: createPending("wt-new"), depth: 0 }], archived: [] } });
+    const pendingButton = screen.getByRole("button", { name: "Naming branch…" });
+    const pendingItem = pendingButton.closest("li");
+
+    await rerender({
+      rows: rowsOf([{ ...createWorktree("fix-login"), id: "wt-new", creating: true, creationPhase: "creating_worktree" }]),
+    });
+
+    const button = screen.getByRole("button", { name: "Creating worktree…" });
+    expect(button).toBe(pendingButton);
+    expect(button.closest("li")).toBe(pendingItem);
+    expect(button).not.toBeDisabled();
+    expect(pendingItem?.dataset.worktreeKey).toBe("webmux:fix-login");
   });
 
   it("opens at the pointer on right-click and under the row from the keyboard, keeping inside the viewport", async () => {

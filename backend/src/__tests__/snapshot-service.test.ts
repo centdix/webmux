@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { CreatingWorktreeState, PrEntry, WorktreeSnapshot } from "../domain/model";
+import type { CreatingWorktreeState, PendingWorktreeCreationState, PrEntry, WorktreeSnapshot } from "../domain/model";
 import { NotificationService } from "../services/notification-service";
 import { ProjectRuntime } from "../services/project-runtime";
 import { buildProjectSnapshot } from "../services/snapshot-service";
@@ -295,6 +295,35 @@ describe("buildProjectSnapshot", () => {
 
     expect(merged.map((worktree) => worktree.id)).toEqual(["wt_pending"]);
     expect(merged[0]?.creation).toEqual({ phase: "starting_session" });
+  });
+
+  it("lists creations still naming their branch apart from the worktrees, under the id they keep", () => {
+    const pending = {
+      worktreeId: "wt_naming",
+      profile: "default",
+      agentName: "claude",
+      phase: "naming_branch",
+      source: "ui",
+    } satisfies PendingWorktreeCreationState;
+    const snapshot = buildProjectSnapshot({
+      projectName: "Project",
+      mainBranch: "main",
+      runtime: new ProjectRuntime(),
+      notifications: [],
+      pendingCreations: [pending],
+      findAgentLabel: (agentId) => (agentId === "claude" ? "Claude Code" : agentId),
+    });
+
+    expect(snapshot.worktrees).toEqual([]);
+    expect(snapshot.pendingCreations).toEqual([
+      { id: "wt_naming", profile: "default", agentName: "claude", agentLabel: "Claude Code", phase: "naming_branch", source: "ui" },
+    ]);
+  });
+
+  it("has no pending creations when none were given", () => {
+    const snapshot = buildProjectSnapshot({ projectName: "Project", mainBranch: "main", runtime: new ProjectRuntime(), notifications: [] });
+
+    expect(snapshot.pendingCreations).toEqual([]);
   });
 
   it("merges a creating worktree into the runtime row with its id, even after a rename", () => {

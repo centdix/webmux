@@ -4,6 +4,7 @@ import type {
   BuiltInAgentId,
   LinkedLinearIssue,
   OneshotConfig,
+  PendingWorktreeCreation,
   PrEntry,
   ServiceStatus,
   WorktreeCreationPhase,
@@ -140,11 +141,18 @@ export interface WorktreeInfo extends WorktreeRef {
   activeTabId: string | null;
 }
 
+/** A creation still naming its branch: it has no worktree yet, only the id
+ *  its worktree will get. */
+export interface PendingCreationInfo extends PendingWorktreeCreation {
+  project: string;
+}
+
 /** One project's worktrees from the hub listing; `error` is that project's fetch failure. */
 export interface ProjectWorktreeList {
   prefix: string;
   name: string;
   worktrees: WorktreeInfo[];
+  pendingCreations: PendingCreationInfo[];
   error: string | null;
 }
 
@@ -153,11 +161,20 @@ export interface WorktreeListRow {
   depth: number;
 }
 
+/** A sidebar row for a creation still naming its branch. */
+export interface PendingListRow {
+  pending: PendingCreationInfo;
+  depth: 0;
+}
+
+export type ActiveListRow = WorktreeListRow | PendingListRow;
+
 /** The current project's sidebar list: active rows, then the archived ones
  *  folded at the bottom. Both pass the search, favorites first, sub-worktrees
- *  nested. */
+ *  nested; creations still naming their branch sit at the top of the active
+ *  rows, after the favorites. */
 export interface ProjectListRows {
-  active: WorktreeListRow[];
+  active: ActiveListRow[];
   archived: WorktreeListRow[];
 }
 

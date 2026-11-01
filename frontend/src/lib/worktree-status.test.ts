@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PrEntry, WorktreeInfo } from "./types";
-import { attentionLabel, attentionOf, prStateLabel, prStateOf, rowPr } from "./worktree-status";
+import { attentionLabel, attentionOf, creatingLabel, prStateLabel, prStateOf, rowPr } from "./worktree-status";
 
 function createWorktree(overrides: Partial<WorktreeInfo> = {}): WorktreeInfo {
   return {
@@ -67,6 +67,10 @@ describe("attentionOf", () => {
     const creating = createWorktree({ creating: true, creationPhase: "preparing_runtime" });
     expect(attentionLabel("creating", creating)).toBe("Preparing runtime…");
     expect(attentionLabel("waiting", creating)).toBe("Waiting for input");
+  });
+
+  it("labels a creation still naming its branch", () => {
+    expect(creatingLabel("naming_branch")).toBe("Naming branch…");
   });
 });
 

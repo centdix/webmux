@@ -135,6 +135,7 @@ export async function fetchAllProjectWorktrees(focus?: string): Promise<ProjectW
     prefix: project.prefix,
     name: project.name,
     worktrees: project.worktrees.map((worktree) => mapWorktree(worktree, project.prefix)),
+    pendingCreations: project.pendingCreations.map((pending) => ({ ...pending, project: project.prefix })),
     error: project.error,
   }));
 }

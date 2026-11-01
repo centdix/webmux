@@ -61,7 +61,7 @@ export function buildProjectRail(projects: ProjectWorktreeList[], notified: Read
       initials: initials[index],
       tint: projectTint(index),
       needsYou: active.filter((worktree) => overflowStatusOf(worktree, notified) !== null).length,
-      running: active.some((worktree) => {
+      running: project.pendingCreations.length > 0 || active.some((worktree) => {
         const attention = attentionOf(worktree, notified);
         return attention === "working" || attention === "creating";
       }),

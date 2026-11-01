@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import { MediaQuery } from "svelte/reactivity";
-  import type { ProjectListRows, WorktreeInfo, WorktreeListRow, WorktreeRef } from "./types";
+  import type { ActiveListRow, PendingCreationInfo, ProjectListRows, WorktreeInfo, WorktreeRef } from "./types";
   import AgentStatusCount from "./AgentStatusCount.svelte";
   import Btn from "./Btn.svelte";
   import ContextMenu from "./ContextMenu.svelte";
@@ -14,10 +14,12 @@
     OVERFLOW_STATUS_LABELS,
     countAgentStatusesIn,
     keysWithAgentStatus,
+    listRowKey,
+    worktreeRowsOf,
     type OverflowStatusBarStatus,
   } from "./worktree-list";
-  import { attentionLabel, attentionOf, rowPr, type Attention } from "./worktree-status";
-  import { worktreeKey, worktreeRowKey } from "./worktree-ref";
+  import { attentionLabel, attentionOf, creatingLabel, rowPr, type Attention } from "./worktree-status";
+  import { worktreeKey } from "./worktree-ref";
 
   type RowPosition = "above" | "visible" | "below";
 
@@ -87,8 +89,8 @@
   let menuOnEveryRow = $derived(isMobile || touchDevice.current);
 
   let selectedKey = $derived(selected ? worktreeKey(selected) : null);
-  /** Rows on screen, top to bottom. */
-  let shownRows = $derived([...rows.active, ...(showArchived ? rows.archived : [])]);
+  /** Worktree rows on screen, top to bottom (creations still naming their branch left out). */
+  let shownRows = $derived([...worktreeRowsOf(rows.active), ...(showArchived ? rows.archived : [])]);
 
   let menu = $state<{ key: string; x: number; y: number; trigger: HTMLElement } | null>(null);
   let menuWorktree = $derived(menu ? shownRows.find((row) => worktreeKey(row.worktree) === menu?.key)?.worktree : undefined);
@@ -227,6 +229,13 @@
       opening ? "Opening…" : attentionLabel(attention, wt),
     ].filter((line) => line !== null).join("\n");
   }
+
+  function pendingRowTitle(pending: PendingCreationInfo): string {
+    return [
+      [pending.agentLabel ?? pending.agentName, pending.profile].join(" · "),
+      creatingLabel(pending.phase),
+    ].join("\n");
+  }
 </script>
 
 <div class="relative flex min-h-0 flex-1 flex-col">
@@ -251,7 +260,7 @@
       </div>
     {/if}
     <ul class="list-none" aria-label="Worktrees">
-      {#each rows.active as row (worktreeRowKey(row.worktree))}
+      {#each rows.active as row (listRowKey(row))}
         {@render worktreeRow(row)}
       {/each}
     </ul>
@@ -278,7 +287,7 @@
       </button>
       {#if showArchived}
         <ul class="list-none" aria-label="Archived worktrees">
-          {#each rows.archived as row (worktreeRowKey(row.worktree))}
+          {#each rows.archived as row (listRowKey(row))}
             {@render worktreeRow(row)}
           {/each}
         </ul>
@@ -334,40 +343,50 @@
   </ContextMenu>
 {/if}
 
-{#snippet worktreeRow({ worktree: wt, depth }: WorktreeListRow)}
-  {@const key = worktreeKey(wt)}
-  {@const isActive = key === selectedKey}
-  {@const isInitializing = initializing.has(key)}
-  {@const isBusy = removing.has(key) || isInitializing}
-  {@const attention = isInitializing ? "creating" : attentionOf(wt, notified)}
-  {@const dim = attention === "closed" || attention === "creating" || wt.archived}
-  {@const pr = rowPr(wt)}
+<!-- A creation still naming its branch renders through the same markup, as a
+     disabled row, so it keeps its elements once its worktree exists. -->
+{#snippet worktreeRow(row: ActiveListRow)}
+  {@const wt = "worktree" in row ? row.worktree : null}
+  {@const pending = "pending" in row ? row.pending : null}
+  {@const key = wt ? worktreeKey(wt) : null}
+  {@const isActive = key !== null && key === selectedKey}
+  {@const isInitializing = key !== null && initializing.has(key)}
+  {@const isBusy = (key !== null && removing.has(key)) || isInitializing}
+  {@const attention = wt && !isInitializing ? attentionOf(wt, notified) : "creating"}
+  {@const dim = attention === "closed" || attention === "creating" || wt?.archived}
+  {@const pr = wt ? rowPr(wt) : null}
+  {@const name = wt
+    ? wt.creating ? attentionLabel(attention, wt) : (wt.label ?? wt.branch)
+    : creatingLabel(pending?.phase ?? null)}
   <li
     data-worktree-key={key}
-    class="group relative rounded-md {isActive ? 'bg-active shadow-[inset_2px_0_0_var(--color-accent)]' : 'hover:bg-hover'} {isBusy
+    class="group relative rounded-md {isActive ? 'bg-active shadow-[inset_2px_0_0_var(--color-accent)]' : wt ? 'hover:bg-hover' : ''} {isBusy
       ? 'pointer-events-none opacity-40'
       : ''}"
   >
     <div class="flex min-h-7 items-center">
       <button
         type="button"
-        disabled={isBusy}
-        class="flex min-h-7 min-w-0 flex-1 cursor-pointer items-center gap-1.5 pr-1 text-left text-[13px] text-primary"
-        style="padding-left:{6 + depth * 14}px"
-        title={rowTitle(wt, attention, isInitializing)}
+        disabled={isBusy || !wt}
+        class="flex min-h-7 min-w-0 flex-1 cursor-pointer items-center gap-1.5 pr-1 text-left text-[13px] text-primary disabled:cursor-default"
+        style="padding-left:{6 + row.depth * 14}px"
+        title={wt ? rowTitle(wt, attention, isInitializing) : pending ? pendingRowTitle(pending) : undefined}
         aria-current={isActive ? "true" : undefined}
         onclick={() => {
+          if (!wt) return;
           menu = null;
           onselect({ project: wt.project, branch: wt.branch });
         }}
-        oncontextmenu={(event) => openMenu(event, key)}
+        oncontextmenu={(event: MouseEvent) => {
+          if (key !== null) openMenu(event, key);
+        }}
       >
         <WorktreeStatusGlyph {attention} />
-        <span class="min-w-0 flex-1 truncate {dim ? 'text-muted' : ''} {attention === 'creating' ? 'italic' : ''}">{wt.creating ? attentionLabel(attention, wt) : (wt.label ?? wt.branch)}</span>
-        {#if favorites.has(key)}<span class="shrink-0 text-[10px] text-warning/80" aria-hidden="true">★</span>{/if}
+        <span class="min-w-0 flex-1 truncate {dim ? 'text-muted' : ''} {attention === 'creating' ? 'italic' : ''}">{name}</span>
+        {#if key !== null && favorites.has(key)}<span class="shrink-0 text-[10px] text-warning/80" aria-hidden="true">★</span>{/if}
         {#if pr}<PrMark {pr} />{/if}
       </button>
-      {#if isActive || menuOnEveryRow}
+      {#if wt && key !== null && (isActive || menuOnEveryRow)}
         <IconBtn
           icon="more"
           label="Actions for {wt.branch}"

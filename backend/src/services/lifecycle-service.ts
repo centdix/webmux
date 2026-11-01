@@ -21,7 +21,7 @@ import { type DockerGateway } from "../adapters/docker";
 import { buildProjectSessionName, buildWorktreeParkingWindowName, buildWorktreeWindowName, type TmuxGateway } from "../adapters/tmux";
 import { captureNewSessionId, type SessionDiscoveryGateway } from "../adapters/session-discovery";
 import type { AgentId, AgentKind, ProfileConfig, ProjectConfig, RuntimeKind } from "../domain/config";
-import { ROOT_TAB_ID, type ControlEnvMap, type OneshotMeta, type WorktreeCreationPhase, type WorktreeMeta, type WorktreeSource, type WorktreeTab } from "../domain/model";
+import { ROOT_TAB_ID, type ControlEnvMap, type OneshotMeta, type WorktreeMeta, type WorktreeSource, type WorktreeTab } from "../domain/model";
 import {
   activeTabId as readActiveTabId,
   appendTab,
@@ -50,6 +50,7 @@ import { makeUnmanagedWorktreeId, type ReconciliationService } from "./reconcili
 import { buildTmuxPaneSystemPrompt, ensureSessionLayout, isWorktreeOpen, planSessionLayout } from "./session-service";
 import { buildPortRegistrationSystemPrompt } from "./port-prompt";
 import { ArchiveStateService } from "./archive-state-service";
+import type { ResolvedWorktreeCreationProgress, WorktreeCreationProgress } from "./worktree-creation-service";
 import {
   createManagedWorktree,
   initializeManagedWorktree,
@@ -125,16 +126,7 @@ interface ResolvedLifecycleWorktree {
   meta: WorktreeMeta | null;
 }
 
-export interface CreateWorktreeProgress {
-  worktreeId: string;
-  branch: string;
-  baseBranch?: string;
-  path: string;
-  profile: string;
-  agent: AgentId;
-  phase: WorktreeCreationPhase;
-  source: WorktreeSource;
-}
+export type CreateWorktreeProgress = WorktreeCreationProgress;
 
 export interface LifecycleServiceDependencies {
   projectRoot: string;
@@ -221,33 +213,40 @@ export class LifecycleService {
     }
 
     const pendingTargets = agentIds.map((agent) => ({ agent, worktreeId: randomUUID() }));
-    const branch = await this.resolveBranch(input.branch, input.prompt, mode);
-    const targets = buildCreateWorktreeTargets(branch, pendingTargets);
-    const createdBranches: string[] = [];
-
+    const naming = new Set<string>();
     try {
-      for (const target of targets) {
-        const created = await this.createResolvedWorktree({
-          ...input,
-          mode,
-          branch: target.branch,
-          agent: target.agent,
-          worktreeId: target.worktreeId,
-        });
-        createdBranches.push(created.branch);
-      }
-    } catch (error) {
-      const rollbackError = await this.rollbackCreatedWorktrees(createdBranches);
-      if (rollbackError) {
-        throw this.wrapOperationError(new Error(`${toErrorMessage(error)}; ${rollbackError}`));
-      }
-      throw this.wrapOperationError(error);
-    }
+      await this.reportNamingBranch(naming, pendingTargets, input, mode);
+      const branch = await this.resolveBranch(input.branch, input.prompt, mode);
+      const targets = buildCreateWorktreeTargets(branch, pendingTargets);
+      const createdBranches: string[] = [];
 
-    return {
-      primaryBranch: createdBranches[0],
-      branches: createdBranches,
-    };
+      try {
+        for (const target of targets) {
+          const created = await this.createResolvedWorktree({
+            ...input,
+            mode,
+            branch: target.branch,
+            agent: target.agent,
+            worktreeId: target.worktreeId,
+          });
+          naming.delete(target.worktreeId);
+          createdBranches.push(created.branch);
+        }
+      } catch (error) {
+        const rollbackError = await this.rollbackCreatedWorktrees(createdBranches);
+        if (rollbackError) {
+          throw this.wrapOperationError(new Error(`${toErrorMessage(error)}; ${rollbackError}`));
+        }
+        throw this.wrapOperationError(error);
+      }
+
+      return {
+        primaryBranch: createdBranches[0],
+        branches: createdBranches,
+      };
+    } finally {
+      await this.finishNamingBranch(naming);
+    }
   }
 
   async createWorktree(input: CreateLifecycleWorktreeInput): Promise<{
@@ -256,15 +255,23 @@ export class LifecycleService {
   }> {
     const mode = input.mode ?? "new";
     const worktreeId = randomUUID();
-    const branch = await this.resolveBranch(input.branch, input.prompt, mode);
     const agent = this.resolveAgentDefinition(input.agent);
-    return await this.createResolvedWorktree({
-      ...input,
-      mode,
-      branch,
-      agent: agent.id,
-      worktreeId,
-    });
+    const naming = new Set<string>();
+    try {
+      await this.reportNamingBranch(naming, [{ worktreeId, agent: agent.id }], input, mode);
+      const branch = await this.resolveBranch(input.branch, input.prompt, mode);
+      const created = await this.createResolvedWorktree({
+        ...input,
+        mode,
+        branch,
+        agent: agent.id,
+        worktreeId,
+      });
+      naming.delete(worktreeId);
+      return created;
+    } finally {
+      await this.finishNamingBranch(naming);
+    }
   }
 
   async openWorktree(
@@ -843,6 +850,10 @@ export class LifecycleService {
     return branch;
   }
 
+  private autoNameRuns(rawBranch: string | undefined, prompt: string | undefined, mode: CreateWorktreeMode): boolean {
+    return mode === "new" && !rawBranch?.trim() && this.deps.config.autoName !== null && !!prompt?.trim();
+  }
+
   private async generateAutoName(prompt: string | undefined): Promise<string | null> {
     if (!this.deps.config.autoName || !prompt?.trim()) {
       return null;
@@ -1358,6 +1369,34 @@ export class LifecycleService {
     await this.deps.onCreateFinished?.(worktreeId);
   }
 
+  /** Reports `naming_branch` for each target while auto-naming runs, adding
+   *  its id to `naming` first so the caller's `finishNamingBranch` clears it
+   *  on any failure before `createResolvedWorktree` has taken the id over. */
+  private async reportNamingBranch(
+    naming: Set<string>,
+    targets: Array<{ worktreeId: string; agent: AgentId }>,
+    input: CreateLifecycleWorktreeInput,
+    mode: CreateWorktreeMode,
+  ): Promise<void> {
+    if (!this.autoNameRuns(input.branch, input.prompt, mode)) return;
+    for (const target of targets) {
+      naming.add(target.worktreeId);
+      await this.reportCreateProgress({
+        worktreeId: target.worktreeId,
+        profile: input.profile ?? getDefaultProfileName(this.deps.config),
+        agent: target.agent,
+        phase: "naming_branch",
+        source: input.source ?? "ui",
+      });
+    }
+  }
+
+  private async finishNamingBranch(naming: Set<string>): Promise<void> {
+    for (const worktreeId of naming) {
+      await this.finishCreateProgress(worktreeId);
+    }
+  }
+
   private async rollbackCreatedWorktrees(branches: string[]): Promise<string | null> {
     const cleanupErrors: string[] = [];
 
@@ -1401,7 +1440,7 @@ export class LifecycleService {
       profile: profileName,
       agent: input.agent,
       source,
-    } satisfies Omit<CreateWorktreeProgress, "phase">;
+    } satisfies Omit<ResolvedWorktreeCreationProgress, "phase">;
     const deleteBranchOnRollback = input.mode === "new" || branchAvailability.deleteBranchOnRollback;
     let initialized: InitializeManagedWorktreeResult | null = null;
 

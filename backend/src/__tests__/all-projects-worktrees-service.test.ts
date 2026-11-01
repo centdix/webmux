@@ -9,34 +9,38 @@ import {
 } from "../services/all-projects-worktrees-service";
 import { DashboardActivityTracker } from "../services/dashboard-activity";
 
+function listing(worktrees: string[], pendingCreations: string[] = []): { worktrees: string[]; pendingCreations: string[] } {
+  return { worktrees, pendingCreations };
+}
+
 describe("all-projects-worktrees-service", () => {
-  it("returns each project's worktrees in input order", async () => {
+  it("returns each project's worktrees and pending creations in input order", async () => {
     const result = await collectAllProjectWorktrees([
-      { prefix: "a", name: "Alpha", readWorktrees: async () => { await Bun.sleep(5); return ["a1", "a2"]; }, isServed: () => true },
-      { prefix: "b", name: "Beta", readWorktrees: async () => ["b1"], isServed: () => true },
+      { prefix: "a", name: "Alpha", readWorktrees: async () => { await Bun.sleep(5); return listing(["a1", "a2"], ["a-naming"]); }, isServed: () => true },
+      { prefix: "b", name: "Beta", readWorktrees: async () => listing(["b1"]), isServed: () => true },
     ]);
     expect(result).toEqual([
-      { prefix: "a", name: "Alpha", worktrees: ["a1", "a2"], error: null },
-      { prefix: "b", name: "Beta", worktrees: ["b1"], error: null },
+      { prefix: "a", name: "Alpha", worktrees: ["a1", "a2"], pendingCreations: ["a-naming"], error: null },
+      { prefix: "b", name: "Beta", worktrees: ["b1"], pendingCreations: [], error: null },
     ]);
   });
 
   it("reports a failing project as an error entry while others succeed", async () => {
     const result = await collectAllProjectWorktrees([
       { prefix: "a", name: "Alpha", readWorktrees: async () => { throw new Error("git exploded"); }, isServed: () => true },
-      { prefix: "b", name: "Beta", readWorktrees: async () => ["b1"], isServed: () => true },
+      { prefix: "b", name: "Beta", readWorktrees: async () => listing(["b1"]), isServed: () => true },
     ]);
     expect(result).toEqual([
-      { prefix: "a", name: "Alpha", worktrees: [], error: "git exploded" },
-      { prefix: "b", name: "Beta", worktrees: ["b1"], error: null },
+      { prefix: "a", name: "Alpha", worktrees: [], pendingCreations: [], error: "git exploded" },
+      { prefix: "b", name: "Beta", worktrees: ["b1"], pendingCreations: [], error: null },
     ]);
   });
 
   it("stringifies a non-Error rejection", async () => {
-    const result = await collectAllProjectWorktrees<string>([
+    const result = await collectAllProjectWorktrees<string, string>([
       { prefix: "a", name: "Alpha", readWorktrees: () => Promise.reject("plain failure"), isServed: () => true },
     ]);
-    expect(result).toEqual([{ prefix: "a", name: "Alpha", worktrees: [], error: "plain failure" }]);
+    expect(result).toEqual([{ prefix: "a", name: "Alpha", worktrees: [], pendingCreations: [], error: "plain failure" }]);
   });
 
   it("uses the default reconcile freshness for active projects only", () => {
@@ -47,14 +51,14 @@ describe("all-projects-worktrees-service", () => {
   it("drops a project removed while its worktrees were being read", async () => {
     let served = true;
     const result = await collectAllProjectWorktrees([
-      { prefix: "a", name: "Alpha", readWorktrees: async () => ["a1"], isServed: () => true },
+      { prefix: "a", name: "Alpha", readWorktrees: async () => listing(["a1"]), isServed: () => true },
       {
         prefix: "gone",
         name: "Gone",
         readWorktrees: async () => {
           await Bun.sleep(5);
           served = false;
-          return ["g1"];
+          return listing(["g1"]);
         },
         isServed: () => served,
       },
@@ -63,14 +67,14 @@ describe("all-projects-worktrees-service", () => {
   });
 
   it("returns an empty list when there are no projects", async () => {
-    expect(await collectAllProjectWorktrees<string>([])).toEqual([]);
+    expect(await collectAllProjectWorktrees<string, string>([])).toEqual([]);
   });
 });
 
 describe("listAllProjectWorktrees", () => {
   const sources = [
-    { prefix: "a", name: "Alpha", readWorktrees: async () => ["a1"], isServed: () => true },
-    { prefix: "b", name: "Beta", readWorktrees: async () => ["b1"], isServed: () => true },
+    { prefix: "a", name: "Alpha", readWorktrees: async () => listing(["a1"]), isServed: () => true },
+    { prefix: "b", name: "Beta", readWorktrees: async () => listing(["b1"]), isServed: () => true },
   ];
 
   it("records a poll without focus as visible activity for every project", async () => {

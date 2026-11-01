@@ -114,6 +114,7 @@ export const ValidateCustomAgentResponseSchema = z.object({
   warnings: z.array(z.string()),
 });
 export const WorktreeCreationPhaseSchema = z.enum([
+  "naming_branch",
   "creating_worktree",
   "preparing_runtime",
   "running_post_create_hook",
@@ -392,12 +393,25 @@ export const ProjectWorktreeSnapshotSchema = z.object({
   activeTabId: z.string().nullable().default(null),
 });
 
+/** A worktree creation still naming its branch: no branch or path yet. Its
+ *  `id` is the one the worktree will have once created. */
+export const PendingWorktreeCreationSchema = z.object({
+  id: z.string(),
+  profile: z.string(),
+  agentName: AgentIdSchema,
+  agentLabel: z.string().nullable(),
+  phase: WorktreeCreationPhaseSchema,
+  source: WorktreeSourceSchema,
+});
+
 export const ProjectSnapshotSchema = z.object({
   project: z.object({
     name: z.string(),
     mainBranch: z.string(),
   }),
   worktrees: z.array(ProjectWorktreeSnapshotSchema),
+  /** Default keeps older servers valid. */
+  pendingCreations: z.array(PendingWorktreeCreationSchema).default([]),
   notifications: z.array(AppNotificationSchema),
 });
 
@@ -645,6 +659,7 @@ export const ProjectWorktreesSchema = z.object({
   prefix: z.string(),
   name: z.string(),
   worktrees: z.array(ProjectWorktreeSnapshotSchema),
+  pendingCreations: z.array(PendingWorktreeCreationSchema).default([]),
   error: z.string().nullable(),
 });
 
@@ -773,6 +788,7 @@ export type WorktreePortParams = z.infer<typeof WorktreePortParamsSchema>;
 export type RegisterWorktreePortRequest = z.infer<typeof RegisterWorktreePortRequestSchema>;
 export type RegisterWorktreePortResponse = z.infer<typeof RegisterWorktreePortResponseSchema>;
 export type WorktreePortListResponse = z.infer<typeof WorktreePortListResponseSchema>;
+export type PendingWorktreeCreation = z.infer<typeof PendingWorktreeCreationSchema>;
 export type ProjectSnapshot = z.infer<typeof ProjectSnapshotSchema>;
 export type WorktreeConversationProvider = z.infer<typeof WorktreeConversationProviderSchema>;
 export type CodexWorktreeConversationRef = z.infer<typeof CodexWorktreeConversationRefSchema>;

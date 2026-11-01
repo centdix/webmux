@@ -198,11 +198,15 @@ export interface LinkedLinearIssue {
 }
 
 export type WorktreeCreationPhase =
+  | "naming_branch"
   | "creating_worktree"
   | "preparing_runtime"
   | "running_post_create_hook"
   | "starting_session"
   | "reconciling";
+
+/** The phases a creation goes through once its branch is known. */
+export type ResolvedWorktreeCreationPhase = Exclude<WorktreeCreationPhase, "naming_branch">;
 
 export interface CreatingWorktreeState {
   worktreeId: string;
@@ -211,6 +215,24 @@ export interface CreatingWorktreeState {
   path: string;
   profile: string | null;
   agentName: AgentId | null;
+  phase: ResolvedWorktreeCreationPhase;
+  source: WorktreeSource;
+}
+
+/** A creation whose branch is still being named: it has no branch or path yet. */
+export interface PendingWorktreeCreationState {
+  worktreeId: string;
+  profile: string;
+  agentName: AgentId;
+  phase: "naming_branch";
+  source: WorktreeSource;
+}
+
+export interface PendingCreationSnapshot {
+  id: string;
+  profile: string;
+  agentName: AgentId;
+  agentLabel: string | null;
   phase: WorktreeCreationPhase;
   source: WorktreeSource;
 }
@@ -282,6 +304,8 @@ export interface ProjectSnapshot {
     mainBranch: string;
   };
   worktrees: WorktreeSnapshot[];
+  /** Creations still naming their branch, not yet worktrees. */
+  pendingCreations: PendingCreationSnapshot[];
   notifications: NotificationView[];
 }
 

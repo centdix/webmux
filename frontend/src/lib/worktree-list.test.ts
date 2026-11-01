@@ -4,10 +4,12 @@ import {
   buildWorktreeListRows,
   countAgentStatusesIn,
   keysWithAgentStatus,
+  listRowKey,
   matchesWorktreeSearch,
   sortFavoritesFirst,
+  worktreeRowsOf,
 } from "./worktree-list";
-import type { WorktreeInfo, WorktreeListRow } from "./types";
+import type { ActiveListRow, PendingCreationInfo, WorktreeInfo, WorktreeListRow } from "./types";
 
 function createWorktree(branch: string, overrides: Partial<WorktreeInfo> = {}): WorktreeInfo {
   return {
@@ -192,8 +194,12 @@ describe("keysWithAgentStatus", () => {
   });
 });
 
-function branchesOf(rows: WorktreeListRow[]): Array<[string, number]> {
-  return rows.map((row) => [row.worktree.branch, row.depth]);
+function createPending(id: string): PendingCreationInfo {
+  return { project: "webmux", id, profile: "default", agentName: "claude", agentLabel: "Claude", phase: "naming_branch", source: "ui" };
+}
+
+function branchesOf(rows: ActiveListRow[]): Array<[string, number]> {
+  return rows.map((row) => ["pending" in row ? `(pending ${row.pending.id})` : row.worktree.branch, row.depth]);
 }
 
 describe("buildProjectListRows", () => {
@@ -206,22 +212,61 @@ describe("buildProjectListRows", () => {
   ];
 
   it("splits active and archived rows, each nesting its own sub-worktrees", () => {
-    const rows = buildProjectListRows(worktrees, { query: "", favorites: new Set() });
+    const rows = buildProjectListRows(worktrees, [], { query: "", favorites: new Set() });
 
     expect(branchesOf(rows.active)).toEqual([["main", 0], ["feat/search", 0], ["feat/search-child", 1]]);
     expect(branchesOf(rows.archived)).toEqual([["old", 0], ["old-child", 1]]);
   });
 
   it("filters both groups by the search", () => {
-    const rows = buildProjectListRows(worktrees, { query: "old", favorites: new Set() });
+    const rows = buildProjectListRows(worktrees, [], { query: "old", favorites: new Set() });
 
     expect(rows.active).toEqual([]);
     expect(branchesOf(rows.archived)).toEqual([["old", 0], ["old-child", 1]]);
   });
 
   it("lists favorites first, keyed by project", () => {
-    const rows = buildProjectListRows(worktrees, { query: "", favorites: new Set(["webmux:feat/search", "other:main"]) });
+    const rows = buildProjectListRows(worktrees, [], { query: "", favorites: new Set(["webmux:feat/search", "other:main"]) });
 
     expect(branchesOf(rows.active)).toEqual([["feat/search", 0], ["feat/search-child", 1], ["main", 0]]);
+  });
+
+  it("puts creations still naming their branch at the top of the active rows, whatever the search", () => {
+    const rows = buildProjectListRows(worktrees, [createPending("wt-a"), createPending("wt-b")], {
+      query: "zzz",
+      favorites: new Set(),
+    });
+
+    expect(branchesOf(rows.active)).toEqual([["(pending wt-a)", 0], ["(pending wt-b)", 0]]);
+    expect(rows.archived).toEqual([]);
+  });
+
+  it("puts creations still naming their branch right after the favorites, where their worktree will land", () => {
+    const rows = buildProjectListRows(worktrees, [createPending("wt-a")], {
+      query: "",
+      favorites: new Set(["webmux:feat/search"]),
+    });
+
+    expect(branchesOf(rows.active)).toEqual([
+      ["feat/search", 0],
+      ["feat/search-child", 1],
+      ["(pending wt-a)", 0],
+      ["main", 0],
+    ]);
+  });
+});
+
+describe("listRowKey", () => {
+  it("keys a pending creation and the worktree it becomes alike", () => {
+    expect(listRowKey({ pending: createPending("wt-x"), depth: 0 })).toBe(
+      listRowKey({ worktree: { ...createWorktree("fix-login"), id: "wt-x" }, depth: 0 }),
+    );
+  });
+});
+
+describe("worktreeRowsOf", () => {
+  it("leaves out creations still naming their branch", () => {
+    const worktreeRow = { worktree: createWorktree("main"), depth: 0 };
+    expect(worktreeRowsOf([{ pending: createPending("wt-a"), depth: 0 }, worktreeRow])).toEqual([worktreeRow]);
   });
 });

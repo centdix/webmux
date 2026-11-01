@@ -1,6 +1,6 @@
-import type { ProjectListRows, WorktreeInfo, WorktreeListRow } from "./types";
+import type { ActiveListRow, PendingCreationInfo, ProjectListRows, WorktreeInfo, WorktreeListRow } from "./types";
 import { searchMatch } from "./utils";
-import { worktreeKey } from "./worktree-ref";
+import { worktreeKey, worktreeRowKey } from "./worktree-ref";
 
 function parentBranchOf(worktree: WorktreeInfo, worktreesByBranch: Map<string, WorktreeInfo>): string | null {
   if (!worktree.baseBranch || worktree.baseBranch === worktree.branch) {
@@ -86,19 +86,42 @@ export function sortFavoritesFirst(worktrees: WorktreeInfo[], favorites: Readonl
 }
 
 /** The current project's rows: those matching the search, favorites first,
- *  split into active and archived (each nesting its own sub-worktrees). */
+ *  split into active and archived (each nesting its own sub-worktrees).
+ *  Creations still naming their branch always show, right after the favorites:
+ *  where their worktree lands once named, as creating rows sort first. */
 export function buildProjectListRows(
   worktrees: WorktreeInfo[],
+  pendingCreations: PendingCreationInfo[],
   options: { query: string; favorites: ReadonlySet<string> },
 ): ProjectListRows {
   const matching = sortFavoritesFirst(
     worktrees.filter((worktree) => matchesWorktreeSearch(worktree, options.query)),
     options.favorites,
   );
+  const active = buildWorktreeListRows(matching.filter((worktree) => !worktree.archived));
+  const firstNonFavorite = active.findIndex(
+    (row) => row.depth === 0 && !options.favorites.has(worktreeKey(row.worktree)),
+  );
+  const pendingAt = firstNonFavorite === -1 ? active.length : firstNonFavorite;
   return {
-    active: buildWorktreeListRows(matching.filter((worktree) => !worktree.archived)),
+    active: [
+      ...active.slice(0, pendingAt),
+      ...pendingCreations.map((pending): ActiveListRow => ({ pending, depth: 0 })),
+      ...active.slice(pendingAt),
+    ],
     archived: buildWorktreeListRows(matching.filter((worktree) => worktree.archived)),
   };
+}
+
+/** A row's `{#each}` key: its worktree id, which a pending creation already
+ *  has, so the row keeps its element once the worktree exists. */
+export function listRowKey(row: ActiveListRow): string {
+  return worktreeRowKey("pending" in row ? row.pending : row.worktree);
+}
+
+/** The rows that are worktrees, leaving out creations still naming their branch. */
+export function worktreeRowsOf(rows: ActiveListRow[]): WorktreeListRow[] {
+  return rows.filter((row): row is WorktreeListRow => "worktree" in row);
 }
 
 export function buildWorktreeListRows(worktrees: WorktreeInfo[]): WorktreeListRow[] {

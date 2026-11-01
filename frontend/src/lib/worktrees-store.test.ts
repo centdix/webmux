@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProjectWorktreeList, WorktreeInfo } from "./types";
+import type { PendingCreationInfo, ProjectWorktreeList, WorktreeInfo } from "./types";
 
 vi.mock("./api", () => ({ fetchAllProjectWorktrees: vi.fn() }));
 
@@ -40,7 +40,7 @@ function worktree(project: string, branch: string, overrides: Partial<WorktreeIn
 }
 
 function project(prefix: string, worktrees: WorktreeInfo[], error: string | null = null): ProjectWorktreeList {
-  return { prefix, name: prefix, worktrees, error };
+  return { prefix, name: prefix, worktrees, pendingCreations: [], error };
 }
 
 describe("mergeProjectWorktrees", () => {
@@ -63,7 +63,25 @@ describe("mergeProjectWorktrees", () => {
     expect(merged[0]).toEqual(project("alpha", [worktree("alpha", "main")], "boom"));
     expect(merged[1]).toEqual(project("beta", [], "down"));
   });
+
+  it("keeps a failed project's last pending creations too", () => {
+    const merged = mergeProjectWorktrees(
+      [{ ...project("alpha", []), pendingCreations: [pendingCreation] }],
+      [project("alpha", [], "boom")],
+    );
+    expect(merged[0]?.pendingCreations).toEqual([pendingCreation]);
+  });
 });
+
+const pendingCreation: PendingCreationInfo = {
+  project: "alpha",
+  id: "wt-naming",
+  profile: "default",
+  agentName: "claude",
+  agentLabel: "Claude",
+  phase: "naming_branch",
+  source: "ui",
+};
 
 describe("WorktreesStore", () => {
   beforeEach(() => {
@@ -84,6 +102,21 @@ describe("WorktreesStore", () => {
     await store.refresh();
 
     expect(vi.mocked(fetchAllProjectWorktrees).mock.calls).toEqual([["alpha"], ["beta"]]);
+  });
+
+  it("lists a project's pending creations and counts them as creating", async () => {
+    vi.mocked(fetchAllProjectWorktrees).mockResolvedValue([
+      { ...project("alpha", []), pendingCreations: [pendingCreation] },
+      project("beta", []),
+    ]);
+    const store = new WorktreesStore();
+
+    expect(store.hasCreating).toBe(false);
+    await store.refresh();
+
+    expect(store.pendingCreationsOf("alpha")).toEqual([pendingCreation]);
+    expect(store.pendingCreationsOf("beta")).toEqual([]);
+    expect(store.hasCreating).toBe(true);
   });
 
   it("indexes a poll by project and finds worktrees by ref", async () => {

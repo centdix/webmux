@@ -1,4 +1,11 @@
-import type { CreatingWorktreeState, PrEntry, ProjectSnapshot, WorktreeSnapshot } from "../domain/model";
+import type {
+  CreatingWorktreeState,
+  PendingCreationSnapshot,
+  PendingWorktreeCreationState,
+  PrEntry,
+  ProjectSnapshot,
+  WorktreeSnapshot,
+} from "../domain/model";
 import { compareWorktreeOrder, type WorktreeOrderFields } from "../domain/policies";
 import type { RuntimeNotification } from "./notification-service";
 import { ProjectRuntime } from "./project-runtime";
@@ -167,10 +174,25 @@ export function buildWorktreeSnapshots(input: BuildWorktreeSnapshotsInput): Work
   return worktrees;
 }
 
+function mapPendingCreationSnapshot(
+  pending: PendingWorktreeCreationState,
+  findAgentLabel?: (agentId: string | null) => string | null,
+): PendingCreationSnapshot {
+  return {
+    id: pending.worktreeId,
+    profile: pending.profile,
+    agentName: pending.agentName,
+    agentLabel: findAgentLabel ? findAgentLabel(pending.agentName) : pending.agentName,
+    phase: pending.phase,
+    source: pending.source,
+  };
+}
+
 export function buildProjectSnapshot(input: BuildWorktreeSnapshotsInput & {
   projectName: string;
   mainBranch: string;
   notifications: RuntimeNotification[];
+  pendingCreations?: PendingWorktreeCreationState[];
 }): ProjectSnapshot {
   return {
     project: {
@@ -178,6 +200,9 @@ export function buildProjectSnapshot(input: BuildWorktreeSnapshotsInput & {
       mainBranch: input.mainBranch,
     },
     worktrees: buildWorktreeSnapshots(input),
+    pendingCreations: (input.pendingCreations ?? []).map((pending) =>
+      mapPendingCreationSnapshot(pending, input.findAgentLabel)
+    ),
     notifications: input.notifications.map((notification) => ({ ...notification })),
   };
 }

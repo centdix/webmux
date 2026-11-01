@@ -252,8 +252,8 @@ describe("notifications", () => {
   it("fetchAllProjectWorktrees tags each worktree with its project and keeps its id", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
       projects: [
-        { prefix: "alpha", name: "Alpha", worktrees: [snapshot("main")], error: null },
-        { prefix: "beta", name: "Beta", worktrees: [], error: "boom" },
+        { prefix: "alpha", name: "Alpha", worktrees: [snapshot("main")], pendingCreations: [], error: null },
+        { prefix: "beta", name: "Beta", worktrees: [], pendingCreations: [], error: "boom" },
       ],
     })));
     const api = await loadApi();
@@ -264,6 +264,25 @@ describe("notifications", () => {
       ["alpha", null, ["alpha/main#wt-main"]],
       ["beta", "boom", []],
     ]);
+  });
+
+  it("fetchAllProjectWorktrees tags each creation still naming its branch with its project", async () => {
+    const pending = {
+      id: "wt-naming",
+      profile: "default",
+      agentName: "claude",
+      agentLabel: "Claude",
+      phase: "naming_branch",
+      source: "ui",
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
+      projects: [{ prefix: "alpha", name: "Alpha", worktrees: [], pendingCreations: [pending], error: null }],
+    })));
+    const api = await loadApi();
+
+    const projects = await api.fetchAllProjectWorktrees();
+
+    expect(projects[0]?.pendingCreations).toEqual([{ ...pending, project: "alpha" }]);
   });
 
   it("fetchAllProjectWorktrees reports the focused project only when given", async () => {

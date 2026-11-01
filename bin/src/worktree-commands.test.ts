@@ -432,6 +432,40 @@ describe("parseProfileCommandArgs", () => {
 });
 
 describe("runWorktreeCommand", () => {
+  it("prints each creation phase of add, naming the branch first when only a prompt is given", async () => {
+    const stdout: string[] = [];
+    const exitCode = await runWorktreeCommand(
+      { command: "add", args: ["--prompt", "Fix the login flow"], projectDir: "/repo", port: 5111 },
+      {
+        createRuntime: ({ onCreateProgress }) => stubRuntime({
+          config: stubConfig("develop"),
+          lifecycleService: {
+            ...stubLifecycleService([]),
+            async createWorktrees(): Promise<{ primaryBranch: string; branches: string[] }> {
+              onCreateProgress?.({ worktreeId: "wt-1", profile: "default", agent: "claude", phase: "naming_branch", source: "ui" });
+              onCreateProgress?.({
+                worktreeId: "wt-1",
+                branch: "fix-login-flow",
+                path: "/repo/__worktrees/fix-login-flow",
+                profile: "default",
+                agent: "claude",
+                phase: "creating_worktree",
+                source: "ui",
+              });
+              return { primaryBranch: "fix-login-flow", branches: ["fix-login-flow"] };
+            },
+          },
+        }),
+        stdout: (message) => stdout.push(message),
+        stderr: () => {},
+        switchToTmuxWindow: () => {},
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toEqual(["Naming branch", "Creating worktree", "Created worktree fix-login-flow"]);
+  });
+
   it("dispatches add through the lifecycle service and switches to tmux", async () => {
     const { runtime, calls } = makeRuntime();
     const stdout: string[] = [];
