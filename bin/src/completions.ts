@@ -157,6 +157,18 @@ _webmux() {
         fi
       fi
       ;;
+    list)
+      if [[ "\${words[CURRENT-1]}" != "--search" ]]; then
+        local -a opts
+        opts=(
+          '--all:Include archived worktrees'
+          '--archived:Show only archived worktrees'
+          '--search:Filter worktrees by branch/profile/agent'
+          '--all-projects:List worktrees of every registered project'
+        )
+        _describe 'option' opts
+      fi
+      ;;
     linear)
       if (( CURRENT == 3 )); then
         local -a subs
@@ -225,6 +237,11 @@ const BASH_SCRIPT = `_webmux() {
         local branches
         branches=$(webmux --completions "\${COMP_WORDS[1]}" 2>/dev/null)
         COMPREPLY=($(compgen -W "\${branches}" -- "\${cur}"))
+      fi
+      ;;
+    list)
+      if [[ "\${prev}" != "--search" ]]; then
+        COMPREPLY=($(compgen -W "--all --archived --search --all-projects" -- "\${cur}"))
       fi
       ;;
     linear)

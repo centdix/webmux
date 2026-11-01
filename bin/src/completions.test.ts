@@ -124,6 +124,7 @@ describe("runCompletionCommand", () => {
     expect(output).toContain("label:Set or clear a workspace label");
     expect(output).toContain("prune:Remove all closed (not open) worktrees in the current project");
     expect(output).not.toContain('_webmux "$@"');
+    expect(output).toContain("'--all-projects:List worktrees of every registered project'");
     spy.mockRestore();
   });
 
@@ -133,6 +134,7 @@ describe("runCompletionCommand", () => {
     expect(code).toBe(0);
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("complete -F _webmux webmux"));
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("prune"));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining('compgen -W "--all --archived --search --all-projects"'));
     spy.mockRestore();
   });
 });

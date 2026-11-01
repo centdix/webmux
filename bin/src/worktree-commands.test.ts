@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,8 +13,10 @@ import {
   parseProfileCommandArgs,
   parseSendCommandArgs,
   parseTabCommandArgs,
+  formatWorktreeList,
   runWorktreeCommand,
   type ParsedAddCommand,
+  type ListedWorktreeRow,
   type ParsedSendCommand,
 } from "./worktree-commands";
 
@@ -97,6 +99,34 @@ function makeRuntime() {
     },
   };
 }
+
+describe("formatWorktreeList", () => {
+  function row(branch: string, archived: boolean): ListedWorktreeRow {
+    return { branch, label: null, isOpen: false, archived, prStates: [], info: "", searchText: branch };
+  }
+
+  it("hides archived worktrees in active mode with a notice", () => {
+    const result = formatWorktreeList([row("live", false), row("old-a", true), row("old-b", true)], { mode: "active", search: "", allProjects: false });
+
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]).toMatch(/^live +closed$/);
+    expect(result.notices).toEqual(["Hidden 2 archived worktrees. Use --all or --archived."]);
+  });
+
+  it("explains when only archived worktrees exist", () => {
+    expect(formatWorktreeList([row("old", true)], { mode: "active", search: "", allProjects: false })).toEqual({
+      rows: [],
+      notices: ["No active worktrees found. 1 archived worktree hidden. Use --all or --archived."],
+    });
+  });
+
+  it("reports an empty search result", () => {
+    expect(formatWorktreeList([row("live", false)], { mode: "active", search: " x ", allProjects: false })).toEqual({
+      rows: [],
+      notices: ['No worktrees found for "x".'],
+    });
+  });
+});
 
 describe("parseAddCommandArgs", () => {
   it("parses the CLI add contract into lifecycle input", () => {
@@ -253,7 +283,15 @@ describe("parseListCommandArgs", () => {
     expect(parseListCommandArgs(["--all", "--search", "search"])).toEqual({
       mode: "all",
       search: "search",
+      allProjects: false,
     });
+  });
+
+  it("parses --all-projects alone and combined with archive and search filters", () => {
+    expect(parseListCommandArgs(["--all-projects"])).toEqual({ mode: "active", search: "", allProjects: true });
+    expect(parseListCommandArgs(["--all-projects", "--all"])).toEqual({ mode: "all", search: "", allProjects: true });
+    expect(parseListCommandArgs(["--archived", "--all-projects"])).toEqual({ mode: "archived", search: "", allProjects: true });
+    expect(parseListCommandArgs(["--search=fix", "--all-projects"])).toEqual({ mode: "active", search: "fix", allProjects: true });
   });
 
   it("returns null for help", () => {
@@ -1046,7 +1084,187 @@ describe("runWorktreeCommand", () => {
     expect(exitCode).toBe(0);
     expect(createRuntimeCalled).toBe(false);
     expect(stdout).toHaveLength(1);
-    expect(stdout[0]).toContain("webmux list [--all|--archived] [--search <text>]");
+    expect(stdout[0]).toContain("webmux list [--all|--archived] [--search <text>] [--all-projects]");
+    expect(stdout[0]).toContain("--all-projects");
+  });
+
+  describe("list --all-projects", () => {
+    const stripAnsi = (line: string): string => line.replace(/\u001b\[\d+m/g, "");
+    let tempDir = "";
+    let gammaDir = "";
+    let listWindowsCalls = 0;
+
+    beforeEach(async () => {
+      tempDir = await mkdtemp(join(tmpdir(), "webmux-cli-all-projects-"));
+      gammaDir = join(tempDir, "gamma");
+      await mkdir(join(gammaDir, ".git", "webmux"), { recursive: true });
+      await Bun.write(join(gammaDir, ".git", "webmux", "archive.json"), JSON.stringify({
+        schemaVersion: 1,
+        entries: [{ path: `${gammaDir}/.worktrees/old-idea`, archivedAt: "2026-05-12T00:00:00.000Z" }],
+      }));
+      listWindowsCalls = 0;
+    });
+
+    afterEach(async () => {
+      await rm(tempDir, { recursive: true, force: true });
+    });
+
+    function projectRuntime(projectDir: string, branches: string[]) {
+      return {
+        projectDir,
+        config: { workspace: { mainBranch: "main" } },
+        git: stubGit([
+          { path: projectDir, branch: "main", bare: false },
+          ...branches.map((branch) => ({ path: `${projectDir}/.worktrees/${branch}`, branch, bare: false })),
+        ]),
+        tmux: {
+          listWindows: () => {
+            listWindowsCalls++;
+            return ["/alpha", "/beta", gammaDir].map((dir) => ({
+              sessionName: buildProjectSessionName(dir),
+              windowName: buildWorktreeWindowName(dir === "/alpha" ? "fix-bug" : dir === "/beta" ? "search-ui" : "live"),
+            }));
+          },
+        },
+        lifecycleService: stubLifecycleService([]),
+      };
+    }
+
+    function projects(): Array<{ path: string; name: string; addedAt: number }> {
+      return [
+        { path: "/alpha", name: "alpha", addedAt: 1 },
+        { path: "/broken", name: "broken", addedAt: 2 },
+        { path: "/empty", name: "empty", addedAt: 3 },
+        { path: "/beta", name: "beta", addedAt: 4 },
+        { path: gammaDir, name: "gamma", addedAt: 5 },
+      ];
+    }
+
+    async function runListAllProjects(
+      args: string[],
+      entries = projects(),
+    ): Promise<{ exitCode: number; stdout: string[]; projectDirs: string[] }> {
+      const stdout: string[] = [];
+      const projectDirs: string[] = [];
+      const exitCode = await runWorktreeCommand(
+        { command: "list", args, projectDir: "/not-a-project", port: 5111 },
+        {
+          listProjects: () => entries,
+          pathExists: (path) => path !== "/deleted",
+          createRuntime: ({ projectDir }) => {
+            projectDirs.push(projectDir);
+            if (projectDir === "/broken") throw new Error("fatal: not a git repository\nhint: run git init");
+            if (projectDir === "/empty") return projectRuntime(projectDir, []);
+            if (projectDir === "/alpha") return projectRuntime(projectDir, ["fix-bug", "add-search"]);
+            if (projectDir === gammaDir) return projectRuntime(projectDir, ["live", "old-idea"]);
+            return projectRuntime(projectDir, ["search-ui"]);
+          },
+          stdout: (msg) => stdout.push(msg),
+        },
+      );
+      return { exitCode, stdout: stdout.map(stripAnsi), projectDirs };
+    }
+
+    it("groups worktrees per project, indents multi-line errors and exits 1 when a project failed", async () => {
+      const { exitCode, stdout, projectDirs } = await runListAllProjects(["--all-projects"]);
+
+      expect(exitCode).toBe(1);
+      expect(projectDirs).toEqual(["/alpha", "/broken", "/empty", "/beta", gammaDir]);
+      expect(stdout).toHaveLength(17);
+      expect(stdout[0]).toBe("alpha /alpha");
+      expect(stdout[1]).toMatch(/^ {2}fix-bug +open/);
+      expect(stdout[2]).toMatch(/^ {2}add-search +closed/);
+      expect(stdout.slice(3, 10)).toEqual([
+        "",
+        "broken /broken",
+        "  Failed to list worktrees: fatal: not a git repository",
+        "  hint: run git init",
+        "",
+        "empty /empty",
+        "  No worktrees found.",
+      ]);
+      expect(stdout[10]).toBe("");
+      expect(stdout[11]).toBe("beta /beta");
+      expect(stdout[12]).toMatch(/^ {2}search-ui +open/);
+      expect(stdout[13]).toBe("");
+      expect(stdout[14]).toBe(`gamma ${gammaDir}`);
+      expect(stdout[15]).toMatch(/^ {2}live +open/);
+      expect(stdout[16]).toBe("  Hidden 1 archived worktree. Use --all or --archived.");
+    });
+
+    it("lists tmux windows once for all projects", async () => {
+      await runListAllProjects(["--all-projects"]);
+
+      expect(listWindowsCalls).toBe(1);
+    });
+
+    it("applies --search and archive filters to every project", async () => {
+      const { stdout } = await runListAllProjects(["--all-projects", "--archived", "--search", "search"]);
+
+      expect(stdout).toEqual([
+        "alpha /alpha",
+        "  No archived worktrees found.",
+        "",
+        "broken /broken",
+        "  Failed to list worktrees: fatal: not a git repository",
+        "  hint: run git init",
+        "",
+        "empty /empty",
+        "  No worktrees found.",
+        "",
+        "beta /beta",
+        "  No archived worktrees found.",
+        "",
+        `gamma ${gammaDir}`,
+        "  No archived worktrees found.",
+      ]);
+    });
+
+    it("applies --search to every project", async () => {
+      const { stdout } = await runListAllProjects(["--all-projects", "--search", "search"]);
+
+      expect(stdout[1]).toMatch(/^ {2}add-search +closed$/);
+      expect(stdout[2]).toBe("");
+      expect(stdout[11]).toMatch(/^ {2}search-ui +open$/);
+      expect(stdout[14]).toBe("  No worktrees found for \"search\".");
+      expect(stdout).toHaveLength(15);
+    });
+
+    it("reports a deleted project folder without creating its runtime", async () => {
+      const { exitCode, stdout, projectDirs } = await runListAllProjects(
+        ["--all-projects"],
+        [{ path: "/deleted", name: "deleted", addedAt: 1 }, { path: "/beta", name: "beta", addedAt: 2 }],
+      );
+
+      expect(exitCode).toBe(1);
+      expect(projectDirs).toEqual(["/beta"]);
+      expect(stdout[0]).toBe("deleted /deleted");
+      expect(stdout[1]).toBe("  Path not found: /deleted");
+      expect(stdout[2]).toBe("");
+      expect(stdout[3]).toBe("beta /beta");
+      expect(stdout[4]).toMatch(/^ {2}search-ui +open/);
+    });
+
+    it("exits 0 when every project lists", async () => {
+      const { exitCode } = await runListAllProjects(["--all-projects"], [{ path: "/beta", name: "beta", addedAt: 1 }]);
+
+      expect(exitCode).toBe(0);
+    });
+
+    it("prints a hint when no project is registered", async () => {
+      const stdout: string[] = [];
+      const exitCode = await runWorktreeCommand(
+        { command: "list", args: ["--all-projects"], projectDir: "/not-a-project", port: 5111 },
+        {
+          listProjects: () => [],
+          createRuntime: () => { throw new Error("unexpected"); },
+          stdout: (msg) => stdout.push(msg),
+        },
+      );
+
+      expect(exitCode).toBe(0);
+      expect(stdout).toEqual(["No projects registered. Use `webmux project add` to add one."]);
+    });
   });
 
   it("prints prune help without creating a runtime", async () => {

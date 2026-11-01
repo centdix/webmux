@@ -1,5 +1,6 @@
 import * as p from "@clack/prompts";
 import { createApi } from "@webmux/api-contract";
+import { existsSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { buildSeedFromLinear, defaultSeedFromLinearDeps } from "../../backend/src/services/conversation-export-service";
 import { CommandUsageError, resolveProjectBaseUrl, resolveProjectPrefix, run, withServerConnection } from "./shared";
@@ -11,6 +12,8 @@ import type { WorktreeCreationPhase } from "../../backend/src/domain/model";
 import { compareWorktreeOrder, isValidWorktreeName } from "../../backend/src/domain/policies";
 import { isValidPortLabel } from "../../backend/src/domain/port-registrations";
 import { buildArchivedWorktreePathSet } from "../../backend/src/services/archive-service";
+import { createProjectsRegistry } from "../../backend/src/adapters/projects-registry";
+import type { ProjectEntry } from "../../backend/src/domain/projects";
 import { createPortRegistrationService, createWebmuxRuntime } from "../../backend/src/runtime";
 import type { CreateLifecycleWorktreeInput, CreateLifecycleWorktreesInput, CreateLifecycleWorktreesResult, CreateWorktreeProgress, PruneWorktreesResult } from "../../backend/src/services/lifecycle-service";
 
@@ -94,6 +97,11 @@ interface WorktreeCommandDependencies {
   /** Worktree `port` targets when `--worktree` is omitted. Defaults to the agent's
    *  `$WEBMUX_BRANCH`, else the current git branch of `projectDir`. */
   resolveCurrentBranch?: (projectDir: string) => string | null;
+  /** Projects listed by `list --all-projects`. Defaults to the persisted
+   *  registry (`~/.webmux/projects.json`). */
+  listProjects?: () => ProjectEntry[];
+  /** Whether a registered project's folder still exists (`list --all-projects`). */
+  pathExists?: (path: string) => boolean;
 }
 
 export function getWorktreeCommandUsage(command: WorktreeSubcommand): string {
@@ -118,12 +126,13 @@ export function getWorktreeCommandUsage(command: WorktreeSubcommand): string {
     case "list":
       return [
         "Usage:",
-        "  webmux list [--all|--archived] [--search <text>]",
+        "  webmux list [--all|--archived] [--search <text>] [--all-projects]",
         "",
         "Options:",
         "  --all                    Include archived worktrees",
         "  --archived               Show only archived worktrees",
         "  --search <text>          Filter worktrees by branch/profile/agent",
+        "  --all-projects           List worktrees of every registered project, grouped by project",
         "  --help                   Show this help message",
       ].join("\n");
     case "open":
@@ -526,6 +535,7 @@ export interface ParsedProfileCommand {
 export interface ParsedListCommand {
   mode: WorktreeListMode;
   search: string;
+  allProjects: boolean;
 }
 
 export function parseLabelCommandArgs(args: string[]): ParsedLabelCommand | null {
@@ -750,6 +760,7 @@ function parseRestoreCommandArgs(args: string[]): boolean {
 export function parseListCommandArgs(args: string[]): ParsedListCommand | null {
   let mode: WorktreeListMode = "active";
   let search = "";
+  let allProjects = false;
 
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
@@ -775,6 +786,11 @@ export function parseListCommandArgs(args: string[]): ParsedListCommand | null {
       continue;
     }
 
+    if (arg === "--all-projects") {
+      allProjects = true;
+      continue;
+    }
+
     if (arg === "--search" || arg.startsWith("--search=")) {
       const { value, nextIndex } = readOptionValue(args, index, "--search");
       search = value;
@@ -785,7 +801,7 @@ export function parseListCommandArgs(args: string[]): ParsedListCommand | null {
     throw new CommandUsageError(`Unknown option: ${arg}`);
   }
 
-  return { mode, search };
+  return { mode, search, allProjects };
 }
 
 function listProjectWorktrees(
@@ -807,14 +823,19 @@ interface OpenWorktreeWindows {
 
 type ListedTmuxWindow = ReturnType<WorktreeRuntimeLike["tmux"]["listWindows"]>[number];
 
-function buildOpenWorktreeWindows(runtime: WorktreeRuntimeLike): OpenWorktreeWindows {
-  const sessionName = buildProjectSessionName(resolve(runtime.projectDir));
-  let windows: ListedTmuxWindow[] = [];
+function listTmuxWindows(runtime: WorktreeRuntimeLike): ListedTmuxWindow[] {
   try {
-    windows = runtime.tmux.listWindows();
+    return runtime.tmux.listWindows();
   } catch {
-    windows = [];
+    return [];
   }
+}
+
+function buildOpenWorktreeWindows(
+  runtime: WorktreeRuntimeLike,
+  windows: ListedTmuxWindow[] = listTmuxWindows(runtime),
+): OpenWorktreeWindows {
+  const sessionName = buildProjectSessionName(resolve(runtime.projectDir));
   const scoped = windows.filter((w) => w.sessionName === sessionName);
   return {
     names: new Set(scoped.map((w) => w.windowName)),
@@ -887,7 +908,7 @@ function defaultSwitchToTmuxWindow(projectDir: string, branch: string): void {
   }
 }
 
-interface ListedWorktreeRow {
+export interface ListedWorktreeRow {
   branch: string;
   label: string | null;
   isOpen: boolean;
@@ -901,24 +922,20 @@ function matchesListSearch(row: ListedWorktreeRow, query: string): boolean {
   return query.length === 0 || row.searchText.toLowerCase().includes(query.toLowerCase());
 }
 
-async function listWorktrees(
+/** `readWindows` lets `list --all-projects` share one tmux listing across projects. */
+async function collectWorktreeRows(
   runtime: WorktreeRuntimeLike,
-  stdout: (message: string) => void,
-  options: ParsedListCommand,
-): Promise<void> {
+  readWindows: () => ListedTmuxWindow[] = () => listTmuxWindows(runtime),
+): Promise<ListedWorktreeRow[]> {
   const projectDir = resolve(runtime.projectDir);
   const entries = listProjectWorktrees(runtime);
+  if (entries.length === 0) return [];
 
-  if (entries.length === 0) {
-    stdout("No worktrees found.");
-    return;
-  }
-
-  const openWindows = buildOpenWorktreeWindows(runtime);
+  const openWindows = buildOpenWorktreeWindows(runtime, readWindows());
 
   const projectGitDir = runtime.git.resolveWorktreeGitDir(projectDir);
   const archivedPaths = buildArchivedWorktreePathSet(await readWorktreeArchiveState(projectGitDir));
-  const rows = await Promise.all(entries.map(async (entry) => {
+  return await Promise.all(entries.map(async (entry) => {
     const branch = entry.branch ?? basename(entry.path);
     const gitDir = runtime.git.resolveWorktreeGitDir(entry.path);
     const meta = await readWorktreeMeta(gitDir);
@@ -941,9 +958,21 @@ async function listWorktrees(
       ].join(" "),
     } satisfies ListedWorktreeRow;
   }));
+}
 
+/** Output lines for one project's worktree list. `rows` and `notices` are kept
+ *  apart so the grouped `--all-projects` output can mute the notices. */
+export interface WorktreeListLines {
+  rows: string[];
+  notices: string[];
+}
+
+export function formatWorktreeList(rows: ListedWorktreeRow[], options: ParsedListCommand): WorktreeListLines {
+  if (rows.length === 0) return { rows: [], notices: ["No worktrees found."] };
+
+  const query = options.search.trim();
   const matchingRows = rows
-    .filter((row) => matchesListSearch(row, options.search.trim()))
+    .filter((row) => matchesListSearch(row, query))
     .sort((a, b) =>
       compareWorktreeOrder(
         { branch: a.branch, open: a.isOpen, prStates: a.prStates },
@@ -955,44 +984,91 @@ async function listWorktrees(
     if (options.mode === "archived") return row.archived;
     return !row.archived;
   });
+  const hiddenArchivedCount = options.mode === "active"
+    ? matchingRows.filter((row) => row.archived).length
+    : 0;
+  const hiddenSuffix = `${hiddenArchivedCount} archived worktree${hiddenArchivedCount === 1 ? "" : "s"}`;
 
   if (visibleRows.length === 0) {
-    const hiddenArchivedCount = options.mode === "active"
-      ? matchingRows.filter((row) => row.archived).length
-      : 0;
     if (hiddenArchivedCount > 0) {
-      stdout(
-        `No active worktrees found. ${hiddenArchivedCount} archived worktree${hiddenArchivedCount === 1 ? "" : "s"} hidden. Use --all or --archived.`,
-      );
-      return;
+      return { rows: [], notices: [`No active worktrees found. ${hiddenSuffix} hidden. Use --all or --archived.`] };
     }
-
-    if (options.mode === "archived") {
-      stdout("No archived worktrees found.");
-      return;
-    }
-
-    stdout(options.search.trim() ? `No worktrees found for "${options.search.trim()}".` : "No worktrees found.");
-    return;
+    if (options.mode === "archived") return { rows: [], notices: ["No archived worktrees found."] };
+    return { rows: [], notices: [query ? `No worktrees found for "${query}".` : "No worktrees found."] };
   }
 
   const maxName = Math.max(...visibleRows.map((row) =>
     (row.label ? `${row.label} (${row.branch})` : row.branch).length
   ));
-  for (const row of visibleRows) {
+  const lines = visibleRows.map((row) => {
     const status = `${row.isOpen ? "open" : "closed"}${row.archived ? " archived" : ""}`;
     const name = row.label ? `${row.label} (${row.branch})` : row.branch;
-    stdout(`${name.padEnd(maxName + 2)} ${status.padEnd(15)} ${row.info}`.trimEnd());
+    return `${name.padEnd(maxName + 2)} ${status.padEnd(15)} ${row.info}`.trimEnd();
+  });
+
+  return {
+    rows: lines,
+    notices: hiddenArchivedCount > 0 ? [`Hidden ${hiddenSuffix}. Use --all or --archived.`] : [],
+  };
+}
+
+async function listWorktrees(
+  runtime: WorktreeRuntimeLike,
+  stdout: (message: string) => void,
+  options: ParsedListCommand,
+): Promise<void> {
+  const { rows, notices } = formatWorktreeList(await collectWorktreeRows(runtime), options);
+  for (const line of [...rows, ...notices]) stdout(line);
+}
+
+function muted(text: string): string {
+  return process.stdout.isTTY ? `\x1b[2m${text}\x1b[0m` : text;
+}
+
+/** Indents and mutes every line of `text`, so multi-line messages (e.g. git
+ *  stderr) stay inside their project group. */
+function mutedLines(text: string): string[] {
+  return text.split("\n").map((line) => `  ${muted(line)}`);
+}
+
+/** `list --all-projects`: one header per registered project, then its rows
+ *  indented. A project that fails to load prints a muted error and the listing
+ *  moves on to the next one; the exit code is 1 if any project failed. */
+async function listAllProjectsWorktrees(
+  projects: ProjectEntry[],
+  createRuntime: (projectDir: string) => WorktreeRuntimeLike,
+  pathExists: (path: string) => boolean,
+  stdout: (message: string) => void,
+  options: ParsedListCommand,
+): Promise<number> {
+  if (projects.length === 0) {
+    stdout("No projects registered. Use `webmux project add` to add one.");
+    return 0;
   }
 
-  if (options.mode === "active") {
-    const hiddenArchivedCount = matchingRows.filter((row) => row.archived).length;
-    if (hiddenArchivedCount > 0) {
-      stdout(
-        `Hidden ${hiddenArchivedCount} archived worktree${hiddenArchivedCount === 1 ? "" : "s"}. Use --all or --archived.`,
-      );
+  let exitCode = 0;
+  let windows: ListedTmuxWindow[] | null = null;
+  for (const [index, project] of projects.entries()) {
+    if (index > 0) stdout("");
+    stdout(`${project.name} ${muted(project.path)}`);
+    if (!pathExists(project.path)) {
+      for (const line of mutedLines(`Path not found: ${project.path}`)) stdout(line);
+      exitCode = 1;
+      continue;
+    }
+    try {
+      const runtime = createRuntime(project.path);
+      const rows = await collectWorktreeRows(runtime, () => (windows ??= listTmuxWindows(runtime)));
+      const { rows: lines, notices } = formatWorktreeList(rows, options);
+      for (const line of lines) stdout(`  ${line}`);
+      for (const line of notices.flatMap(mutedLines)) stdout(line);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      for (const line of mutedLines(`Failed to list worktrees: ${message}`)) stdout(line);
+      exitCode = 1;
     }
   }
+  return exitCode;
 }
 
 export async function runWorktreeCommand(
@@ -1087,6 +1163,17 @@ export async function runWorktreeCommand(
       if (!parsed) {
         stdout(getWorktreeCommandUsage("list"));
         return 0;
+      }
+
+      if (parsed.allProjects) {
+        const listProjects = deps.listProjects ?? (() => createProjectsRegistry().list());
+        return await listAllProjectsWorktrees(
+          listProjects(),
+          (projectDir) => createRuntime({ projectDir, port: context.port }),
+          deps.pathExists ?? existsSync,
+          stdout,
+          parsed,
+        );
       }
 
       const runtime = createRuntime({
