@@ -1,38 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import { getAgentDefinition } from "../services/agent-registry";
 import { resolveAgentChatSupport, resolveAgentTerminalSubmitDelayMs } from "../services/agent-chat-service";
-import type { ProjectConfig } from "../domain/config";
+import type { CustomAgents } from "../domain/config";
 
-const TEST_CONFIG: ProjectConfig = {
-  name: "Project",
-  workspace: {
-    mainBranch: "main",
-    worktreeRoot: "__worktrees",
-    defaultAgent: "claude",
-    autoPull: { enabled: false, intervalSeconds: 300 },
-    ide: "cursor",
+const CUSTOM_AGENTS: CustomAgents = {
+  gemini: {
+    label: "Gemini CLI",
+    startCommand: 'gemini --prompt "${PROMPT}"',
   },
-  profiles: {
-    default: {
-      runtime: "host",
-      envPassthrough: [],
-      panes: [{ id: "agent", kind: "agent", focus: true }],
-    },
-  },
-  agents: {
-    gemini: {
-      label: "Gemini CLI",
-      startCommand: 'gemini --prompt "${PROMPT}"',
-    },
-  },
-  startupEnvs: {},
-  integrations: {
-    github: { linkedRepos: [], autoRemoveOnMerge: false },
-    linear: { enabled: true, autoCreateWorktrees: false, createTicketOption: false },
-  },
-  lifecycleHooks: {},
-  autoName: null,
-  oneshot: { systemPrompt: "" },
 };
 
 describe("resolveAgentChatSupport", () => {
@@ -40,7 +15,7 @@ describe("resolveAgentChatSupport", () => {
     expect(resolveAgentChatSupport({
       agentId: "claude",
       agentLabel: "Claude",
-      agent: getAgentDefinition(TEST_CONFIG, "claude"),
+      agent: getAgentDefinition(CUSTOM_AGENTS, "claude"),
       action: "chat",
     })).toEqual({
       ok: true,
@@ -53,7 +28,7 @@ describe("resolveAgentChatSupport", () => {
     expect(resolveAgentChatSupport({
       agentId: "codex",
       agentLabel: "Codex",
-      agent: getAgentDefinition(TEST_CONFIG, "codex"),
+      agent: getAgentDefinition(CUSTOM_AGENTS, "codex"),
       action: "chat",
     })).toEqual({
       ok: true,
@@ -68,7 +43,7 @@ describe("resolveAgentChatSupport", () => {
     expect(resolveAgentChatSupport({
       agentId: "opencode",
       agentLabel: "opencode",
-      agent: getAgentDefinition(TEST_CONFIG, "opencode"),
+      agent: getAgentDefinition(CUSTOM_AGENTS, "opencode"),
       action: "chat",
     })).toEqual({
       ok: false,
@@ -81,7 +56,7 @@ describe("resolveAgentChatSupport", () => {
     expect(resolveAgentChatSupport({
       agentId: "pi",
       agentLabel: "pi",
-      agent: getAgentDefinition(TEST_CONFIG, "pi"),
+      agent: getAgentDefinition(CUSTOM_AGENTS, "pi"),
       action: "chat",
     })).toEqual({
       ok: false,
@@ -93,7 +68,7 @@ describe("resolveAgentChatSupport", () => {
   it("sends opencode terminal prompts without a submit delay", () => {
     expect(resolveAgentTerminalSubmitDelayMs({
       agentId: "opencode",
-      agent: getAgentDefinition(TEST_CONFIG, "opencode"),
+      agent: getAgentDefinition(CUSTOM_AGENTS, "opencode"),
     })).toBe(0);
   });
 
@@ -101,7 +76,7 @@ describe("resolveAgentChatSupport", () => {
     expect(resolveAgentChatSupport({
       agentId: "gemini",
       agentLabel: "Gemini CLI",
-      agent: getAgentDefinition(TEST_CONFIG, "gemini"),
+      agent: getAgentDefinition(CUSTOM_AGENTS, "gemini"),
       action: "chat",
     })).toEqual({
       ok: false,
@@ -137,17 +112,17 @@ describe("resolveAgentChatSupport", () => {
   it("uses the same terminal submit delay for built-in Codex prompts", () => {
     expect(resolveAgentTerminalSubmitDelayMs({
       agentId: "codex",
-      agent: getAgentDefinition(TEST_CONFIG, "codex"),
+      agent: getAgentDefinition(CUSTOM_AGENTS, "codex"),
     })).toBe(200);
 
     expect(resolveAgentTerminalSubmitDelayMs({
       agentId: "claude",
-      agent: getAgentDefinition(TEST_CONFIG, "claude"),
+      agent: getAgentDefinition(CUSTOM_AGENTS, "claude"),
     })).toBe(0);
 
     expect(resolveAgentTerminalSubmitDelayMs({
       agentId: "gemini",
-      agent: getAgentDefinition(TEST_CONFIG, "gemini"),
+      agent: getAgentDefinition(CUSTOM_AGENTS, "gemini"),
     })).toBe(0);
   });
 });

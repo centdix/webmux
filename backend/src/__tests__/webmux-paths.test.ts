@@ -3,6 +3,7 @@ import {
   resolveRuntimeStateDir,
   webmuxConfigDir,
   webmuxConfigEnvPath,
+  webmuxGlobalConfigPath,
 } from "../adapters/webmux-paths";
 
 const originalHome = Bun.env.HOME;
@@ -28,6 +29,13 @@ describe("webmuxConfigEnvPath", () => {
   it("points at .env inside the config dir", () => {
     Bun.env.HOME = "/home/alice";
     expect(webmuxConfigEnvPath()).toBe("/home/alice/.config/webmux/.env");
+  });
+});
+
+describe("webmuxGlobalConfigPath", () => {
+  it("points at config.yaml inside the config dir", () => {
+    Bun.env.HOME = "/home/alice";
+    expect(webmuxGlobalConfigPath()).toBe("/home/alice/.config/webmux/config.yaml");
   });
 });
 
