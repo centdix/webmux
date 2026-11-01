@@ -28,7 +28,56 @@ import type {
   RuntimeArtifactsContext,
 } from "./types";
 
+const CODEX_APP_SERVER_MAX_RESTARTS = 3;
+
+function quoteShellArgs(args: string[]): string {
+  return args.map(quoteShell).join(" ");
+}
+
+/** Runs the worktree's own `codex app-server` on a unix socket plus the TUI attached to it
+ *  (`--remote`), as one foreground job of the agent pane. Both inherit the pane's runtime env
+ *  and cwd, so shell commands of web-started turns run exactly like terminal ones, and killing
+ *  the pane (close/remove/reopen) takes both down. A clean TUI exit stops the server; if the TUI
+ *  exits because the server died, both are restarted resuming the latest thread. */
+function buildCodexRemoteInvocation(input: BuiltInLaunchInput, socketPath: string): string {
+  const listenUrl = `unix://${socketPath}`;
+  const tuiArgs = ["--enable", "hooks", ...(input.yolo ? ["--yolo"] : []), "--remote", listenUrl];
+  const resumeArgs = ["resume", input.resumeConversationId ?? "--last"];
+  const launchArgs = [
+    ...tuiArgs,
+    ...(input.launchMode === "resume" ? resumeArgs : []),
+    ...(input.prompt ? ["--", input.prompt] : []),
+  ];
+  // The TUI's `-c` overrides don't reach a remote server's threads, so instructions go to the server.
+  const developerInstructions = input.launchMode !== "resume" && input.systemPrompt
+    ? ["-c", `developer_instructions=${input.systemPrompt}`]
+    : [];
+  const serverArgs = ["app-server", "--enable", "hooks", ...developerInstructions, "--listen", listenUrl];
+  const script = [
+    `sock=${quoteShell(socketPath)}`,
+    `mkdir -p -m 700 ${quoteShell(dirname(socketPath))}`,
+    "restarts=0",
+    // codex app-server installs its own SIGHUP handler, so a closed pane stops it explicitly.
+    "trap 'kill \"$server\" 2>/dev/null; exit 129' HUP INT TERM",
+    `set -- ${quoteShellArgs(launchArgs)}`,
+    "while :; do rm -f \"$sock\"",
+    `codex ${quoteShellArgs(serverArgs)} >>"$sock.log" 2>&1 & server=$!`,
+    "i=0; while [ ! -S \"$sock\" ] && [ \"$i\" -lt 100 ]; do sleep 0.1; i=$((i+1)); done",
+    "codex \"$@\"; tui=$?",
+    // codex app-server exits 0 on SIGTERM, so a non-zero status here means it had already died.
+    "kill \"$server\" 2>/dev/null; wait \"$server\"; srv=$?",
+    `if [ "$tui" -eq 0 ] || [ "$srv" -eq 0 ] || [ "$restarts" -ge ${CODEX_APP_SERVER_MAX_RESTARTS} ]; then exit "$tui"; fi`,
+    "restarts=$((restarts+1)); echo \"webmux: codex app-server exited ($srv), restarting\" >&2; sleep 1",
+    `set -- ${quoteShellArgs([...tuiArgs, "resume", "--last"])}`,
+    "done",
+  ].join("; ");
+  return `sh -c ${quoteShell(script)}`;
+}
+
 function buildCodexInvocation(input: BuiltInLaunchInput): string {
+  if (input.appServerSocketPath && input.launchMode !== "fork") {
+    return buildCodexRemoteInvocation(input, input.appServerSocketPath);
+  }
   const promptSuffix = input.prompt ? ` -- ${quoteShell(input.prompt)}` : "";
   const hooksFlag = " --enable hooks";
   const yoloFlag = input.yolo ? " --yolo" : "";

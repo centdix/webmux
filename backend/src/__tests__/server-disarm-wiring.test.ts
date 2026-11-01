@@ -28,10 +28,14 @@ describe("server.ts disarm-on-interaction wiring", () => {
     expect(source).toMatch(pattern);
   });
 
-  it("marks Codex app-server interrupts as terminal-stale after success", async () => {
+  it("never marks the terminal stale for Codex sends or interrupts (the TUI shares the app-server)", async () => {
     const source = await Bun.file(serverPath).text();
-    const pattern = /if \(chatSupport\.data\.provider === "codex"\) \{[\s\S]*?interruptWorktreeConversation\(resolved\.worktree\)[\s\S]*?if \(!interruptResult\.ok\)[\s\S]*?setAgentTerminalStale\(resolved\.worktree, true\)[\s\S]*?jsonResponse\(interruptResult\.data\)/;
-    expect(source).toMatch(pattern);
+    const send = /sendWorktreeConversationMessage\([\s\S]*?return jsonResponse\(sendResult\.data\);/.exec(source)?.[0];
+    const interrupt = /interruptWorktreeConversation\(resolved\.worktree\)[\s\S]*?return jsonResponse\(interruptResult\.data\);/.exec(source)?.[0];
+    expect(send).toBeDefined();
+    expect(interrupt).toBeDefined();
+    expect(send).not.toContain("setAgentTerminalStale");
+    expect(interrupt).not.toContain("setAgentTerminalStale");
   });
 
   it("guards agent terminal refreshes against busy worktrees", async () => {

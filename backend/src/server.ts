@@ -49,6 +49,7 @@ import { loadControlToken } from "./adapters/control-token";
 import { readWorktreeMeta, writeWorktreeMeta } from "./adapters/fs";
 import { ClaudeCliClient } from "./adapters/claude-cli";
 import { CodexAppServerClient, type CodexAppServerNotification } from "./adapters/codex-app-server";
+import { codexAppServerSocketPath } from "./adapters/webmux-paths";
 import {
   getDefaultProfileName,
   persistLocalGitHubConfig,
@@ -239,13 +240,22 @@ const projectRuntime = runtime.projectRuntime;
 const worktreeCreationTracker = runtime.worktreeCreationTracker;
 const runtimeNotifications = runtime.runtimeNotifications;
 const reconciliationService = runtime.reconciliationService;
-const codexAppServerClient = new CodexAppServerClient({
-  clientName: "webmux-agents",
-  clientVersion: "0.0.0",
-});
+// One client per worktree: each Codex host worktree runs its own app-server, shared with its TUI.
+const codexAppServerClients = new Map<string, CodexAppServerClient>();
+function codexAppServerClientFor(worktreeId: string): CodexAppServerClient {
+  const existing = codexAppServerClients.get(worktreeId);
+  if (existing) return existing;
+  const client = new CodexAppServerClient({
+    socketPath: codexAppServerSocketPath(worktreeId),
+    clientName: "webmux-agents",
+    clientVersion: "0.0.0",
+  });
+  codexAppServerClients.set(worktreeId, client);
+  return client;
+}
 const claudeCliClient = new ClaudeCliClient();
 const worktreeConversationService = new WorktreeConversationService({
-  appServer: codexAppServerClient,
+  appServerFor: codexAppServerClientFor,
   git,
   resolveLaunchContext: ({ worktree, meta }) =>
     resolveCodexAppServerLaunchContext({
@@ -980,7 +990,6 @@ async function apiSendAgentsWorktreeMessage(branch: string, req: Request): Promi
     if (!sendResult.ok) {
       return errorResponse(sendResult.error, sendResult.status);
     }
-    await setAgentTerminalStale(resolved.worktree, true);
     return jsonResponse(sendResult.data);
   }
 
@@ -1037,7 +1046,6 @@ async function apiInterruptAgentsWorktree(branch: string): Promise<Response> {
     if (!interruptResult.ok) {
       return errorResponse(interruptResult.error, interruptResult.status);
     }
-    await setAgentTerminalStale(resolved.worktree, true);
     return jsonResponse(interruptResult.data);
   }
 
@@ -1141,7 +1149,13 @@ async function openAgentsSocket(
   let streamSession: AgentsConversationStreamSession | null = null;
   const bufferedNotifications: CodexAppServerNotification[] = [];
   let unsubscribeClaudeStream: (() => void) | null = null;
-  const unsubscribeNotifications = codexAppServerClient.onNotification((notification) => {
+  const worktreeState = projectRuntime.getWorktreeByBranch(data.branch);
+  const codexClient = worktreeState?.agentName === "codex" ? codexAppServerClientFor(worktreeState.worktreeId) : null;
+  // The TUI restarting takes its app-server down; close so the chat reloads instead of waiting forever.
+  const unsubscribeDisconnect = codexClient?.onDisconnect(() => {
+    ws.close(1011, "Codex app-server disconnected");
+  }) ?? (() => {});
+  const unsubscribeCodexNotifications = codexClient?.onNotification((notification) => {
     if (bufferingNotifications || !streamSession) {
       bufferedNotifications.push(notification);
       return;
@@ -1151,7 +1165,11 @@ async function openAgentsSocket(
     if (!notificationThreadId || notificationThreadId !== data.conversationId) return;
     streamSession.handleNotification(notification);
     data.conversationId = streamSession.currentConversationId();
-  });
+  }) ?? (() => {});
+  const unsubscribeNotifications = (): void => {
+    unsubscribeCodexNotifications();
+    unsubscribeDisconnect();
+  };
   data.unsubscribe = () => {
     socketClosed = true;
     streamSession?.close();

@@ -22,6 +22,10 @@ export interface BuiltInLaunchInput {
   forkFromSessionId?: string;
   /** Claude/pi: pin the forked child to a session id we generated, so we know it without disk discovery. */
   pinSessionId?: string;
+  /** Codex: unix socket of the worktree's own `codex app-server`. When set, the launch starts that
+   *  server next to the TUI and attaches the TUI to it with `--remote`, so the web chat drives the
+   *  same live session. Host runtime only. */
+  appServerSocketPath?: string;
 }
 
 export interface RuntimeArtifactsContext {
