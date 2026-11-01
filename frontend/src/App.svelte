@@ -1261,20 +1261,17 @@
 
 {#if showSettingsDialog}
   <SettingsDialog
-    project={activeProject}
+    projects={store.projects}
+    {activeProject}
+    {configs}
     {currentTheme}
     {useWebChatUi}
     ide={config.ide}
-    linearAutoCreate={config.linearAutoCreateWorktrees ?? false}
-    autoRemoveOnMerge={config.autoRemoveOnMerge ?? false}
     onthemechange={(key) => (currentTheme = key)}
     onwebchatuichange={(enabled) => {
       useWebChatUi = enabled;
       saveUseWebChatUi(enabled);
     }}
-    onlinearautocreatechange={(enabled) => configs.update(activeProject, (c) => ({ ...c, linearAutoCreateWorktrees: enabled }))}
-    onautoremovechange={(enabled) => configs.update(activeProject, (c) => ({ ...c, autoRemoveOnMerge: enabled }))}
-    onagentschange={(agents) => configs.update(activeProject, (c) => ({ ...c, agents }))}
     onsave={(host) => {
       sshHost = host;
       showSettingsDialog = false;

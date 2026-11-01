@@ -1,128 +1,44 @@
 <script lang="ts">
   import type { ThemeKey } from "./themes";
-  import { SSH_STORAGE_KEY, applyTheme, errorMessage, ideLabel } from "./utils";
+  import { SSH_STORAGE_KEY, applyTheme, ideLabel } from "./utils";
   import { THEMES } from "./themes";
   import BaseDialog from "./BaseDialog.svelte";
   import Btn from "./Btn.svelte";
-  import Toggle from "./Toggle.svelte";
-  import ConfirmDialog from "./ConfirmDialog.svelte";
-  import AgentEditorDialog from "./AgentEditorDialog.svelte";
-  import { createAgent, deleteAgent, fetchAgents, updateAgent, validateAgent, projectApi } from "./api";
-  import type { AgentDetails, AgentSummary, IdeKind, UpsertCustomAgentRequest } from "./types";
+  import SettingToggle from "./SettingToggle.svelte";
+  import ProjectSettingsSection from "./ProjectSettingsSection.svelte";
+  import type { ProjectCache } from "./project-cache.svelte";
+  import type { AppConfig, IdeKind, ProjectWorktreeList } from "./types";
 
-  interface AgentEditorState {
-    mode: "create" | "edit";
-    agentId?: string;
-    title: string;
-    initialValue: {
-      label: string;
-      startCommand: string;
-      resumeCommand: string;
-    };
-  }
+  const FORM_ID = "settings-global-form";
 
   let {
-    project,
+    projects,
+    activeProject,
+    configs,
     currentTheme,
     useWebChatUi,
     ide,
-    linearAutoCreate,
-    autoRemoveOnMerge,
     onthemechange,
     onwebchatuichange,
-    onlinearautocreatechange,
-    onautoremovechange,
-    onagentschange,
     onsave,
     onclose,
   }: {
-    project: string;
+    /** One section each, in this order; the active one starts expanded. */
+    projects: Pick<ProjectWorktreeList, "prefix" | "name">[];
+    activeProject: string;
+    configs: ProjectCache<AppConfig>;
     currentTheme: ThemeKey;
     useWebChatUi: boolean;
     ide: IdeKind;
-    linearAutoCreate: boolean;
-    autoRemoveOnMerge: boolean;
     onthemechange: (key: ThemeKey) => void;
     onwebchatuichange: (enabled: boolean) => void;
-    onlinearautocreatechange: (enabled: boolean) => void;
-    onautoremovechange: (enabled: boolean) => void;
-    onagentschange: (agents: AgentSummary[]) => void;
     onsave: (sshHost: string) => void;
     onclose: () => void;
   } = $props();
 
   let sshHost = $state(localStorage.getItem(SSH_STORAGE_KEY) ?? "");
-  let pendingAutoCreate = $state<boolean | null>(null);
-  let autoCreate = $derived(pendingAutoCreate ?? linearAutoCreate);
-  let autoCreateSaving = $state(false);
 
-  let pendingAutoRemove = $state<boolean | null>(null);
-  let autoRemove = $derived(pendingAutoRemove ?? autoRemoveOnMerge);
-  let autoRemoveSaving = $state(false);
-
-  let agents = $state<AgentDetails[]>([]);
-  let customAgents = $derived(agents.filter((agent) => agent.kind === "custom"));
-  let agentsLoading = $state(true);
-  let agentsError = $state<string | null>(null);
-  let agentsLoaded = false;
-  let editor = $state<AgentEditorState | null>(null);
-  let deleteCandidate = $state<AgentDetails | null>(null);
-  let deletingAgentId = $state<string | null>(null);
-
-  async function loadAgentList(): Promise<void> {
-    agentsLoading = true;
-    agentsError = null;
-
-    try {
-      agents = await fetchAgents(project);
-    } catch (err) {
-      agentsError = errorMessage(err);
-    } finally {
-      agentsLoading = false;
-    }
-  }
-
-  function syncAgentSummaries(): void {
-    projectApi(project).fetchConfig()
-      .then((config) => {
-        onagentschange(config.agents);
-      })
-      .catch(() => {});
-  }
-
-  $effect(() => {
-    if (agentsLoaded) return;
-    agentsLoaded = true;
-    void loadAgentList();
-  });
-
-  function handleAutoCreateToggle(enabled: boolean) {
-    pendingAutoCreate = enabled;
-    autoCreateSaving = true;
-    projectApi(project).setLinearAutoCreate({ body: { enabled } })
-      .then((result) => {
-        onlinearautocreatechange(result.enabled);
-      })
-      .finally(() => {
-        pendingAutoCreate = null;
-        autoCreateSaving = false;
-      });
-  }
-
-  function handleAutoRemoveToggle(enabled: boolean) {
-    pendingAutoRemove = enabled;
-    autoRemoveSaving = true;
-    projectApi(project).setAutoRemoveOnMerge({ body: { enabled } })
-      .then((result) => {
-        onautoremovechange(result.enabled);
-      })
-      .finally(() => {
-        pendingAutoRemove = null;
-        autoRemoveSaving = false;
-      });
-  }
-
-  function handleSave() {
+  function handleSave(): void {
     const trimmed = sshHost.trim();
     if (trimmed) {
       localStorage.setItem(SSH_STORAGE_KEY, trimmed);
@@ -132,85 +48,16 @@
     onsave(trimmed);
   }
 
-  function selectTheme(key: ThemeKey) {
+  function selectTheme(key: ThemeKey): void {
     applyTheme(key);
     onthemechange(key);
-  }
-
-  function openCreateAgentEditor(): void {
-    editor = {
-      mode: "create",
-      title: "Add custom agent",
-      initialValue: {
-        label: "",
-        startCommand: "",
-        resumeCommand: "",
-      },
-    };
-  }
-
-  function openEditAgentEditor(agent: AgentDetails): void {
-    editor = {
-      mode: "edit",
-      agentId: agent.id,
-      title: `Edit ${agent.label}`,
-      initialValue: {
-        label: agent.label,
-        startCommand: agent.startCommand ?? "",
-        resumeCommand: agent.resumeCommand ?? "",
-      },
-    };
-  }
-
-  function openDuplicateAgentEditor(agent: AgentDetails): void {
-    editor = {
-      mode: "create",
-      title: `Duplicate ${agent.label}`,
-      initialValue: {
-        label: `${agent.label} Copy`,
-        startCommand: agent.startCommand ?? "",
-        resumeCommand: agent.resumeCommand ?? "",
-      },
-    };
-  }
-
-  async function handleSaveAgent(input: UpsertCustomAgentRequest): Promise<void> {
-    if (!editor) return;
-
-    if (editor.mode === "edit" && editor.agentId) {
-      await updateAgent(project, editor.agentId, input);
-    } else {
-      await createAgent(project, input);
-    }
-
-    await loadAgentList();
-    syncAgentSummaries();
-    editor = null;
-  }
-
-  function handleValidateAgent(input: UpsertCustomAgentRequest) {
-    return validateAgent(project, input);
-  }
-
-  async function handleDeleteAgent(): Promise<void> {
-    if (!deleteCandidate) return;
-    deletingAgentId = deleteCandidate.id;
-
-    try {
-      await deleteAgent(project, deleteCandidate.id);
-      await loadAgentList();
-      syncAgentSummaries();
-      deleteCandidate = null;
-    } finally {
-      deletingAgentId = null;
-    }
   }
 </script>
 
 <BaseDialog {onclose} wide>
-  <form onsubmit={(event) => { event.preventDefault(); handleSave(); }}>
-    <h2 class="text-base mb-4">Settings</h2>
+  <h2 class="text-base mb-4">Settings</h2>
 
+  <form id={FORM_ID} onsubmit={(event) => { event.preventDefault(); handleSave(); }}>
     <div class="mb-5">
       <span class="block text-xs text-muted mb-2">Theme</span>
       <div class="grid grid-cols-2 gap-2">
@@ -235,125 +82,16 @@
 
     <div class="mb-5">
       <span class="block text-xs text-muted mb-2">Interface</span>
-      <div class="flex items-center justify-between gap-3 px-3 py-2 rounded-md border border-edge bg-surface">
-        <div>
-          <span class="text-[13px] text-primary">Use web chat UI</span>
-          <p class="text-[11px] text-muted mt-0.5">
-            Show the in-app agent conversation instead of the terminal for supported agents.
-          </p>
-        </div>
-
-        <Toggle
-          checked={useWebChatUi}
-          ontoggle={onwebchatuichange}
-          aria-label="Use web chat UI"
-        />
-      </div>
+      <SettingToggle
+        title="Use web chat UI"
+        description="Show the in-app agent conversation instead of the terminal for supported agents."
+        checked={useWebChatUi}
+        ontoggle={onwebchatuichange}
+        aria-label="Use web chat UI"
+      />
     </div>
 
     <div class="mb-5">
-      <span class="block text-xs text-muted mb-2">Agents</span>
-      <div class="rounded-lg border border-edge bg-surface/40 p-3">
-        <div class="mb-3 flex items-center justify-between gap-2">
-          <div>
-            <p class="text-[13px] text-primary">Custom agents</p>
-            <p class="mt-0.5 text-[11px] text-muted">
-              Add terminal agents that webmux can launch from the dashboard.
-            </p>
-          </div>
-          <Btn type="button" variant="cta" onclick={openCreateAgentEditor}>Add agent</Btn>
-        </div>
-
-        {#if agentsLoading}
-          <p class="text-[12px] text-muted">Loading agents...</p>
-        {:else if agentsError}
-          <p class="text-[12px] text-danger">{agentsError}</p>
-        {:else}
-          {#if customAgents.length === 0}
-            <p class="text-[12px] text-muted">No custom agents setup</p>
-          {:else}
-            <div class="space-y-2">
-              {#each customAgents as agent (agent.id)}
-                <div class="rounded-lg border border-edge bg-surface px-3 py-2.5">
-                  <div class="flex items-start justify-between gap-3">
-                    <div class="min-w-0 flex-1">
-                      <div class="flex flex-wrap items-center gap-1.5">
-                        <span class="text-[13px] text-primary">{agent.label}</span>
-                      </div>
-                      <p class="mt-1 text-[11px] text-muted font-mono break-all">
-                        {agent.startCommand}
-                      </p>
-                      {#if agent.resumeCommand}
-                        <p class="mt-1 text-[11px] text-muted font-mono break-all">
-                          Resume: {agent.resumeCommand}
-                        </p>
-                      {/if}
-                    </div>
-
-                    <div class="flex shrink-0 gap-2 text-[11px]">
-                      <button type="button" class="text-accent hover:underline" onclick={() => openEditAgentEditor(agent)}>
-                        Edit
-                      </button>
-                      <button type="button" class="text-accent hover:underline" onclick={() => openDuplicateAgentEditor(agent)}>
-                        Duplicate
-                      </button>
-                      <button
-                        type="button"
-                        class="text-danger hover:underline disabled:opacity-60"
-                        disabled={deletingAgentId === agent.id}
-                        onclick={() => (deleteCandidate = agent)}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              {/each}
-            </div>
-          {/if}
-        {/if}
-      </div>
-    </div>
-
-    <div class="mb-5">
-      <span class="block text-xs text-muted mb-2">Linear</span>
-      <div class="flex items-center justify-between gap-3 px-3 py-2 rounded-md border border-edge bg-surface">
-        <div>
-          <span class="text-[13px] text-primary">Auto-create worktrees</span>
-          <p class="text-[11px] text-muted mt-0.5">
-            Automatically create worktrees for Todo Linear tickets with the "webmux" label.
-          </p>
-        </div>
-
-        <Toggle
-          checked={autoCreate}
-          disabled={autoCreateSaving}
-          ontoggle={handleAutoCreateToggle}
-          aria-label="Auto-create worktrees for Linear tickets"
-        />
-      </div>
-    </div>
-
-    <div class="mb-5">
-      <span class="block text-xs text-muted mb-2">GitHub</span>
-      <div class="flex items-center justify-between gap-3 px-3 py-2 rounded-md border border-edge bg-surface">
-        <div>
-          <span class="text-[13px] text-primary">Auto-remove on merge</span>
-          <p class="text-[11px] text-muted mt-0.5">
-            Automatically remove worktrees when their PR is merged on GitHub.
-          </p>
-        </div>
-
-        <Toggle
-          checked={autoRemove}
-          disabled={autoRemoveSaving}
-          ontoggle={handleAutoRemoveToggle}
-          aria-label="Auto-remove worktrees on PR merge"
-        />
-      </div>
-    </div>
-
-    <div class="mb-4">
       <label class="block text-xs text-muted mb-1.5" for="ssh-host">
         SSH Host <span class="opacity-60">(for "Open in {ideLabel(ide)}")</span>
       </label>
@@ -368,31 +106,24 @@
         Must match an entry in your local <code class="text-accent/80">~/.ssh/config</code>. Leave empty for local mode.
       </p>
     </div>
-    <div class="flex justify-end gap-2">
-      <Btn type="button" onclick={onclose}>Cancel</Btn>
-      <Btn type="submit" variant="cta">Save</Btn>
-    </div>
   </form>
+
+  <div class="mb-4">
+    <span class="block text-xs text-muted mb-2">Projects</span>
+    <div class="space-y-2">
+      {#each projects as entry (entry.prefix)}
+        <ProjectSettingsSection
+          project={entry.prefix}
+          name={entry.name}
+          {configs}
+          defaultExpanded={entry.prefix === activeProject}
+        />
+      {/each}
+    </div>
+  </div>
+
+  <div class="flex justify-end gap-2">
+    <Btn type="button" onclick={onclose}>Cancel</Btn>
+    <Btn type="submit" form={FORM_ID} variant="cta">Save</Btn>
+  </div>
 </BaseDialog>
-
-{#if editor}
-  <AgentEditorDialog
-    title={editor.title}
-    initialValue={editor.initialValue}
-    onsave={handleSaveAgent}
-    onvalidate={handleValidateAgent}
-    onclose={() => (editor = null)}
-  />
-{/if}
-
-{#if deleteCandidate}
-  <ConfirmDialog
-    message={`Delete agent "${deleteCandidate.label}"?`}
-    onconfirm={() => {
-      void handleDeleteAgent();
-    }}
-    oncancel={() => {
-      deleteCandidate = null;
-    }}
-  />
-{/if}
