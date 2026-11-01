@@ -1235,6 +1235,25 @@ describe("App create selection", () => {
       expect(onNoProjects).not.toHaveBeenCalled();
     });
 
+    it("keeps the selection when removing another project", async () => {
+      useImagesProject();
+      vi.mocked(removeProject).mockImplementation(async () => {
+        otherProjects.list = [];
+      });
+      vi.mocked(fetchProjects).mockResolvedValue([{ prefix: PROJECT, name: PROJECT, path: "/repo", active: true }]);
+      renderApp();
+      await fireEvent.click(await screen.findByRole("button", { name: /^feature\/web\b/i }));
+      expect(await screen.findByTitle("feature/web")).toBeInTheDocument();
+
+      await openProjectMenu("images");
+      await fireEvent.click(screen.getByRole("button", { name: "Remove project" }));
+      await fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Remove" }));
+
+      await waitFor(() => expect(screen.queryByRole("region", { name: "images" })).not.toBeInTheDocument());
+      expect(screen.getByTitle("feature/web")).toBeInTheDocument();
+      expect(window.location.hash).toBe(`#${PROJECT}/feature/web`);
+    });
+
     it("falls back to the empty state once the last project is removed", async () => {
       vi.mocked(removeProject).mockResolvedValue(undefined);
       vi.mocked(fetchProjects).mockResolvedValue([]);

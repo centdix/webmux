@@ -128,6 +128,21 @@ describe("WorktreesStore", () => {
     expect(store.find({ project: "beta", branch: "main" })?.label).toBeNull();
   });
 
+  it("drops a removed project's list", async () => {
+    vi.mocked(fetchAllProjectWorktrees).mockResolvedValue([
+      project("alpha", [worktree("alpha", "main")]),
+      project("beta", [worktree("beta", "main")]),
+    ]);
+    const store = new WorktreesStore();
+    await store.refresh();
+
+    store.drop("beta");
+
+    expect(store.projects.map((entry) => entry.prefix)).toEqual(["alpha"]);
+    expect(store.hasLoaded("beta")).toBe(false);
+    expect(store.hasLoaded("alpha")).toBe(true);
+  });
+
   it("surfaces a project's fetch error without dropping its worktrees", async () => {
     vi.mocked(fetchAllProjectWorktrees)
       .mockResolvedValueOnce([project("alpha", [worktree("alpha", "main")])])

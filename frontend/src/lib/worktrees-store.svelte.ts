@@ -104,6 +104,12 @@ export class WorktreesStore {
     this.#onRefreshed();
   }
 
+  /** Forget a removed project now instead of on the next poll. */
+  drop(project: string): void {
+    this.projects = this.projects.filter((entry) => entry.prefix !== project);
+    this.#loaded.delete(project);
+  }
+
   /** Apply a confirmed change locally until the next poll reports it. */
   patch(ref: WorktreeRef, fields: Partial<Omit<WorktreeInfo, keyof WorktreeRef>>): void {
     this.projects = this.projects.map((project) =>

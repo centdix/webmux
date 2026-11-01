@@ -76,4 +76,25 @@ describe("ProjectCache", () => {
 
     expect(cache.get("alpha")).toEqual({ agents: 2 });
   });
+
+  it("forgets a deleted project, dropping its load in flight", async () => {
+    let resolveLoad: (value: string) => void = () => {};
+    const load = vi.fn((project: string) =>
+      project === "beta" ? new Promise<string>((resolve) => (resolveLoad = resolve)) : Promise.resolve(project),
+    );
+    const cache = new ProjectCache(load, { maxAgeMs: Infinity });
+    cache.ensure("alpha");
+    cache.ensure("beta");
+    await flush();
+
+    cache.delete("alpha");
+    cache.delete("beta");
+    resolveLoad("beta");
+    await flush();
+
+    expect(cache.get("alpha")).toBeUndefined();
+    expect(cache.get("beta")).toBeUndefined();
+    cache.ensure("alpha");
+    expect(load).toHaveBeenCalledTimes(3);
+  });
 });

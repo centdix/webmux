@@ -726,6 +726,9 @@
     if (pendingCreate?.project === prefix) cancelCreateAutoSelect();
     // The selection can't stay on a removed project.
     if (project === prefix) selection.switchProject(next);
+    store.drop(prefix);
+    configs.delete(prefix);
+    linear.delete(prefix);
     void store.refresh();
   }
 

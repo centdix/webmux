@@ -45,6 +45,14 @@ export class ProjectCache<T> {
     this.#attemptedAt.delete(project);
   }
 
+  /** Forget a removed project, dropping any load still in flight. */
+  delete(project: string): void {
+    this.#attemptedAt.delete(project);
+    this.#latestLoad.delete(project);
+    const { [project]: _removed, ...rest } = this.#values;
+    this.#values = rest;
+  }
+
   update(project: string, change: (value: T) => T): void {
     const value = this.#values[project];
     if (value !== undefined) this.#set(project, change(value));
