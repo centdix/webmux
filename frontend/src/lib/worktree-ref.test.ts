@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { branchesInProject, notificationKey, parseWorktreeKey, sameWorktree, worktreeKey } from "./worktree-ref";
+import { notificationKey, parseWorktreeKey, sameWorktree, worktreeKey } from "./worktree-ref";
 
 describe("worktreeKey", () => {
   it("round-trips branches that contain slashes", () => {
@@ -33,16 +33,6 @@ describe("worktree ref helpers", () => {
     expect(sameWorktree({ project: "a", branch: "x" }, { project: "a", branch: "x" })).toBe(true);
     expect(sameWorktree({ project: "a", branch: "x" }, { project: "b", branch: "x" })).toBe(false);
     expect(sameWorktree(null, { project: "a", branch: "x" })).toBe(false);
-  });
-
-  it("projects keys onto one project's branches", () => {
-    const keys = [
-      worktreeKey({ project: "alpha", branch: "feat/x" }),
-      worktreeKey({ project: "beta", branch: "feat/y" }),
-      worktreeKey({ project: "alpha", branch: "main" }),
-    ];
-    expect(branchesInProject(keys, "alpha")).toEqual(new Set(["feat/x", "main"]));
-    expect(branchesInProject(keys, "gamma")).toEqual(new Set());
   });
 
   it("keys notifications by project and id", () => {

@@ -19,17 +19,6 @@ export function sameWorktree(a: WorktreeRef | null | undefined, b: WorktreeRef |
   return !!a && !!b && a.project === b.project && a.branch === b.branch;
 }
 
-/** The branches of `project` among a set of worktree keys — what a one-project
- *  list (keyed by branch) renders. */
-export function branchesInProject(keys: Iterable<string>, project: string): Set<string> {
-  const branches = new Set<string>();
-  for (const key of keys) {
-    const ref = parseWorktreeKey(key);
-    if (ref?.project === project) branches.add(ref.branch);
-  }
-  return branches;
-}
-
 /** Notification ids are only unique per project. */
 export function notificationKey(notification: Pick<AppNotification, "project" | "id">): string {
   return `${notification.project}${KEY_SEPARATOR}${notification.id}`;
