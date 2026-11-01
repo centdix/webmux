@@ -107,6 +107,8 @@ import {
 } from "./services/pr-service";
 import {
   startLinearAutoCreateMonitor,
+  releaseLinearIssueClaims,
+  resetLinearAutoCreateState,
   LINEAR_AUTO_CREATE_POLL_INTERVAL_MS,
 } from "./services/linear-auto-create-service";
 import { startOneshotWatcher } from "./services/oneshot-watcher-service";
@@ -153,9 +155,10 @@ const PORT = parseInt(Bun.env.PORT || "5111", 10);
 const portRegistrationService = createPortRegistrationService();
 portRegistrationService.restartTtls();
 const STATIC_DIR = Bun.env.WEBMUX_STATIC_DIR || "";
-/** Process-wide: Linear issues claimed by some project's auto-create, so an
- *  issue matching several projects gets one worktree. */
-const linearClaimedIssueIds = new Set<string>();
+/** Process-wide: Linear issue ID → projectRoot of the project whose
+ *  auto-create claimed it, so an issue matching several projects gets one
+ *  worktree. */
+const linearClaimedIssues = new Map<string, string>();
 /** Strict check: is `dir` itself inside a git work tree? Unlike
  *  git.resolveRepoRoot it never scans child directories, so a non-repo path is
  *  rejected rather than silently resolving to an unrelated nested repo. */
@@ -250,7 +253,11 @@ const mutatingTabBranches = new Set<string>();
 const lifecycleService = runtime.lifecycleService;
 let linearAutoCreateEnabled = config.integrations.linear.autoCreateWorktrees;
 let stopLinearAutoCreate: (() => void) | null = null;
-const linearFailedIssueIds = new Set<string>();
+const linearAutoCreateState = {
+  claimedIssues: linearClaimedIssues,
+  failedIssueIds: new Set<string>(),
+  projectRoot: PROJECT_DIR,
+};
 let autoRemoveOnMergeEnabled = config.integrations.github.autoRemoveOnMerge;
 let stopPrMonitor: (() => void) | null = null;
 let stopAutoRemoveMonitor: (() => void) | null = null;
@@ -302,9 +309,7 @@ function startLinearAutoCreate(): void {
     {
       lifecycleService,
       git,
-      projectRoot: PROJECT_DIR,
-      claimedIssueIds: linearClaimedIssueIds,
-      failedIssueIds: linearFailedIssueIds,
+      ...linearAutoCreateState,
       runOneshotForIssue,
       onOneshotPickedUp: postLinearOneshotPickupComment,
       ...(watchTeamKeys && watchTeamKeys.length > 0 ? { watchTeamKeys } : {}),
@@ -1610,7 +1615,7 @@ async function apiSetLinearAutoCreate(req: Request): Promise<Response> {
 
   linearAutoCreateEnabled = body.enabled;
   if (linearAutoCreateEnabled) {
-    linearFailedIssueIds.clear();
+    resetLinearAutoCreateState(linearAutoCreateState);
     startLinearAutoCreate();
     log.info("[config] Linear auto-create worktrees enabled");
   } else {
@@ -2443,6 +2448,8 @@ function parseAgentIdParam(params: Record<string, string>):
     stopAutoRemoveMonitor?.();
     stopAutoRemoveMonitor = null;
     stopLinearAutoCreateMonitor();
+    // stopLight runs when the project is removed: free its claims for others.
+    releaseLinearIssueClaims(linearClaimedIssues, PROJECT_DIR);
     stopOneshotWatcher?.();
     stopOneshotWatcher = null;
     stopAutoPullMonitor?.();

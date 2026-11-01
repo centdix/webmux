@@ -7,7 +7,10 @@ import type { GitGateway } from "../adapters/git";
 export const LINEAR_AUTO_CREATE_POLL_INTERVAL_MS = 60_000;
 /** Slack between the poll interval and the accepted issue age, so a result
  *  fetched by another project's tick in the current interval is reused while
- *  this project's previous tick result is not. */
+ *  this project's previous tick result is not. Trade-off: any fresh fetch is
+ *  reused, including one from a dashboard read, so if that read refreshed the
+ *  shared cache just before a tick, a newly labelled issue can take up to about
+ *  interval + maxAge (~115s by default) to be picked up instead of ~60s. */
 const ISSUE_MAX_AGE_MARGIN_MS = 5_000;
 
 function issueMaxAgeForInterval(pollIntervalMs: number): number {
@@ -25,10 +28,11 @@ export interface LinearAutoCreateDependencies {
   lifecycleService: LinearAutoCreateLifecycleService;
   git: Pick<GitGateway, "listWorktrees">;
   projectRoot: string;
-  /** Process-wide, shared by every project: issue IDs some project has
-   *  claimed (worktree created / oneshot started, or an attempt in progress).
-   *  An issue matching several projects is acted on once, by the first. */
-  claimedIssueIds: Set<string>;
+  /** Process-wide, shared by every project: issue ID → `projectRoot` of the
+   *  project that claimed it (worktree created / oneshot started, or attempt in
+   *  progress). An issue matching several projects is acted on once, by the
+   *  first. Recording the owner lets a project release only its own claims. */
+  claimedIssues: Map<string, string>;
   /** This project's failed attempts. Stops this project retrying a permanent
    *  failure every poll without blocking other projects from the issue. */
   failedIssueIds: Set<string>;
@@ -152,12 +156,14 @@ export async function runLinearAutoCreateOnce(
       )
       .map((issue) => issue.id),
   );
-  for (const ids of [deps.claimedIssueIds, deps.failedIssueIds]) {
-    for (const id of ids) {
-      if (!eligibleIssueIds.has(id)) ids.delete(id);
-    }
+  // Any project may prune any claim: eligibility is the same for every project.
+  for (const id of deps.claimedIssues.keys()) {
+    if (!eligibleIssueIds.has(id)) deps.claimedIssues.delete(id);
   }
-  const skippedIssueIds = new Set([...deps.claimedIssueIds, ...deps.failedIssueIds]);
+  for (const id of deps.failedIssueIds) {
+    if (!eligibleIssueIds.has(id)) deps.failedIssueIds.delete(id);
+  }
+  const skippedIssueIds = new Set([...deps.claimedIssues.keys(), ...deps.failedIssueIds]);
 
   const projectRoot = deps.projectRoot;
   // Raw listWorktrees on purpose: a stale registration still holds its branch
@@ -229,14 +235,34 @@ export async function runLinearAutoCreateOnce(
 /** Claim before acting, not after: other projects' ticks run concurrently, so a
  *  claim taken only on success would let two projects act on the same issue. */
 function claimIssue(deps: LinearAutoCreateDependencies, issue: LinearIssue): boolean {
-  if (deps.claimedIssueIds.has(issue.id)) return false;
-  deps.claimedIssueIds.add(issue.id);
+  if (deps.claimedIssues.has(issue.id)) return false;
+  deps.claimedIssues.set(issue.id, deps.projectRoot);
   return true;
 }
 
+/** Releases the claim only if this project still owns it: the claim may have
+ *  been pruned and retaken by another project while this attempt ran. Another
+ *  matching project (e.g. one with no team filter) can then pick the issue up. */
 function releaseFailedIssue(deps: LinearAutoCreateDependencies, issue: LinearIssue): void {
-  deps.claimedIssueIds.delete(issue.id);
+  if (deps.claimedIssues.get(issue.id) === deps.projectRoot) deps.claimedIssues.delete(issue.id);
   deps.failedIssueIds.add(issue.id);
+}
+
+/** Release every claim owned by `projectRoot` (project removed or reset). */
+export function releaseLinearIssueClaims(claimedIssues: Map<string, string>, projectRoot: string): void {
+  for (const [id, owner] of claimedIssues) {
+    if (owner === projectRoot) claimedIssues.delete(id);
+  }
+}
+
+/** Reset one project's auto-create state when auto-create is (re-)enabled, so
+ *  its already processed issues can trigger again. Other projects' claims and
+ *  failures are untouched. */
+export function resetLinearAutoCreateState(
+  deps: Pick<LinearAutoCreateDependencies, "claimedIssues" | "failedIssueIds" | "projectRoot">,
+): void {
+  releaseLinearIssueClaims(deps.claimedIssues, deps.projectRoot);
+  deps.failedIssueIds.clear();
 }
 
 async function notifyOneshotPickup(
