@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, rename } from "node:fs/promises";
+import { mkdir, rename, rm } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { AgentId, CustomAgentConfig, CustomAgents } from "../domain/config";
@@ -85,7 +85,12 @@ export async function writeGlobalCustomAgent(
 
   await mkdir(dirname(path), { recursive: true });
   const tempPath = join(dirname(path), `.${basename(path)}.${process.pid}.${Date.now()}.tmp`);
-  await Bun.write(tempPath, stringifyYaml(document));
-  await rename(tempPath, path);
+  try {
+    await Bun.write(tempPath, stringifyYaml(document));
+    await rename(tempPath, path);
+  } catch (err) {
+    await rm(tempPath, { force: true });
+    throw err;
+  }
   return parseCustomAgents(document.agents);
 }
