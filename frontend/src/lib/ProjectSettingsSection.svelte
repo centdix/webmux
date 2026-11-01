@@ -38,6 +38,7 @@
     defaultExpanded: boolean;
   } = $props();
 
+  const bodyId = $props.id();
   let expanded = $state(untrack(() => defaultExpanded));
   let config = $derived(configs.get(project));
 
@@ -193,6 +194,7 @@
       type="button"
       class="w-full flex items-center justify-between gap-2 px-3 py-2 text-left text-[13px] font-semibold text-primary bg-transparent border-none cursor-pointer hover:bg-hover rounded-lg"
       aria-expanded={expanded}
+      aria-controls={bodyId}
       onclick={() => (expanded = !expanded)}
     >
       <span class="min-w-0 truncate">{name}</span>
@@ -201,7 +203,7 @@
   </h3>
 
   {#if expanded}
-    <div class="px-3 pb-3 space-y-4">
+    <div id={bodyId} class="px-3 pb-3 space-y-4">
       <div>
         <span class="block text-xs text-muted mb-2">Agents</span>
         <div class="rounded-lg border border-edge bg-surface/40 p-3">
@@ -212,7 +214,7 @@
                 Add terminal agents that webmux can launch from the dashboard.
               </p>
             </div>
-            <Btn type="button" variant="cta" onclick={openCreateAgentEditor}>Add agent</Btn>
+            <Btn type="button" variant="cta" aria-label={`Add agent to ${name}`} onclick={openCreateAgentEditor}>Add agent</Btn>
           </div>
 
           {#if agentsLoading}
@@ -272,7 +274,7 @@
           checked={autoCreate}
           disabled={!config || autoCreateSaving}
           ontoggle={handleAutoCreateToggle}
-          aria-label="Auto-create worktrees for Linear tickets"
+          aria-label={`Auto-create worktrees for Linear tickets in ${name}`}
         />
       </div>
 
@@ -284,7 +286,7 @@
           checked={autoRemove}
           disabled={!config || autoRemoveSaving}
           ontoggle={handleAutoRemoveToggle}
-          aria-label="Auto-remove worktrees on PR merge"
+          aria-label={`Auto-remove worktrees on PR merge in ${name}`}
         />
       </div>
 

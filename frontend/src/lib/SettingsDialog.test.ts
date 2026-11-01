@@ -160,8 +160,10 @@ describe("SettingsDialog", () => {
 
     expect(screen.getAllByRole("region").map((region) => region.getAttribute("aria-label"))).toEqual(["webmux", "Image Generator"]);
     expect(within(section("webmux")).getByRole("button", { name: "webmux" })).toHaveAttribute("aria-expanded", "false");
-    expect(within(section("Image Generator")).getByRole("button", { name: "Image Generator" }))
-      .toHaveAttribute("aria-expanded", "true");
+    const imagesHeader = within(section("Image Generator")).getByRole("button", { name: "Image Generator" });
+    expect(imagesHeader).toHaveAttribute("aria-expanded", "true");
+    const imagesBody = document.getElementById(imagesHeader.getAttribute("aria-controls") ?? "");
+    expect(imagesBody).toContainElement(within(section("Image Generator")).getAllByRole("switch")[0]);
     expect(within(section("webmux")).queryByRole("switch")).not.toBeInTheDocument();
     await waitFor(() => expect(fetchAgents).toHaveBeenCalledWith("images"));
     expect(fetchAgents).not.toHaveBeenCalledWith("webmux");
@@ -187,13 +189,13 @@ describe("SettingsDialog", () => {
 
     const images = section("Image Generator");
     await waitFor(() =>
-      expect(within(images).getByRole("switch", { name: "Auto-create worktrees for Linear tickets" }))
+      expect(within(images).getByRole("switch", { name: "Auto-create worktrees for Linear tickets in Image Generator" }))
         .toHaveAttribute("aria-checked", "true"),
     );
-    expect(within(images).getByRole("switch", { name: "Auto-remove worktrees on PR merge" }))
+    expect(within(images).getByRole("switch", { name: "Auto-remove worktrees on PR merge in Image Generator" }))
       .toHaveAttribute("aria-checked", "true");
     const webmux = section("webmux");
-    expect(within(webmux).getByRole("switch", { name: "Auto-create worktrees for Linear tickets" }))
+    expect(within(webmux).getByRole("switch", { name: "Auto-create worktrees for Linear tickets in webmux" }))
       .toHaveAttribute("aria-checked", "false");
   });
 
@@ -201,7 +203,7 @@ describe("SettingsDialog", () => {
     vi.mocked(imagesApi.setLinearAutoCreate).mockResolvedValue({ ok: true, enabled: true });
     const configs = renderDialog({ activeProject: "images" });
     configs.ensure("webmux");
-    const toggle = within(section("Image Generator")).getByRole("switch", { name: "Auto-create worktrees for Linear tickets" });
+    const toggle = within(section("Image Generator")).getByRole("switch", { name: "Auto-create worktrees for Linear tickets in Image Generator" });
     await waitFor(() => expect(toggle).not.toBeDisabled());
 
     await fireEvent.click(toggle);
@@ -217,7 +219,7 @@ describe("SettingsDialog", () => {
     vi.mocked(imagesApi.setAutoRemoveOnMerge).mockResolvedValue({ ok: true, enabled: true });
     const configs = renderDialog({ activeProject: "images" });
     configs.ensure("webmux");
-    const toggle = within(section("Image Generator")).getByRole("switch", { name: "Auto-remove worktrees on PR merge" });
+    const toggle = within(section("Image Generator")).getByRole("switch", { name: "Auto-remove worktrees on PR merge in Image Generator" });
     await waitFor(() => expect(toggle).not.toBeDisabled());
 
     await fireEvent.click(toggle);
@@ -233,7 +235,7 @@ describe("SettingsDialog", () => {
     vi.mocked(imagesApi.setAutoRemoveOnMerge).mockRejectedValue(new Error("config is read-only"));
     const configs = renderDialog({ activeProject: "images" });
     const images = section("Image Generator");
-    const toggle = within(images).getByRole("switch", { name: "Auto-remove worktrees on PR merge" });
+    const toggle = within(images).getByRole("switch", { name: "Auto-remove worktrees on PR merge in Image Generator" });
     await waitFor(() => expect(toggle).not.toBeDisabled());
 
     await fireEvent.click(toggle);
@@ -279,7 +281,7 @@ describe("SettingsDialog", () => {
     const images = section("Image Generator");
 
     await within(images).findByText("No custom agents setup");
-    await fireEvent.click(within(images).getByRole("button", { name: "Add agent" }));
+    await fireEvent.click(within(images).getByRole("button", { name: "Add agent to Image Generator" }));
     await fireEvent.input(screen.getByLabelText("Agent name"), { target: { value: "Gemini CLI" } });
     await fireEvent.input(screen.getByLabelText("Start command"), { target: { value: 'gemini --prompt "${PROMPT}"' } });
     await fireEvent.click(screen.getByRole("button", { name: "Test" }));
