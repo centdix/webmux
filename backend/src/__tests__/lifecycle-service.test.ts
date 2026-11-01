@@ -33,6 +33,15 @@ import {
 import { PortRegistrationService } from "../services/port-registration-service";
 import { WorktreeCreationTracker } from "../services/worktree-creation-service";
 import type { PortRegistration } from "../domain/port-registrations";
+import { codexAppServerSocketPath } from "../adapters/webmux-paths";
+
+/** The script a codex app-server launch runs under `sh -c '…'`, unquoted one level. */
+function codexLaunchScript(command: string): string {
+  const marker = "sh -c '";
+  const start = command.indexOf(marker);
+  if (start === -1) throw new Error(`Not a codex app-server launch: ${command}`);
+  return command.slice(start + marker.length, -1).replaceAll("'\\''", "'");
+}
 
 function run(args: string[], cwd: string): string {
   const result = Bun.spawnSync(args, {
@@ -1297,9 +1306,13 @@ describe("LifecycleService", () => {
     await lifecycle.closeWorktree("feature-codex-resume");
     await lifecycle.openWorktree("feature-codex-resume");
 
-    const agentCommand = tmux.commands.at(-1)?.command;
+    const agentCommand = tmux.commands.at(-1)?.command ?? "";
+    const meta = await readWorktreeMeta(new BunGitGateway().resolveWorktreeGitDir(join(repoRoot, "__worktrees", "feature-codex-resume")));
+    if (!meta) throw new Error("Expected worktree metadata");
 
-    expect(agentCommand).toContain("codex --enable hooks --yolo resume --last");
+    expect(codexLaunchScript(agentCommand)).toContain(
+      `set -- '--enable' 'hooks' '--yolo' '--remote' 'unix://${codexAppServerSocketPath(meta.worktreeId)}' 'resume' '--last';`,
+    );
     expect(agentCommand).not.toContain("developer_instructions=");
     expect(agentCommand).not.toContain("Database:");
     expect(agentCommand).not.toContain("ship the fix");
@@ -1330,7 +1343,7 @@ describe("LifecycleService", () => {
     expect(agentCommand).not.toContain("initial task");
   });
 
-  it("reopens a stale managed codex terminal from its saved app-server thread", async () => {
+  it("reopens a codex terminal on its latest thread and clears a leftover stale flag", async () => {
     const repoRoot = await initRepo();
     const runtime = new ProjectRuntime();
     const tmux = new FakeTmuxGateway();
@@ -1381,16 +1394,16 @@ describe("LifecycleService", () => {
     await lifecycle.closeWorktree("feature-codex-open-refresh");
     await lifecycle.openWorktree("feature-codex-open-refresh");
 
-    const agentCommand = tmux.commands.at(-1)?.command;
-    expect(agentCommand).toContain("codex --enable hooks --yolo resume 'thread-open-refresh'");
-    expect(agentCommand).not.toContain("resume --last");
+    const agentCommand = codexLaunchScript(tmux.commands.at(-1)?.command ?? "");
+    expect(agentCommand).toContain("'resume' '--last'");
+    expect(agentCommand).not.toContain("thread-open-refresh");
 
     const refreshedMeta = await readWorktreeMeta(gitDir);
     expect(refreshedMeta?.agentTerminalStale).toBe(false);
     expect(runtime.getWorktreeByBranch("feature-codex-open-refresh")?.agentTerminalStale).toBe(false);
   });
 
-  it("refreshes a managed codex terminal from its saved app-server thread", async () => {
+  it("rejects refreshing a codex terminal, which shares the web chat's app-server", async () => {
     const repoRoot = await initRepo();
     const runtime = new ProjectRuntime();
     const tmux = new FakeTmuxGateway();
@@ -1438,15 +1451,11 @@ describe("LifecycleService", () => {
     });
 
     tmux.commands.length = 0;
-    await lifecycle.refreshAgentTerminal("feature-codex-refresh");
-
-    const agentCommand = tmux.commands.at(-1)?.command;
-    expect(agentCommand).toContain("codex --enable hooks --yolo resume 'thread-refresh'");
-    expect(agentCommand).not.toContain("resume --last");
-
-    const refreshedMeta = await readWorktreeMeta(gitDir);
-    expect(refreshedMeta?.agentTerminalStale).toBe(false);
-    expect(runtime.getWorktreeByBranch("feature-codex-refresh")?.agentTerminalStale).toBe(false);
+    await expect(lifecycle.refreshAgentTerminal("feature-codex-refresh")).rejects.toMatchObject({
+      status: 409,
+      message: "Refreshing the agent terminal is only available for Claude worktrees",
+    });
+    expect(tmux.commands).toEqual([]);
   });
 
   it("refreshes a managed claude terminal from its saved session", async () => {
@@ -2686,14 +2695,10 @@ describe("LifecycleService", () => {
     expect(tmux.swaps[0]?.destination).toBe(restoredRootPaneId);
   });
 
-  it("rebuilds parked fork panes when the codex agent terminal is refreshed", async () => {
+  it("rebuilds parked fork panes when the claude agent terminal is refreshed", async () => {
     const repoRoot = await initRepo();
     const runtime = new ProjectRuntime();
     const tmux = new FakeTmuxGateway();
-    // ensureRootSessionId + the pre-fork snapshot (calls 1-2) see only the root session;
-    // once the fork pane is launched its session id becomes discoverable (call 3+), so a
-    // Codex fork captures a non-null id and survives the restore on refresh.
-    let listCalls = 0;
     const lifecycle = makeLifecycleService(
       repoRoot,
       tmux,
@@ -2702,7 +2707,6 @@ describe("LifecycleService", () => {
       new FakeHookRunner(),
       {
         ...TEST_CONFIG,
-        workspace: { ...TEST_CONFIG.workspace, defaultAgent: "codex" },
         profiles: {
           ...TEST_CONFIG.profiles,
           default: { ...TEST_CONFIG.profiles.default, yolo: true },
@@ -2712,20 +2716,17 @@ describe("LifecycleService", () => {
       new FakeAutoNameService(),
       {},
       {
-        listSessionIds: async () => {
-          listCalls += 1;
-          return listCalls <= 2 ? ["root-session"] : ["fork-session-1", "root-session"];
-        },
+        listSessionIds: async () => ["root-session"],
       },
     );
 
-    await lifecycle.createWorktree({ branch: "feature-codex-tab-refresh" });
-    await lifecycle.createWorktreeTab("feature-codex-tab-refresh");
+    await lifecycle.createWorktree({ branch: "feature-claude-tab-refresh" });
+    await lifecycle.createWorktreeTab("feature-claude-tab-refresh");
 
     const session = buildProjectSessionName(repoRoot);
-    const parkingWindow = buildWorktreeParkingWindowName("feature-codex-tab-refresh");
+    const parkingWindow = buildWorktreeParkingWindowName("feature-claude-tab-refresh");
     const gitDir = new BunGitGateway().resolveWorktreeGitDir(
-      join(repoRoot, "__worktrees", "feature-codex-tab-refresh"),
+      join(repoRoot, "__worktrees", "feature-claude-tab-refresh"),
     );
 
     const beforeMeta = await readWorktreeMeta(gitDir);
@@ -2738,25 +2739,22 @@ describe("LifecycleService", () => {
       ...beforeMeta,
       agentTerminalStale: true,
       conversation: {
-        provider: "codexAppServer",
-        conversationId: "thread-refresh",
-        threadId: "thread-refresh",
-        cwd: join(repoRoot, "__worktrees", "feature-codex-tab-refresh"),
+        provider: "claudeCode",
+        conversationId: "root-session",
+        sessionId: "root-session",
+        cwd: join(repoRoot, "__worktrees", "feature-claude-tab-refresh"),
         lastSeenAt: "2026-04-15T10:00:00.000Z",
       },
     });
 
     tmux.swaps.length = 0;
     tmux.commands.length = 0;
-    await lifecycle.refreshAgentTerminal("feature-codex-tab-refresh");
+    await lifecycle.refreshAgentTerminal("feature-claude-tab-refresh");
 
     // The parking window is rebuilt from a clean slate — exactly one fork pane, not a
     // duplicate stacked on top of the pre-refresh pane.
     const parking = tmux.listWindows().find((window) => window.windowName === parkingWindow);
     expect(parking?.paneCount).toBe(1);
-    // The fork's codex session is resumed into the rebuilt parked pane.
-    expect(tmux.commands.some((entry) => entry.command.includes("resume 'fork-session-1'"))).toBe(true);
-
     const meta = await readWorktreeMeta(gitDir);
     expect(meta?.activeTabId).toBe("fork-1");
     const rootAfter = meta?.tabs?.find((entry) => entry.tabId === "root");
@@ -2765,12 +2763,15 @@ describe("LifecycleService", () => {
     // meta would otherwise make a later swap target a dead pane.
     expect(rootAfter?.paneId).not.toBe(rootPaneBefore);
     expect(forkAfter?.paneId).not.toBe(forkPaneBefore);
-    expect(forkAfter?.sessionId).toBe("fork-session-1");
+    // The fork's pinned claude session is resumed into the rebuilt parked pane.
+    const forkSessionId = beforeMeta.tabs?.find((entry) => entry.tabId === "fork-1")?.sessionId;
+    expect(forkAfter?.sessionId).toBe(forkSessionId);
+    expect(tmux.commands.some((entry) => entry.command.includes(`--resume '${forkSessionId}'`))).toBe(true);
 
     // The previously active fork is brought back on-screen, and a subsequent select against
     // the refreshed (live) pane ids resolves instead of throwing on a stale pane.
     expect(tmux.swaps.length).toBeGreaterThan(0);
-    await lifecycle.selectWorktreeTab("feature-codex-tab-refresh", "root");
+    await lifecycle.selectWorktreeTab("feature-claude-tab-refresh", "root");
     expect((await readWorktreeMeta(gitDir))?.activeTabId).toBe("root");
   });
 

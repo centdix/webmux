@@ -1,6 +1,6 @@
 import { projectApiPaths } from "@webmux/api-contract";
 import { randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { getAgentAdapter } from "../agents";
 import { ensureAgentRuntimeArtifacts } from "../adapters/agent-runtime";
@@ -20,6 +20,7 @@ import { expandTemplate, getDefaultProfileName, isDockerProfile, type DockerProf
 import { type DockerGateway } from "../adapters/docker";
 import { buildProjectSessionName, buildWorktreeParkingWindowName, buildWorktreeWindowName, type TmuxGateway } from "../adapters/tmux";
 import { captureNewSessionId, type SessionDiscoveryGateway } from "../adapters/session-discovery";
+import { codexAppServerSocketPath } from "../adapters/webmux-paths";
 import type { AgentId, AgentKind, ProfileConfig, ProjectConfig, RuntimeKind } from "../domain/config";
 import { ROOT_TAB_ID, type ControlEnvMap, type OneshotMeta, type WorktreeMeta, type WorktreeSource, type WorktreeTab } from "../domain/model";
 import {
@@ -85,16 +86,9 @@ function normalizeWorktreeLabel(label: string | null): string | null {
 }
 
 
-function resolveCodexResumeConversationId(
-  meta: WorktreeMeta,
-  agent: AgentDefinition,
-  launchMode: AgentLaunchMode,
-): string | undefined {
-  if (launchMode !== "resume") return undefined;
-  if (meta.agentTerminalStale !== true) return undefined;
-  if (agent.kind !== "builtin" || agent.implementation.agent !== "codex") return undefined;
-  if (meta.conversation?.provider !== "codexAppServer") return undefined;
-  return meta.conversation.threadId;
+async function removeCodexAppServerSocket(worktreeId: string): Promise<void> {
+  const socketPath = codexAppServerSocketPath(worktreeId);
+  await Promise.all([rm(socketPath, { force: true }), rm(`${socketPath}.log`, { force: true })]);
 }
 
 export interface CreateWorktreeTarget {
@@ -308,7 +302,6 @@ export class LifecycleService {
       const { profileName, profile } = this.resolveProfile(initialized.meta.profile);
       const agent = this.resolveAgentDefinition(initialized.meta.agent);
       const launchMode: AgentLaunchMode = resolved.meta && agent.capabilities.resume ? "resume" : "fresh";
-      const resumeConversationId = resolveCodexResumeConversationId(initialized.meta, agent, launchMode);
       await ensureAgentRuntimeArtifacts({
         gitDir: initialized.paths.gitDir,
         worktreePath: resolved.entry.path,
@@ -323,7 +316,6 @@ export class LifecycleService {
         worktreePath: resolved.entry.path,
         launchMode,
         followUpPrompt: options.prompt,
-        resumeConversationId,
       });
 
       if (initialized.meta.agentTerminalStale === true) {
@@ -365,29 +357,16 @@ export class LifecycleService {
       const initialized = await this.refreshManagedArtifacts(resolved);
       const { profileName, profile } = this.resolveProfile(initialized.meta.profile);
       const agent = this.resolveAgentDefinition(initialized.meta.agent);
-      if (agent.kind !== "builtin" || !agent.capabilities.conversationHistory) {
-        throw new LifecycleError(
-          "Refreshing the agent terminal is only available for agents with saved conversation history",
-          409,
-        );
+      // Codex terminals share the web chat's app-server, so they never go stale.
+      if (agent.kind !== "builtin" || agent.implementation.agent !== "claude") {
+        throw new LifecycleError("Refreshing the agent terminal is only available for Claude worktrees", 409);
       }
 
       const conversation = initialized.meta.conversation;
-      if (!conversation) {
+      if (conversation?.provider !== "claudeCode") {
         throw new LifecycleError(`No ${agent.label} conversation is available to refresh`, 409);
       }
-      let resumeConversationId: string;
-      if (agent.implementation.agent === "codex") {
-        if (conversation.provider !== "codexAppServer") {
-          throw new LifecycleError(`No ${agent.label} conversation is available to refresh`, 409);
-        }
-        resumeConversationId = conversation.threadId;
-      } else {
-        if (conversation.provider !== "claudeCode") {
-          throw new LifecycleError(`No ${agent.label} conversation is available to refresh`, 409);
-        }
-        resumeConversationId = conversation.sessionId;
-      }
+      const resumeConversationId = conversation.sessionId;
 
       await ensureAgentRuntimeArtifacts({
         gitDir: initialized.paths.gitDir,
@@ -1234,6 +1213,7 @@ export class LifecycleService {
                 prompt,
                 launchMode: input.launchMode,
                 resumeConversationId: input.resumeConversationId,
+                appServerSocketPath: codexAppServerSocketPath(input.initialized.meta.worktreeId),
               }),
               shell: buildManagedShellCommand(input.initialized.paths.runtimeEnvPath),
         },
@@ -1328,6 +1308,7 @@ export class LifecycleService {
     }
 
     this.killWorktreeWindows(branch);
+    if (resolved.meta) await removeCodexAppServerSocket(resolved.meta.worktreeId);
     removeManagedWorktree(
       {
         repoRoot: this.deps.projectRoot,
