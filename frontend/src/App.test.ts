@@ -884,6 +884,19 @@ describe("App create selection", () => {
     await waitFor(() => expect(window.location.hash).toBe("#images/feature/img"));
   });
 
+  it("falls back to the first row when coming back to a project whose remembered worktree is gone", async () => {
+    useThreeProjects();
+    localStorage.setItem("wt-last-selected-worktree:images", "feature/removed");
+
+    renderApp();
+    await screen.findByTitle("main");
+    await chooseProject("images");
+
+    await waitFor(() => expect(window.location.hash).toBe("#images/main"));
+    expect(screen.getByTitle("main")).toBeInTheDocument();
+    expect(localStorage.getItem("wt-last-selected-worktree:images")).toBe("main");
+  });
+
   it("shows an empty state with New worktree for a project without worktrees", async () => {
     useThreeProjects();
     otherProjects.list[1] = { ...otherProjects.list[1]!, worktrees: [] };
