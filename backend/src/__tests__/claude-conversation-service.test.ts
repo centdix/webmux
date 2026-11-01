@@ -44,6 +44,7 @@ function makeMeta(): WorktreeMeta {
 
 function makeWorktree(): WorktreeSnapshot {
   return {
+    id: "wt_claude",
     branch: "claude-feature",
     label: null,
     path: "/tmp/worktrees/claude-feature",

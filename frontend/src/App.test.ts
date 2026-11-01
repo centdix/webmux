@@ -287,6 +287,7 @@ function createWorktree(
 ): WorktreeInfo {
   return {
     project: PROJECT,
+    id: `wt-${branch}`,
     branch,
     label: null,
     archived: false,

@@ -72,6 +72,7 @@ function mapAgentStatus(status: string): string {
 function mapWorktree(snapshot: ProjectWorktreeSnapshot, project: string): WorktreeInfo {
   return {
     project,
+    id: snapshot.id,
     branch: snapshot.branch,
     label: snapshot.label,
     ...(snapshot.baseBranch ? { baseBranch: snapshot.baseBranch } : {}),

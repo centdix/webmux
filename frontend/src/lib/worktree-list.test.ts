@@ -12,6 +12,7 @@ import type { WorktreeInfo, WorktreeListRow } from "./types";
 function createWorktree(branch: string, overrides: Partial<WorktreeInfo> = {}): WorktreeInfo {
   return {
     project: "webmux",
+    id: `wt-${branch}`,
     branch,
     label: null,
     archived: false,

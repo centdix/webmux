@@ -5,6 +5,7 @@ import { attentionLabel, attentionOf, prStateLabel, prStateOf, rowPr } from "./w
 function createWorktree(overrides: Partial<WorktreeInfo> = {}): WorktreeInfo {
   return {
     project: "webmux",
+    id: "wt-feat",
     branch: "feat",
     label: null,
     archived: false,

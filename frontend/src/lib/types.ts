@@ -112,6 +112,7 @@ export interface WorktreeRef {
 }
 
 export interface WorktreeInfo extends WorktreeRef {
+  id: string;
   label: string | null;
   baseBranch?: string;
   archived: boolean;

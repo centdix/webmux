@@ -103,6 +103,7 @@ describe("buildProjectSnapshot", () => {
     });
     expect(snapshot.worktrees).toEqual([
       {
+        id: "wt_search",
         branch: "feature/search",
         label: "Search ranking",
         baseBranch: "main",
@@ -187,6 +188,7 @@ describe("buildProjectSnapshot", () => {
       notifications: [],
     });
 
+    expect(snapshot.worktrees[0]?.id).toBe("wt_idle");
     expect(snapshot.worktrees[0]?.elapsed).toBe("");
     expect(snapshot.worktrees[0]?.status).toBe("closed");
     expect(snapshot.worktrees[0]?.prs).toEqual([]);
@@ -230,6 +232,7 @@ describe("buildProjectSnapshot", () => {
 
     expect(snapshot.worktrees).toEqual([
       {
+        id: "creating:feature/new-flow",
         branch: "feature/new-flow",
         label: null,
         baseBranch: "main",

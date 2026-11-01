@@ -27,6 +27,7 @@ import {
 function createWorktree(overrides: Partial<WorktreeInfo> = {}): WorktreeInfo {
   return {
     project: "webmux",
+    id: "wt-mobile-chat",
     branch: "feature/mobile-chat",
     label: null,
     archived: false,

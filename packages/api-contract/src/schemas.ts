@@ -360,6 +360,8 @@ export const WorktreeTabSchema = z.object({
 });
 
 export const ProjectWorktreeSnapshotSchema = z.object({
+  /** Runtime worktree id: a UUID for managed worktrees, `unmanaged:<path>` otherwise. */
+  id: z.string(),
   branch: z.string(),
   label: z.string().nullable(),
   baseBranch: z.string().optional(),

@@ -9,6 +9,7 @@ import { mergeProjectWorktrees, WorktreesStore } from "./worktrees-store.svelte"
 function worktree(project: string, branch: string, overrides: Partial<WorktreeInfo> = {}): WorktreeInfo {
   return {
     project,
+    id: `wt-${branch}`,
     branch,
     label: null,
     archived: false,

@@ -96,6 +96,7 @@ describe("project-scoped network calls", () => {
 
 function snapshot(branch: string): ProjectWorktreeSnapshot {
   return {
+    id: `wt-${branch}`,
     branch,
     label: null,
     path: `/repo/${branch}`,
@@ -248,7 +249,7 @@ describe("notifications", () => {
     expect(dismissed).toEqual([{ project: "other", id: 4 }]);
   });
 
-  it("fetchAllProjectWorktrees tags each worktree with its project", async () => {
+  it("fetchAllProjectWorktrees tags each worktree with its project and keeps its id", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
       projects: [
         { prefix: "alpha", name: "Alpha", worktrees: [snapshot("main")], error: null },
@@ -259,8 +260,8 @@ describe("notifications", () => {
 
     const projects = await api.fetchAllProjectWorktrees();
 
-    expect(projects.map((p) => [p.prefix, p.error, p.worktrees.map((w) => `${w.project}/${w.branch}`)])).toEqual([
-      ["alpha", null, ["alpha/main"]],
+    expect(projects.map((p) => [p.prefix, p.error, p.worktrees.map((w) => `${w.project}/${w.branch}#${w.id}`)])).toEqual([
+      ["alpha", null, ["alpha/main#wt-main"]],
       ["beta", "boom", []],
     ]);
   });

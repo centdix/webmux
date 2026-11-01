@@ -17,7 +17,7 @@
     type OverflowStatusBarStatus,
   } from "./worktree-list";
   import { attentionLabel, attentionOf, rowPr, type Attention } from "./worktree-status";
-  import { worktreeKey } from "./worktree-ref";
+  import { worktreeKey, worktreeRowKey } from "./worktree-ref";
 
   type RowPosition = "above" | "visible" | "below";
 
@@ -251,7 +251,7 @@
       </div>
     {/if}
     <ul class="list-none" aria-label="Worktrees">
-      {#each rows.active as row (worktreeKey(row.worktree))}
+      {#each rows.active as row (worktreeRowKey(row.worktree))}
         {@render worktreeRow(row)}
       {/each}
     </ul>
@@ -278,7 +278,7 @@
       </button>
       {#if showArchived}
         <ul class="list-none" aria-label="Archived worktrees">
-          {#each rows.archived as row (worktreeKey(row.worktree))}
+          {#each rows.archived as row (worktreeRowKey(row.worktree))}
             {@render worktreeRow(row)}
           {/each}
         </ul>

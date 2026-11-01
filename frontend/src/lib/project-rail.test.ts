@@ -5,6 +5,7 @@ import { buildProjectRail, projectInitials, projectRailInitials, projectRailTitl
 function createWorktree(branch: string, overrides: Partial<WorktreeInfo> = {}): WorktreeInfo {
   return {
     project: "webmux",
+    id: `wt-${branch}`,
     branch,
     label: null,
     archived: false,

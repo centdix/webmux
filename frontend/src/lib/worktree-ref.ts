@@ -1,4 +1,4 @@
-import type { AppNotification, WorktreeRef } from "./types";
+import type { AppNotification, WorktreeInfo, WorktreeRef } from "./types";
 
 /** Project prefixes are `[a-z0-9-]` slugs and git forbids `:` in ref names, so
  *  the first `:` always splits a key back into its project and branch. */
@@ -7,6 +7,11 @@ const KEY_SEPARATOR = ":";
 /** Stable string identity of a worktree across projects (Set/Map/storage key). */
 export function worktreeKey(ref: WorktreeRef): string {
   return `${ref.project}${KEY_SEPARATOR}${ref.branch}`;
+}
+
+/** Identity of a rendered worktree row: the runtime worktree id, not the branch. */
+export function worktreeRowKey(worktree: Pick<WorktreeInfo, "project" | "id">): string {
+  return `${worktree.project}${KEY_SEPARATOR}${worktree.id}`;
 }
 
 export function parseWorktreeKey(key: string): WorktreeRef | null {

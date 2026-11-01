@@ -46,6 +46,7 @@ function mapWorktreeSnapshot(
   findAgentLabel?: (agentId: string | null) => string | null,
 ): WorktreeSnapshot {
   return {
+    id: state.worktreeId,
     branch: state.branch,
     label: state.label,
     ...(state.baseBranch ? { baseBranch: state.baseBranch } : {}),
@@ -80,6 +81,7 @@ function mapCreatingWorktreeSnapshot(
   findAgentLabel?: (agentId: string | null) => string | null,
 ): WorktreeSnapshot {
   return {
+    id: `creating:${creating.branch}`,
     branch: creating.branch,
     label: null,
     ...(creating.baseBranch ? { baseBranch: creating.baseBranch } : {}),

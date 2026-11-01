@@ -248,6 +248,7 @@ export interface NotificationView {
 }
 
 export interface WorktreeSnapshot {
+  id: string;
   branch: string;
   label: string | null;
   baseBranch?: string;

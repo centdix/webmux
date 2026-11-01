@@ -7,6 +7,7 @@ import type { PrEntry, ProjectListRows, WorktreeInfo, WorktreeListRow } from "./
 function createWorktree(branch: string, project = "webmux"): WorktreeInfo {
   return {
     project,
+    id: `wt-${branch}`,
     branch,
     label: null,
     archived: false,
@@ -216,6 +217,16 @@ describe("WorktreeList", () => {
 
     await rerender({ rows });
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("keys rows by worktree id, so a row keeps its element when only its branch changes", async () => {
+    const before = { ...createWorktree("feature/a"), id: "wt-stable" };
+    const { rerender } = renderList({ rows: rowsOf([before]) });
+    const element = row("feature/a");
+
+    await rerender({ rows: rowsOf([{ ...before, branch: "feature/renamed" }]) });
+
+    expect(row("feature/renamed")).toBe(element);
   });
 
   it("opens at the pointer on right-click and under the row from the keyboard, keeping inside the viewport", async () => {
