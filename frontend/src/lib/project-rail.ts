@@ -10,8 +10,9 @@ export function projectInitials(name: string): string {
 
 /** Initials unique among `names` (registered order): the first project keeps
  *  its plain initials and later ones sharing them get a number ("WA", "WA2").
- *  A suffixed value never equals another project's plain initials, so adding an
- *  unrelated project leaves the others unchanged. */
+ *  A suffixed value never equals another project's plain initials, so adding a
+ *  project with different initials leaves the others unchanged; removing one
+ *  can renumber the later projects that shared its initials. */
 export function projectRailInitials(names: readonly string[]): string[] {
   const bases = names.map(projectInitials);
   const taken = new Set(bases);
@@ -30,14 +31,14 @@ export function projectRailInitials(names: readonly string[]): string[] {
 
 /** Theme-token tints for project avatars, picked by registered order: every
  *  hue filled, then every hue outlined. */
+/** Theme-following hues only: `merged` is fixed across themes and would match
+ *  a purple accent (Dracula). */
 const PROJECT_TINTS = [
   "bg-accent/20 text-accent",
-  "bg-merged/20 text-merged",
   "bg-success/20 text-success",
   "bg-warning/20 text-warning",
   "bg-primary/15 text-primary",
   "inset-ring inset-ring-accent/60 text-accent",
-  "inset-ring inset-ring-merged/60 text-merged",
   "inset-ring inset-ring-success/60 text-success",
   "inset-ring inset-ring-warning/60 text-warning",
   "inset-ring inset-ring-primary/50 text-primary",

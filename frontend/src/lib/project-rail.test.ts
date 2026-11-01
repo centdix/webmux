@@ -67,9 +67,10 @@ describe("projectRailInitials", () => {
 });
 
 describe("projectTint", () => {
-  it("gives the first eight projects distinct tints", () => {
+  it("gives the first eight projects distinct tints, then cycles", () => {
     const tints = Array.from({ length: 8 }, (_, index) => projectTint(index));
     expect(new Set(tints).size).toBe(8);
+    expect(projectTint(8)).toBe(projectTint(0));
   });
 });
 
