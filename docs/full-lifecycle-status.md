@@ -1,5 +1,7 @@
 # Full Lifecycle Refactor Status
 
+> Routes have since moved: project routes now live under `/api/projects/<prefix>/...` (see `packages/api-contract/src/contract.ts`); the `/api/...` paths below are historical.
+
 This document is the current checkpoint for the hard-cutover refactor.
 
 For the execution strategy and remaining sequencing, follow `docs/full-lifecycle-cutover-plan.md`.
