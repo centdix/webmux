@@ -107,7 +107,11 @@ interface CachedReviewComments {
   etag: string | null;
 }
 
-/** Exponential backoff for one repo label after GitHub reported a rate limit. */
+/** GitHub quota a call draws from: `gh pr list` and `gh api graphql` use the
+ *  GraphQL points budget, `gh api repos/...` the separate REST request budget. */
+export type GhBucket = "graphql" | "rest";
+
+/** Exponential backoff for one repo label and bucket after GitHub reported a rate limit. */
 export interface RepoBackoff {
   failures: number;
   until: number;
@@ -118,8 +122,13 @@ export interface RepoBackoff {
 export interface PrSyncState {
   /** Keyed by `prKey` (real host/owner/repo + PR number). */
   reviewComments: Map<string, CachedReviewComments>;
-  /** Keyed by repo label ("" for the project repo, else the linked-repo alias). */
+  /** Keyed by `backoffKey` (bucket + repo label). */
   backoff: Map<string, RepoBackoff>;
+}
+
+/** Backoff key for a repo label ("" for the project repo, else the alias) and bucket. */
+export function backoffKey(repoLabel: string, bucket: GhBucket): string {
+  return `${bucket}:${repoLabel}`;
 }
 
 export function createPrSyncState(): PrSyncState {
@@ -384,26 +393,28 @@ function ghOutcome(result: { ok: true } | { ok: false; rateLimited: boolean }): 
 
 const DEFAULT_PR_SYNC_DEPS: PrSyncDeps = { runGh: spawnGh, now: Date.now };
 
-function isBackingOff(state: PrSyncState, repoLabel: string, now: number): boolean {
-  const backoff = state.backoff.get(repoLabel);
+function isBackingOff(state: PrSyncState, repoLabel: string, bucket: GhBucket, now: number): boolean {
+  const backoff = state.backoff.get(backoffKey(repoLabel, bucket));
   return backoff !== undefined && now < backoff.until;
 }
 
-/** Reset a repo's backoff after a successful call, or extend it after a rate limit.
- *  Other failures leave it unchanged. */
+/** Reset a repo's backoff for one bucket after a successful call, or extend it
+ *  after a rate limit. Other failures leave it unchanged. */
 function recordGhOutcome(
   state: PrSyncState,
   repoLabel: string,
+  bucket: GhBucket,
   outcome: GhOutcome,
   now: number,
 ): void {
+  const key = backoffKey(repoLabel, bucket);
   if (outcome === "ok") {
-    state.backoff.delete(repoLabel);
+    state.backoff.delete(key);
   } else if (outcome === "rate_limited") {
-    const backoff = nextBackoff(state.backoff.get(repoLabel), now);
-    state.backoff.set(repoLabel, backoff);
+    const backoff = nextBackoff(state.backoff.get(key), now);
+    state.backoff.set(key, backoff);
     log.warn(
-      `[pr] GitHub rate limit for repo "${repoLabel || "current"}"; backing off ${Math.round((backoff.until - now) / 1000)}s`,
+      `[pr] GitHub ${bucket} rate limit for repo "${repoLabel || "current"}"; backing off ${Math.round((backoff.until - now) / 1000)}s`,
     );
   }
 }
@@ -596,14 +607,15 @@ async function refreshStalePrData(
   if (stale.length === 0) return;
 
   const now = deps.now();
-  const byRepo = new Map<string, { ref: PrRef; repoLabel: string; numbers: Set<number> }>();
+  const byRepo = new Map<string, { ref: PrRef; repoLabels: Set<string>; numbers: Set<number> }>();
   for (const { entries } of stale) {
     for (const entry of entries) {
-      if (entry.state !== "open" || isBackingOff(state, entry.repo, now)) continue;
+      if (entry.state !== "open" || isBackingOff(state, entry.repo, "graphql", now)) continue;
       const ref = parsePrUrl(entry.url);
       if (!ref) continue;
       const repoKey = `${ref.host}/${ref.owner}/${ref.name}`;
-      const group = byRepo.get(repoKey) ?? { ref, repoLabel: entry.repo, numbers: new Set<number>() };
+      const group = byRepo.get(repoKey) ?? { ref, repoLabels: new Set<string>(), numbers: new Set<number>() };
+      group.repoLabels.add(entry.repo);
       group.numbers.add(ref.number);
       byRepo.set(repoKey, group);
     }
@@ -613,7 +625,9 @@ async function refreshStalePrData(
   await Promise.all(
     [...byRepo].map(async ([repoKey, group]) => {
       const result = await fetchPrStatuses(group.ref, [...group.numbers], deps.runGh);
-      recordGhOutcome(state, group.repoLabel, ghOutcome(result), now);
+      for (const label of group.repoLabels) {
+        recordGhOutcome(state, label, "graphql", ghOutcome(result), now);
+      }
       if (!result.ok) return;
       for (const [number, status] of result.data) statuses.set(`${repoKey}#${number}`, status);
     }),
@@ -648,12 +662,12 @@ export async function syncPrStatus(
   // Fetch current repo + all linked repos in parallel, skipping repos in backoff.
   const allRepoResults = await Promise.all(
     repoTargets(linkedRepos).map(async ({ label, slug }) => {
-      if (isBackingOff(state, label, now)) {
-        log.debug(`[pr] skipping ${slug ?? "current"}: rate-limit backoff`);
+      if (isBackingOff(state, label, "graphql", now)) {
+        log.info(`[pr] skipping PR list for ${slug ?? "current"}: rate-limit backoff`);
         return { label, result: null };
       }
       const result = await fetchAllPrs(slug, label, projectDir, deps.runGh);
-      recordGhOutcome(state, label, ghOutcome(result), now);
+      recordGhOutcome(state, label, "graphql", ghOutcome(result), now);
       return { label, result };
     }),
   );
@@ -680,12 +694,14 @@ export async function syncPrStatus(
 
   // Fetch inline review comments only for PRs matching active worktrees.
   // PRs that haven't been updated reuse cached comments (saves API calls).
+  // Repos whose REST budget is in backoff keep showing cached comments.
   const reviewTuples: {
     entry: PrEntry;
     key: string;
     cached: CachedReviewComments | undefined;
     repoSlug: string | undefined;
   }[] = [];
+  const restBackoffRepos = new Set<string>();
   for (const [branch, entries] of branchPrs) {
     if (!activeBranches.has(branch)) continue;
     for (const entry of entries) {
@@ -695,6 +711,9 @@ export async function syncPrStatus(
       if (cached?.updatedAt === entry.updatedAt) {
         log.debug(`[pr] skipping comments for PR #${entry.number} (unchanged)`);
         entry.comments = sortByCreatedAt([...entry.comments, ...cached.comments]);
+      } else if (isBackingOff(state, entry.repo, "rest", now)) {
+        restBackoffRepos.add(entry.repo);
+        entry.comments = sortByCreatedAt([...entry.comments, ...(cached?.comments ?? [])]);
       } else {
         const repoSlug = entry.repo
           ? linkedRepos.find((lr) => lr.alias === entry.repo)?.repo
@@ -703,20 +722,35 @@ export async function syncPrStatus(
       }
     }
   }
+  for (const repo of restBackoffRepos) {
+    log.info(`[pr] skipping review comments for repo "${repo || "current"}": rate-limit backoff`);
+  }
   if (reviewTuples.length > 0) {
     log.debug(`[pr] fetching review comments for ${reviewTuples.length} PR(s)`);
-    const reviewResults = await mapWithConcurrency(reviewTuples, 5, (t) =>
-      fetchReviewComments(t.entry.number, t.repoSlug, t.cached?.etag ?? null, projectDir, deps.runGh),
-    );
+    // Once a repo's comments call is rate limited, issue no more for it this round.
     const rateLimitedRepos = new Set<string>();
+    const succeededRepos = new Set<string>();
+    const reviewResults = await mapWithConcurrency(
+      reviewTuples,
+      5,
+      async (t): Promise<ReviewCommentsResult | { kind: "skipped" }> => {
+        if (rateLimitedRepos.has(t.entry.repo)) return { kind: "skipped" };
+        const result = await fetchReviewComments(
+          t.entry.number, t.repoSlug, t.cached?.etag ?? null, projectDir, deps.runGh,
+        );
+        if (result.kind === "failed" && result.rateLimited) rateLimitedRepos.add(t.entry.repo);
+        if (result.kind !== "failed") succeededRepos.add(t.entry.repo);
+        return result;
+      },
+    );
     for (let i = 0; i < reviewTuples.length; i++) {
       const { entry, key, cached } = reviewTuples[i];
       const result = reviewResults[i];
       const comments = result.kind === "fetched" ? result.comments : cached?.comments ?? [];
-      if (result.kind === "failed" && result.rateLimited) {
-        // Leave the cache untouched so the PR is retried once the backoff ends.
-        rateLimitedRepos.add(entry.repo);
-      } else {
+      // A rate-limited or skipped PR leaves the cache untouched, so it is retried
+      // once the backoff ends.
+      const retryLater = result.kind === "skipped" || (result.kind === "failed" && result.rateLimited);
+      if (!retryLater) {
         state.reviewComments.set(key, {
           repo: entry.repo,
           updatedAt: entry.updatedAt,
@@ -726,7 +760,10 @@ export async function syncPrStatus(
       }
       entry.comments = sortByCreatedAt([...entry.comments, ...comments]);
     }
-    for (const repo of rateLimitedRepos) recordGhOutcome(state, repo, "rate_limited", deps.now());
+    for (const repo of rateLimitedRepos) recordGhOutcome(state, repo, "rest", "rate_limited", deps.now());
+    for (const repo of succeededRepos) {
+      if (!rateLimitedRepos.has(repo)) recordGhOutcome(state, repo, "rest", "ok", deps.now());
+    }
   }
   const seen = new Set<string>();
 
@@ -803,14 +840,14 @@ export async function fetchBranchPrStates(
 ): Promise<Map<string, PrEntry["state"][]> | null> {
   const now = deps.now();
   const targets = repoTargets(linkedRepos);
-  if (targets.some(({ label }) => isBackingOff(state, label, now))) {
-    log.debug("[auto-remove] skipping PR state fetch: rate-limit backoff");
+  if (targets.some(({ label }) => isBackingOff(state, label, "graphql", now))) {
+    log.info("[auto-remove] skipping PR state fetch: rate-limit backoff");
     return null;
   }
   const perRepo = await Promise.all(
     targets.map(async ({ label, slug }) => {
       const result = await fetchRepoBranchStates(slug, projectDir, deps.runGh);
-      recordGhOutcome(state, label, ghOutcome(result), now);
+      recordGhOutcome(state, label, "graphql", ghOutcome(result), now);
       return result;
     }),
   );

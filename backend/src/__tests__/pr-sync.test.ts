@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { writeWorktreePrs } from "../adapters/fs";
 import type { PrEntry } from "../domain/model";
 import type { GhRunResult, GhRunner, PrSyncDeps, PrSyncState } from "../services/pr-service";
-import { createPrSyncState, fetchBranchPrStates, syncPrStatus } from "../services/pr-service";
+import { backoffKey, createPrSyncState, fetchBranchPrStates, syncPrStatus } from "../services/pr-service";
 
 interface FakePr {
   number: number;
@@ -24,6 +24,10 @@ class FakeGh {
   readonly calls: GhCall[] = [];
   /** Slugs whose calls fail with a GitHub rate-limit error. */
   readonly rateLimited = new Set<string>();
+  /** Slugs whose REST review-comments calls fail with a 403 rate limit (GraphQL still works). */
+  readonly restRateLimited = new Set<string>();
+  /** PRs (`slug#number`) GraphQL cannot resolve; the batch exits 1 with partial data. */
+  readonly unresolvable = new Set<string>();
   /** Slugs whose calls fail with a non-rate-limit error. */
   readonly failing = new Set<string>();
   /** Final state of PRs that are no longer open, keyed `slug#number`. */
@@ -34,6 +38,10 @@ class FakeGh {
   addRepo(slug: string, prs: FakePr[], cwd?: string): void {
     this.prsBySlug.set(slug, prs);
     if (cwd) this.repoByCwd.set(cwd, slug);
+  }
+
+  setAllUpdatedAt(slug: string, updatedAt: string): void {
+    for (const pr of this.prsBySlug.get(slug) ?? []) pr.updatedAt = updatedAt;
   }
 
   setUpdatedAt(slug: string, number: number, updatedAt: string): void {
@@ -63,7 +71,17 @@ class FakeGh {
       return { timedOut: false, exitCode: 1, stdout: "", stderr: "HTTP 502: Bad Gateway" };
     }
     if (args[0] === "pr" && args[1] === "list") return this.prList(args, slug);
-    if (args[0] === "api" && args[1].includes("/comments")) return this.comments(args, slug);
+    if (args[0] === "api" && args[1].includes("/comments")) {
+      if (this.restRateLimited.has(slug)) {
+        return {
+          timedOut: false,
+          exitCode: 1,
+          stdout: 'HTTP/2.0 403 Forbidden\r\nX-Ratelimit-Remaining: 0\r\n\r\n{"message":"API rate limit exceeded for user ID 1."}',
+          stderr: "gh: API rate limit exceeded for user ID 1. (HTTP 403)",
+        };
+      }
+      return this.comments(args, slug);
+    }
     if (args[0] === "api" && args[1] === "graphql") return this.prStatuses(args, slug);
     return { timedOut: false, exitCode: 1, stdout: "", stderr: `unexpected gh call: ${args.join(" ")}` };
   };
@@ -104,11 +122,22 @@ class FakeGh {
 
   private prStatuses(args: string[], slug: string): GhRunResult {
     const query = args.find((a) => a.startsWith("query=")) ?? "";
-    const repository: Record<string, { state: string; isDraft: boolean }> = {};
+    const repository: Record<string, { state: string; isDraft: boolean } | null> = {};
+    let unresolved = false;
     for (const [, n] of query.matchAll(/pr(\d+):/g)) {
+      if (this.unresolvable.has(`${slug}#${n}`)) {
+        repository[`pr${n}`] = null;
+        unresolved = true;
+        continue;
+      }
       repository[`pr${n}`] = { state: this.closedStates.get(`${slug}#${n}`) ?? "OPEN", isDraft: false };
     }
-    return { timedOut: false, exitCode: 0, stdout: JSON.stringify({ data: { repository } }), stderr: "" };
+    return {
+      timedOut: false,
+      exitCode: unresolved ? 1 : 0,
+      stdout: JSON.stringify({ data: { repository } }),
+      stderr: unresolved ? "gh: Could not resolve to a PullRequest" : "",
+    };
   }
 
   private comments(args: string[], slug: string): GhRunResult {
@@ -333,5 +362,101 @@ describe("syncPrStatus — rate-limit backoff", () => {
     gh.rateLimited.delete(a.slug);
     clock.now = 10_000;
     expect(await fetchBranchPrStates([], a.dir, a.state, deps)).toEqual(new Map([["feat", ["open"]]]));
+  });
+});
+
+describe("syncPrStatus — separate GraphQL and REST backoff", () => {
+  it("keeps growing the REST backoff while only review-comment calls are rate limited", async () => {
+    const gh = new FakeGh();
+    const clock = { now: 0 };
+    const deps = makeDeps(gh, clock);
+    const prs = Array.from({ length: 7 }, (_, i) => ({ number: i + 1, branch: `w${i + 1}`, updatedAt: "t1" }));
+    const a = await makeProject(gh, "a", prs);
+    const restBackoff = (): number | undefined => a.state.backoff.get(backoffKey("", "rest"))?.failures;
+    const storedUpdatedAt = async (): Promise<string> => {
+      const stored = await Bun.file(join(a.gitDirs.get("w1") ?? "", "webmux", "prs.json")).json();
+      return stored[0].updatedAt;
+    };
+
+    await sync(a, deps);
+    expect(gh.commentCalls()).toHaveLength(7);
+
+    gh.restRateLimited.add(a.slug);
+    gh.setAllUpdatedAt(a.slug, "t2");
+    gh.calls.length = 0;
+    await sync(a, deps);
+    // The first rate-limited response stops the round: only the calls already in
+    // flight (concurrency 5) are made.
+    expect(gh.commentCalls()).toHaveLength(5);
+    expect(restBackoff()).toBe(1);
+
+    for (const [now, expectedFailures, expectedCalls] of [
+      [5_000, 1, 0],
+      [10_000, 2, 5],
+      [25_000, 2, 0],
+      [30_000, 3, 5],
+      [60_000, 3, 0],
+    ] as const) {
+      clock.now = now;
+      gh.setAllUpdatedAt(a.slug, `t${now}`);
+      gh.calls.length = 0;
+      await sync(a, deps);
+      expect(gh.commentCalls()).toHaveLength(expectedCalls);
+      expect(restBackoff()).toBe(expectedFailures);
+      // The GraphQL list still runs and PR state keeps updating.
+      expect(gh.calls.filter((c) => c.args[0] === "pr")).toHaveLength(1);
+      expect(await storedUpdatedAt()).toBe(`t${now}`);
+    }
+    expect(a.state.backoff.has(backoffKey("", "graphql"))).toBe(false);
+
+    gh.restRateLimited.delete(a.slug);
+    clock.now = 70_000;
+    gh.calls.length = 0;
+    await sync(a, deps);
+    expect(gh.commentCalls()).toHaveLength(7);
+    expect(restBackoff()).toBeUndefined();
+  });
+
+  it("backs off a rate-limited linked repo while the project repo keeps syncing", async () => {
+    const gh = new FakeGh();
+    const clock = { now: 0 };
+    const deps = makeDeps(gh, clock);
+    const lib = await makeProject(gh, "lib", [{ number: 3, branch: "lib-feat", updatedAt: "t1" }]);
+    const a = await makeProject(gh, "a", [{ number: 12, branch: "feat", updatedAt: "t1" }]);
+    gh.rateLimited.add(lib.slug);
+
+    await sync(a, deps, [lib]);
+    clock.now = 5_000;
+    gh.calls.length = 0;
+    await sync(a, deps, [lib]);
+
+    const listCalls = gh.calls.filter((c) => c.args[0] === "pr");
+    expect(listCalls).toHaveLength(1);
+    expect(listCalls[0].args).not.toContain("--repo");
+    expect(a.state.backoff.has(backoffKey("lib", "graphql"))).toBe(true);
+    expect(a.state.backoff.has(backoffKey("", "graphql"))).toBe(false);
+    const stored = await Bun.file(join(a.gitDirs.get("feat") ?? "", "webmux", "prs.json")).json();
+    expect(stored).toMatchObject([{ number: 12, state: "open" }]);
+  });
+});
+
+describe("syncPrStatus — partial GraphQL stale refresh", () => {
+  it("applies partial data when the batch exits 1 because one PR does not resolve", async () => {
+    const gh = new FakeGh();
+    const deps = makeDeps(gh);
+    const a = await makeProject(gh, "a", [], ["w1"]);
+    await writeWorktreePrs(a.gitDirs.get("w1") ?? "", [storedOpenPr(a.slug, "", 1), storedOpenPr(a.slug, "", 2)]);
+    gh.closedStates.set(`${a.slug}#1`, "MERGED");
+    gh.unresolvable.add(`${a.slug}#2`);
+
+    await sync(a, deps);
+
+    expect(gh.graphqlCalls()).toHaveLength(1);
+    const stored = await Bun.file(join(a.gitDirs.get("w1") ?? "", "webmux", "prs.json")).json();
+    expect(stored).toMatchObject([
+      { number: 1, state: "merged", isDraft: false },
+      { number: 2, state: "open", isDraft: true },
+    ]);
+    expect(a.state.backoff.size).toBe(0);
   });
 });
