@@ -1,5 +1,6 @@
 import type {
   AgentId,
+  AppNotification,
   BuiltInAgentId,
   LinkedLinearIssue,
   OneshotConfig,
@@ -44,6 +45,7 @@ export type {
   LinearIssuesResponse,
   LinkedLinearIssue,
   LinkedRepoInfo,
+  NotificationDismissal,
   OneshotConfig,
   PostWorktreeToLinearRequest,
   PostWorktreeToLinearResponse,
@@ -98,13 +100,19 @@ export interface AskUserQuestionInput {
 }
 
 export interface DiffDialogProps {
+  project: string;
   branch: string;
   ideUrl?: string | null;
   onclose: () => void;
 }
 
-export interface WorktreeInfo {
+/** Identity of a worktree across projects: branch names are only unique per project. */
+export interface WorktreeRef {
+  project: string;
   branch: string;
+}
+
+export interface WorktreeInfo extends WorktreeRef {
   label: string | null;
   baseBranch?: string;
   archived: boolean;
@@ -132,9 +140,47 @@ export interface WorktreeInfo {
   activeTabId: string | null;
 }
 
+/** One project's worktrees from the hub listing; `error` is that project's fetch failure. */
+export interface ProjectWorktreeList {
+  prefix: string;
+  name: string;
+  worktrees: WorktreeInfo[];
+  error: string | null;
+}
+
 export interface WorktreeListRow {
   worktree: WorktreeInfo;
   depth: number;
+}
+
+/** The current project's sidebar list: active rows, then the archived ones
+ *  folded at the bottom. Both pass the search, favorites first, sub-worktrees
+ *  nested. */
+export interface ProjectListRows {
+  active: WorktreeListRow[];
+  archived: WorktreeListRow[];
+}
+
+/** A project's avatar on the sidebar rail. */
+export interface ProjectRailItem {
+  prefix: string;
+  name: string;
+  initials: string;
+  /** Tailwind classes tinting the avatar. */
+  tint: string;
+  /** Active worktrees waiting, in error or finished unread. */
+  needsYou: number;
+  /** An agent works or a worktree is being created. */
+  running: boolean;
+  error: string | null;
+}
+
+/** A repo a project header pulls or opens in the IDE: the project's own
+ *  (`repo: null`) or one of its linked repos (`repo` = alias). */
+export interface ProjectRepo {
+  repo: string | null;
+  label: string;
+  ideUrl: string | null;
 }
 
 export type ToastTone = "info" | "success" | "error";
@@ -153,9 +199,16 @@ export interface UiToastItem extends ToastInput {
 export interface NotificationToastItem extends ToastInput {
   id: string;
   source: "notification";
-  notificationId: number;
+  notification: AppNotification;
   branch: string;
   url?: string;
 }
 
 export type ToastItem = UiToastItem | NotificationToastItem;
+
+/** Boot-time project resolution: a project to open, none registered, or the
+ *  project list could not be fetched (distinct from an empty list). */
+export type InitialProject =
+  | { kind: "project"; prefix: string }
+  | { kind: "none" }
+  | { kind: "error"; message: string };

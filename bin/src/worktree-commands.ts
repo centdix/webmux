@@ -1,9 +1,9 @@
 import * as p from "@clack/prompts";
-import { createApi } from "@webmux/api-contract";
+import { createProjectApi, type ProjectApi } from "@webmux/api-contract";
 import { existsSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { buildSeedFromLinear, defaultSeedFromLinearDeps } from "../../backend/src/services/conversation-export-service";
-import { CommandUsageError, resolveProjectBaseUrl, resolveProjectPrefix, run, withServerConnection } from "./shared";
+import { CommandUsageError, resolveProjectPrefix, resolveServedProjectPrefix, run, serverOrigin, withServerConnection } from "./shared";
 import { readOpenSessionsState, readWorktreeArchiveState, readWorktreeMeta, readWorktreePrs } from "../../backend/src/adapters/fs";
 import type { OpenSessionsState, PrEntry } from "../../backend/src/domain/model";
 import { buildProjectSessionName, buildWorktreeWindowName } from "../../backend/src/adapters/tmux";
@@ -83,9 +83,9 @@ interface WorktreeCommandDependencies {
   stderr?: (message: string) => void;
   switchToTmuxWindow?: (projectDir: string, branch: string) => void;
   confirmPrune?: (worktreeCount: number) => Promise<boolean>;
-  /** Resolve the project-scoped base URL for server-backed commands (send/tab).
+  /** Resolve the served project's prefix for server-backed commands (send/tab/port).
    *  Injectable so tests can exercise the HTTP shape without a live server. */
-  resolveBaseUrl?: (port: number, projectDir: string) => Promise<string>;
+  resolveServedProject?: (port: number, projectDir: string) => Promise<string>;
   /** Resolve the project's route prefix so control.env written by in-process
    *  commands (add/open/refresh) matches the dashboard's prefixed routes.
    *  Returns undefined when it can't be resolved (no server), so no control URL
@@ -1079,7 +1079,11 @@ export async function runWorktreeCommand(
     ?? ((options) => createWebmuxRuntime({ ...options, portRegistrations: createPortRegistrationService() }));
   const stdout = deps.stdout ?? ((message: string) => console.log(message));
   const stderr = deps.stderr ?? ((message: string) => console.error(message));
-  const resolveBaseUrl = deps.resolveBaseUrl ?? resolveProjectBaseUrl;
+  const resolveServedProject = deps.resolveServedProject ?? resolveServedProjectPrefix;
+  const connectProjectApi = async (): Promise<ProjectApi> => createProjectApi(
+    await withServerConnection(context.port, () => resolveServedProject(context.port, context.projectDir)),
+    { origin: serverOrigin(context.port) },
+  );
   const switchToTmuxWindow = deps.switchToTmuxWindow ?? defaultSwitchToTmuxWindow;
   const confirmPrune = deps.confirmPrune ?? defaultConfirmPrune;
   const readOpenSessions = deps.readOpenSessions ?? readOpenSessionsState;
@@ -1302,7 +1306,7 @@ export async function runWorktreeCommand(
         return 0;
       }
 
-      const api = createApi(await withServerConnection(context.port, () => resolveBaseUrl(context.port, context.projectDir)));
+      const api = await connectProjectApi();
       await withServerConnection(context.port, () =>
         api.sendWorktreePrompt({
           params: { name: parsed.branch },
@@ -1324,7 +1328,7 @@ export async function runWorktreeCommand(
         return 0;
       }
 
-      const api = createApi(await withServerConnection(context.port, () => resolveBaseUrl(context.port, context.projectDir)));
+      const api = await connectProjectApi();
       await withServerConnection(context.port, async () => {
         if (parsed.action === "new") {
           const { tab } = await api.createWorktreeTab({ params: { name: parsed.branch } });
@@ -1365,7 +1369,7 @@ export async function runWorktreeCommand(
         return 0;
       }
 
-      const api = createApi(await withServerConnection(context.port, () => resolveBaseUrl(context.port, context.projectDir)));
+      const api = await connectProjectApi();
       await withServerConnection(context.port, async () => {
         if (parsed.action === "register") {
           const { port } = await api.registerWorktreePort({

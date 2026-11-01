@@ -29,10 +29,18 @@ export function isValidEnvKey(key: string): boolean {
   return UNSAFE_ENV_KEY_RE.test(key);
 }
 
-/** Path segments that the server's route map already owns (the hub routes). A
- *  derived project prefix must never collide with these or `/<prefix>` would
- *  shadow them. */
-export const RESERVED_PROJECT_PREFIXES: ReadonlySet<string> = new Set(["api", "ws", "assets"]);
+/** Path segments a derived project prefix must never take. `api`, `ws` and
+ *  `assets` are owned at the root (the SPA still lives under `/<prefix>/`);
+ *  `init`, `worktrees` and `migrate` are static hub routes under
+ *  `/api/projects/`, where every project's routes are mounted. */
+export const RESERVED_PROJECT_PREFIXES: ReadonlySet<string> = new Set([
+  "api",
+  "ws",
+  "assets",
+  "init",
+  "worktrees",
+  "migrate",
+]);
 
 /** Sanitize a string into a URL-path-friendly prefix: lowercase, hyphenated,
  *  alphanumeric only. Returns empty if nothing usable remains. */

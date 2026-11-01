@@ -1,4 +1,16 @@
-import { AgentsUiConversationEventSchema, apiPaths, createApi } from "@webmux/api-contract";
+import {
+  AgentsUiConversationEventSchema,
+  AppNotificationSchema,
+  NotificationDismissalSchema,
+  createHubApi,
+  createProjectApi,
+  hubApiPaths,
+  projectApiBasePath,
+  projectApiPaths,
+  type ProjectApi,
+} from "@webmux/api-contract";
+import { pickInitialProject, readLocationHash } from "./project-location";
+import { errorMessage, loadLastProject } from "./utils";
 import type {
   AgentDetails,
   AgentResponse,
@@ -9,12 +21,15 @@ import type {
   AgentsUiWorktreeConversationResponse,
   AppNotification,
   FileUploadResult,
+  InitialProject,
   InstanceSummary,
+  NotificationDismissal,
   PostWorktreeToLinearResponse,
   PostWorktreeToLinearTarget,
   ProjectInitPhase,
   ProjectInitState,
   ProjectSummary,
+  ProjectWorktreeList,
   ProjectWorktreeSnapshot,
   UpsertCustomAgentRequest,
   ValidateCustomAgentResponse,
@@ -22,20 +37,21 @@ import type {
   WorktreeTab,
 } from "./types";
 
-/** The active project's URL prefix, taken from the first path segment (the
- *  server serves each project under `/<prefix>/...` on the shared port). Empty
- *  when at the root before the bootstrap redirect picks a project. */
-export const activePrefix: string = window.location.pathname.split("/")[1] ?? "";
+const projectApis = new Map<string, ProjectApi>();
 
-/** Base path for the active project's API + WebSocket calls. */
-export const apiBase: string = activePrefix ? `/${activePrefix}` : "";
-
-/** Per-project client — every worktree/agent/config call is scoped to the
- *  active project. */
-export const api = createApi(apiBase);
+/** Memoised per-project client: every worktree/agent/config call names the
+ *  project it targets (no module-level "active project"). */
+export function projectApi(project: string): ProjectApi {
+  let client = projectApis.get(project);
+  if (!client) {
+    client = createProjectApi(project);
+    projectApis.set(project, client);
+  }
+  return client;
+}
 
 /** Hub client — project list/add/remove + the migration sensor are global (no prefix). */
-const hubApi = createApi("");
+const hubApi = createHubApi();
 
 function mapAgentStatus(status: string): string {
   switch (status) {
@@ -54,8 +70,9 @@ function mapAgentStatus(status: string): string {
   }
 }
 
-function mapWorktree(snapshot: ProjectWorktreeSnapshot): WorktreeInfo {
+function mapWorktree(snapshot: ProjectWorktreeSnapshot, project: string): WorktreeInfo {
   return {
+    project,
     branch: snapshot.branch,
     label: snapshot.label,
     ...(snapshot.baseBranch ? { baseBranch: snapshot.baseBranch } : {}),
@@ -85,36 +102,45 @@ function mapWorktree(snapshot: ProjectWorktreeSnapshot): WorktreeInfo {
   };
 }
 
-export async function createWorktreeTab(branch: string): Promise<WorktreeTab> {
-  const response = await api.createWorktreeTab({ params: { name: branch } });
+export async function createWorktreeTab(project: string, branch: string): Promise<WorktreeTab> {
+  const response = await projectApi(project).createWorktreeTab({ params: { name: branch } });
   return response.tab;
 }
 
-export function selectWorktreeTab(branch: string, tabId: string): Promise<void> {
-  return api.selectWorktreeTab({ params: { name: branch, tabId } }).then(() => undefined);
+export function selectWorktreeTab(project: string, branch: string, tabId: string): Promise<void> {
+  return projectApi(project).selectWorktreeTab({ params: { name: branch, tabId } }).then(() => undefined);
 }
 
-export function deleteWorktreeTab(branch: string, tabId: string): Promise<void> {
-  return api.deleteWorktreeTab({ params: { name: branch, tabId } }).then(() => undefined);
+export function deleteWorktreeTab(project: string, branch: string, tabId: string): Promise<void> {
+  return projectApi(project).deleteWorktreeTab({ params: { name: branch, tabId } }).then(() => undefined);
 }
 
 export function postWorktreeToLinear(
+  project: string,
   branch: string,
   target: PostWorktreeToLinearTarget,
 ): Promise<PostWorktreeToLinearResponse> {
-  return api.postWorktreeToLinear({
+  return projectApi(project).postWorktreeToLinear({
     params: { name: branch },
     body: { target },
   });
 }
 
-export async function fetchWorktrees(): Promise<WorktreeInfo[]> {
-  const response = await api.fetchWorktrees();
-  return response.worktrees.map((worktree) => mapWorktree(worktree));
+/** Every project's worktrees in one hub call, in registry order — the
+ *  dashboard's single worktree poll. Every poll counts as dashboard activity;
+ *  `focus` (the project being shown) speeds up that project's PR sync. */
+export async function fetchAllProjectWorktrees(focus?: string): Promise<ProjectWorktreeList[]> {
+  const response = await hubApi.fetchAllProjectWorktrees({ query: { focus } });
+  return response.projects.map((project) => ({
+    prefix: project.prefix,
+    name: project.name,
+    worktrees: project.worktrees.map((worktree) => mapWorktree(worktree, project.prefix)),
+    error: project.error,
+  }));
 }
 
-export async function setWorktreeLabel(branch: string, label: string | null): Promise<string | null> {
-  const response = await api.setWorktreeLabel({
+export async function setWorktreeLabel(project: string, branch: string, label: string | null): Promise<string | null> {
+  const response = await projectApi(project).setWorktreeLabel({
     params: { name: branch },
     body: { label },
   });
@@ -122,46 +148,48 @@ export async function setWorktreeLabel(branch: string, label: string | null): Pr
 }
 
 export async function setWorktreeProfile(
+  project: string,
   branch: string,
   profile: string,
 ): Promise<{ profile: string; restarted: boolean }> {
-  const response = await api.setWorktreeProfile({
+  const response = await projectApi(project).setWorktreeProfile({
     params: { name: branch },
     body: { profile },
   });
   return { profile: response.profile, restarted: response.restarted };
 }
 
-export function attachWorktreeConversation(branch: string): Promise<AgentsUiWorktreeConversationResponse> {
-  return api.attachAgentsWorktreeConversation({
+export function attachWorktreeConversation(project: string, branch: string): Promise<AgentsUiWorktreeConversationResponse> {
+  return projectApi(project).attachAgentsWorktreeConversation({
     params: { name: branch },
   });
 }
 
-export function fetchWorktreeConversationHistory(branch: string): Promise<AgentsUiWorktreeConversationResponse> {
-  return api.fetchAgentsWorktreeConversationHistory({
+export function fetchWorktreeConversationHistory(project: string, branch: string): Promise<AgentsUiWorktreeConversationResponse> {
+  return projectApi(project).fetchAgentsWorktreeConversationHistory({
     params: { name: branch },
   });
 }
 
 export function sendWorktreeConversationMessage(
+  project: string,
   branch: string,
   body: AgentsUiSendMessageRequest,
 ): Promise<AgentsUiSendMessageResponse> {
-  return api.sendAgentsWorktreeConversationMessage({
+  return projectApi(project).sendAgentsWorktreeConversationMessage({
     params: { name: branch },
     body,
   });
 }
 
-export function interruptWorktreeConversation(branch: string): Promise<AgentsUiInterruptResponse> {
-  return api.interruptAgentsWorktreeConversation({
+export function interruptWorktreeConversation(project: string, branch: string): Promise<AgentsUiInterruptResponse> {
+  return projectApi(project).interruptAgentsWorktreeConversation({
     params: { name: branch },
   });
 }
 
-export function refreshWorktreeAgentTerminal(branch: string): Promise<void> {
-  return api.refreshWorktreeAgentTerminal({
+export function refreshWorktreeAgentTerminal(project: string, branch: string): Promise<void> {
+  return projectApi(project).refreshWorktreeAgentTerminal({
     params: { name: branch },
   }).then(() => undefined);
 }
@@ -170,7 +198,17 @@ function withWorktreeName(path: string, branch: string): string {
   return path.replace(":name", encodeURIComponent(branch));
 }
 
+function projectSocketUrl(project: string, path: string): string {
+  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+  return `${protocol}://${window.location.host}${projectApiBasePath(project)}${path}`;
+}
+
+export function terminalSocketUrl(project: string, worktree: string): string {
+  return projectSocketUrl(project, projectApiPaths.streamTerminal.replace(":worktree", encodeURIComponent(worktree)));
+}
+
 export function connectWorktreeConversationStream(
+  project: string,
   branch: string,
   callbacks: {
     onEvent: (event: AgentsUiConversationEvent) => void;
@@ -179,9 +217,7 @@ export function connectWorktreeConversationStream(
   },
 ): () => void {
   const socket = new WebSocket(
-    `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}${apiBase}${
-      withWorktreeName(apiPaths.streamAgentsWorktreeConversation, branch)
-    }`,
+    projectSocketUrl(project, withWorktreeName(projectApiPaths.streamAgentsWorktreeConversation, branch)),
   );
   let closedByClient = false;
 
@@ -210,24 +246,24 @@ export function connectWorktreeConversationStream(
   };
 }
 
-export function fetchAgents(): Promise<AgentDetails[]> {
-  return api.fetchAgents().then((response) => response.agents);
+export function fetchAgents(project: string): Promise<AgentDetails[]> {
+  return projectApi(project).fetchAgents().then((response) => response.agents);
 }
 
-export function createAgent(body: UpsertCustomAgentRequest): Promise<AgentResponse> {
-  return api.createAgent({ body });
+export function createAgent(project: string, body: UpsertCustomAgentRequest): Promise<AgentResponse> {
+  return projectApi(project).createAgent({ body });
 }
 
-export function updateAgent(id: string, body: UpsertCustomAgentRequest): Promise<AgentResponse> {
-  return api.updateAgent({ params: { id }, body });
+export function updateAgent(project: string, id: string, body: UpsertCustomAgentRequest): Promise<AgentResponse> {
+  return projectApi(project).updateAgent({ params: { id }, body });
 }
 
-export function deleteAgent(id: string): Promise<void> {
-  return api.deleteAgent({ params: { id } }).then(() => undefined);
+export function deleteAgent(project: string, id: string): Promise<void> {
+  return projectApi(project).deleteAgent({ params: { id } }).then(() => undefined);
 }
 
-export function validateAgent(body: UpsertCustomAgentRequest): Promise<ValidateCustomAgentResponse> {
-  return api.validateAgent({ body });
+export function validateAgent(project: string, body: UpsertCustomAgentRequest): Promise<ValidateCustomAgentResponse> {
+  return projectApi(project).validateAgent({ body });
 }
 
 /** Other webmux servers running on this machine (migration sensor) — drives the
@@ -286,61 +322,65 @@ export async function removeProject(prefix: string): Promise<void> {
   await hubApi.removeProject({ params: { prefix } });
 }
 
-export type ProjectBootstrap = "ready" | "redirecting" | "no-projects";
-
-/** Decide what to mount before the app loads, based on the URL prefix and the
- *  known projects:
- *  - `ready`        — the URL points at a real project; mount the dashboard.
- *  - `redirecting`  — the URL has no/unknown prefix but projects exist; a
- *                     redirect to the first project is in flight, mount nothing.
- *  - `no-projects`  — nothing is registered; mount the empty state so the
- *                     dashboard doesn't boot into 404-ing per-project calls. */
-export async function ensureProjectPrefix(): Promise<ProjectBootstrap> {
-  const projects = await fetchProjects().catch((): ProjectSummary[] => []);
-  if (projects.some((project) => project.prefix === activePrefix)) return "ready";
-  const target = projects[0]?.prefix;
-  if (!target) return "no-projects";
-  window.location.replace(`/${target}/`);
-  return "redirecting";
+/** Project to open at boot (see `pickInitialProject`); `none` when nothing is
+ *  registered, so the empty state mounts instead of a dashboard whose every
+ *  per-project call would 404; `error` when the list itself failed to load. */
+export async function resolveInitialProject(): Promise<InitialProject> {
+  let projects: ProjectSummary[];
+  try {
+    projects = await fetchProjects();
+  } catch (error) {
+    return { kind: "error", message: errorMessage(error) };
+  }
+  const prefix = pickInitialProject(
+    projects.map((project) => project.prefix),
+    readLocationHash()?.project ?? null,
+    loadLastProject(),
+  );
+  return prefix ? { kind: "project", prefix } : { kind: "none" };
 }
 
+/** Subscribe to the hub's merged notification stream: every project's
+ *  notifications and dismissals, each naming its project. */
 export function subscribeNotifications(
   onNotification: (n: AppNotification) => void,
-  onDismiss: (id: number) => void,
+  onDismiss: (dismissal: NotificationDismissal) => void,
   onInitial?: (n: AppNotification) => void,
 ): () => void {
-  const es = new EventSource(`${apiBase}/api/notifications/stream`);
+  const es = new EventSource(hubApiPaths.streamNotifications);
 
   es.addEventListener("initial", (e: MessageEvent) => {
     try {
-      const n = JSON.parse(e.data as string) as AppNotification;
-      onInitial?.(n);
+      onInitial?.(AppNotificationSchema.parse(JSON.parse(e.data)));
     } catch { /* ignore malformed SSE data */ }
   });
 
   es.addEventListener("notification", (e: MessageEvent) => {
     try {
-      const n = JSON.parse(e.data as string) as AppNotification;
-      onNotification(n);
+      onNotification(AppNotificationSchema.parse(JSON.parse(e.data)));
     } catch { /* ignore malformed SSE data */ }
   });
 
   es.addEventListener("dismiss", (e: MessageEvent) => {
     try {
-      const { id } = JSON.parse(e.data as string) as { id: number };
-      onDismiss(id);
+      onDismiss(NotificationDismissalSchema.parse(JSON.parse(e.data)));
     } catch { /* ignore malformed SSE data */ }
   });
 
   return () => es.close();
 }
 
-export async function uploadFiles(worktree: string, files: File[]): Promise<FileUploadResult> {
+/** Dismiss on the project that emitted the notification (ids are per project). */
+export async function dismissNotification(notification: AppNotification): Promise<void> {
+  await projectApi(notification.project).dismissNotification({ params: { id: notification.id } });
+}
+
+export async function uploadFiles(project: string, worktree: string, files: File[]): Promise<FileUploadResult> {
   const form = new FormData();
   for (const file of files) {
     form.append("files", file);
   }
-  const res = await fetch(`${apiBase}/api/worktrees/${encodeURIComponent(worktree)}/upload`, {
+  const res = await fetch(`${projectApiBasePath(project)}${withWorktreeName(projectApiPaths.uploadWorktreeFiles, worktree)}`, {
     method: "POST",
     body: form,
   });

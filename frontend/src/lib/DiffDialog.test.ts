@@ -1,14 +1,15 @@
 import { cleanup, render, screen } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("./api", () => ({
-  api: {
-    fetchWorktreeDiff: vi.fn(),
-  },
-}));
+vi.mock("./api", () => {
+  const client = { fetchWorktreeDiff: vi.fn() };
+  return { projectApi: vi.fn(() => client) };
+});
 
 import DiffDialog from "./DiffDialog.svelte";
-import { api } from "./api";
+import { projectApi } from "./api";
+
+const api = projectApi("myproject");
 
 const originalDialogShowModal = HTMLDialogElement.prototype.showModal;
 const originalDialogClose = HTMLDialogElement.prototype.close;
@@ -40,6 +41,7 @@ describe("DiffDialog", () => {
 
     render(DiffDialog, {
       props: {
+        project: "myproject",
         branch: "feature/status",
         ideUrl: "cursor://file/tmp/feature/status",
         onclose: vi.fn(),
@@ -50,6 +52,7 @@ describe("DiffDialog", () => {
       node?.tagName === "PRE" && node.textContent?.includes("src/new-file.ts") === true
     );
 
+    expect(projectApi).toHaveBeenCalledWith("myproject");
     expect(screen.getByRole("button", { name: "Git status (2)" })).toHaveClass("active");
     expect(statusOutput.textContent).toContain("A  src/new-file.ts");
     expect(statusOutput.textContent).toContain("D  src/old-file.ts");
@@ -69,6 +72,7 @@ describe("DiffDialog", () => {
 
     render(DiffDialog, {
       props: {
+        project: "myproject",
         branch: "feature/status",
         ideUrl: "vscode://file/tmp/feature/status",
         onclose: vi.fn(),
@@ -94,6 +98,7 @@ describe("DiffDialog", () => {
 
     const { container } = render(DiffDialog, {
       props: {
+        project: "myproject",
         branch: "feature/diff-colors",
         onclose: vi.fn(),
       },

@@ -6,6 +6,8 @@ import {
   type ManagedProject,
   type ProjectLoopController,
 } from "../services/project-manager";
+import { NotificationHub, type NotificationHubEvent } from "../services/notification-hub-service";
+import { NotificationService } from "../services/notification-service";
 
 interface FakeRuntime {
   config: { name: string };
@@ -56,6 +58,7 @@ function makeManager(initial: ProjectEntry[] = []): {
         stopLight: (): number => calls.push("stopLight"),
         startHeavy: (): number => calls.push("startHeavy"),
         stopHeavy: (): number => calls.push("stopHeavy"),
+        dispose: (): number => calls.push("dispose"),
       };
     },
   });
@@ -153,7 +156,7 @@ describe("ProjectManager", () => {
 
     expect(manager.list()).toEqual([]);
     expect(registry.entries).toEqual([]);
-    expect(loopCalls.get("alpha")).toEqual(["startLight", "stopHeavy", "stopLight"]);
+    expect(loopCalls.get("alpha")).toEqual(["startLight", "stopHeavy", "stopLight", "dispose"]);
   });
 
   it("remove is a no-op for an unknown prefix", () => {
@@ -198,5 +201,42 @@ describe("ProjectManager", () => {
     expect(manager.getByPrefix("alpha")?.entry.name).toBe("name:/repo/alpha");
     // persist=false: the registry file is left untouched (beta stays known).
     expect(registry.entries.map((e) => e.path)).toEqual(["/repo/alpha", "/repo/beta"]);
+  });
+
+  it("drops a project's hub source on remove but not when it goes idle", () => {
+    const hub = new NotificationHub();
+    const manager = new ProjectManager<FakeRuntime & { runtimeNotifications: NotificationService }>({
+      registry: fakeRegistry(),
+      port: 5111,
+      resolveRoot: (path) => path,
+      createRuntime: ({ prefix }) => ({
+        config: { name: prefix },
+        runtimeNotifications: new NotificationService(prefix),
+      }),
+      createLoops: (project): ProjectLoopController => {
+        hub.addSource(project.runtime.runtimeNotifications);
+        return {
+          startLight: (): void => {},
+          stopLight: (): void => {},
+          startHeavy: (): void => {},
+          stopHeavy: (): void => {},
+          dispose: (): void => hub.removeSource(project.prefix),
+        };
+      },
+    });
+    const project = manager.add("/repo/alpha");
+    project.runtime.runtimeNotifications.notify({ branch: "main", type: "agent_stopped", message: "stopped" });
+    const events: NotificationHubEvent[] = [];
+    hub.subscribe((event) => events.push(event));
+
+    manager.setActive("alpha", true);
+    manager.setActive("alpha", false);
+    expect(events.map(({ event }) => event)).toEqual(["initial"]);
+
+    manager.remove("alpha");
+    expect(events.map(({ event, data }) => [event, data.project, data.id])).toEqual([
+      ["initial", "alpha", 1],
+      ["dismiss", "alpha", 1],
+    ]);
   });
 });

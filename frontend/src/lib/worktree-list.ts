@@ -1,10 +1,6 @@
-import type { WorktreeInfo, WorktreeListRow } from "./types";
+import type { ProjectListRows, WorktreeInfo, WorktreeListRow } from "./types";
 import { searchMatch } from "./utils";
-
-export interface FilterWorktreesOptions {
-  query: string;
-  showArchived: boolean;
-}
+import { worktreeKey } from "./worktree-ref";
 
 function parentBranchOf(worktree: WorktreeInfo, worktreesByBranch: Map<string, WorktreeInfo>): string | null {
   if (!worktree.baseBranch || worktree.baseBranch === worktree.branch) {
@@ -29,18 +25,14 @@ export function matchesWorktreeSearch(worktree: WorktreeInfo, query: string): bo
   ].some((value) => searchMatch(trimmedQuery, value));
 }
 
-export function filterWorktrees(worktrees: WorktreeInfo[], options: FilterWorktreesOptions): WorktreeInfo[] {
-  return worktrees.filter((worktree) =>
-    (options.showArchived || !worktree.archived) && matchesWorktreeSearch(worktree, options.query)
-  );
-}
-
-export function countArchivedMatches(worktrees: WorktreeInfo[], query: string): number {
-  return worktrees.filter((worktree) => worktree.archived && matchesWorktreeSearch(worktree, query)).length;
-}
-
 export const OVERFLOW_STATUS_BAR_STATUSES = ["waiting", "error", "done-unread"] as const;
 export type OverflowStatusBarStatus = (typeof OVERFLOW_STATUS_BAR_STATUSES)[number];
+
+export const OVERFLOW_STATUS_LABELS: Record<OverflowStatusBarStatus, string> = {
+  waiting: "waiting",
+  error: "error",
+  "done-unread": "unread",
+};
 
 export function rowShowsAgentStatus(worktree: WorktreeInfo): boolean {
   return worktree.mux === "✓" && !worktree.creating;
@@ -48,51 +40,65 @@ export function rowShowsAgentStatus(worktree: WorktreeInfo): boolean {
 
 // The countable mark a row contributes to the overflow bars, mirroring the per-row
 // indicator: waiting, error, or a done run that hasn't been viewed yet (the blue dot).
+// Sets below hold `worktreeKey`s, so rows of every project can share them.
 export function overflowStatusOf(
   worktree: WorktreeInfo,
-  notifiedBranches: Set<string>,
+  notifiedKeys: ReadonlySet<string>,
 ): OverflowStatusBarStatus | null {
   if (!rowShowsAgentStatus(worktree)) return null;
   if (worktree.agent === "waiting") return "waiting";
   if (worktree.agent === "error") return "error";
-  if (worktree.agent === "done" && notifiedBranches.has(worktree.branch)) return "done-unread";
+  if (worktree.agent === "done" && notifiedKeys.has(worktreeKey(worktree))) return "done-unread";
   return null;
 }
 
 export function countAgentStatusesIn(
   rows: WorktreeListRow[],
-  branches: Set<string>,
-  notifiedBranches: Set<string> = new Set(),
+  keys?: ReadonlySet<string>,
+  notifiedKeys: ReadonlySet<string> = new Set(),
 ): Record<OverflowStatusBarStatus, number> {
   const counts: Record<OverflowStatusBarStatus, number> = { waiting: 0, error: 0, "done-unread": 0 };
   for (const { worktree } of rows) {
-    if (!branches.has(worktree.branch)) continue;
-    const status = overflowStatusOf(worktree, notifiedBranches);
+    if (keys && !keys.has(worktreeKey(worktree))) continue;
+    const status = overflowStatusOf(worktree, notifiedKeys);
     if (status) counts[status]++;
   }
   return counts;
 }
 
-export function branchesWithAgentStatus(
+export function keysWithAgentStatus(
   rows: WorktreeListRow[],
   status: OverflowStatusBarStatus,
-  branches?: Set<string>,
-  notifiedBranches: Set<string> = new Set(),
+  keys?: ReadonlySet<string>,
+  notifiedKeys: ReadonlySet<string> = new Set(),
 ): string[] {
   return rows
-    .filter(
-      ({ worktree }) =>
-        overflowStatusOf(worktree, notifiedBranches) === status &&
-        (!branches || branches.has(worktree.branch)),
-    )
-    .map(({ worktree }) => worktree.branch);
+    .map(({ worktree }) => ({ worktree, key: worktreeKey(worktree) }))
+    .filter(({ worktree, key }) => overflowStatusOf(worktree, notifiedKeys) === status && (!keys || keys.has(key)))
+    .map(({ key }) => key);
 }
 
-export function sortFavoritesFirst(worktrees: WorktreeInfo[], favorites: Set<string>): WorktreeInfo[] {
+export function sortFavoritesFirst(worktrees: WorktreeInfo[], favorites: ReadonlySet<string>): WorktreeInfo[] {
   return [
-    ...worktrees.filter((worktree) => favorites.has(worktree.branch)),
-    ...worktrees.filter((worktree) => !favorites.has(worktree.branch)),
+    ...worktrees.filter((worktree) => favorites.has(worktreeKey(worktree))),
+    ...worktrees.filter((worktree) => !favorites.has(worktreeKey(worktree))),
   ];
+}
+
+/** The current project's rows: those matching the search, favorites first,
+ *  split into active and archived (each nesting its own sub-worktrees). */
+export function buildProjectListRows(
+  worktrees: WorktreeInfo[],
+  options: { query: string; favorites: ReadonlySet<string> },
+): ProjectListRows {
+  const matching = sortFavoritesFirst(
+    worktrees.filter((worktree) => matchesWorktreeSearch(worktree, options.query)),
+    options.favorites,
+  );
+  return {
+    active: buildWorktreeListRows(matching.filter((worktree) => !worktree.archived)),
+    archived: buildWorktreeListRows(matching.filter((worktree) => worktree.archived)),
+  };
 }
 
 export function buildWorktreeListRows(worktrees: WorktreeInfo[]): WorktreeListRow[] {

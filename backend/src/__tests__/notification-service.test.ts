@@ -1,15 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { NotificationService } from "../services/notification-service";
-
-async function readChunk(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> {
-  const chunk = await reader.read();
-  expect(chunk.done).toBe(false);
-  return new TextDecoder().decode(chunk.value);
-}
+import { NotificationService, type NotificationEvent } from "../services/notification-service";
 
 describe("NotificationService", () => {
   it("creates notifications only for user-visible runtime events", () => {
-    const notifications = new NotificationService();
+    const notifications = new NotificationService("webmux");
 
     const started = notifications.recordEvent(
       { worktreeId: "wt_search", branch: "feature/search", type: "agent_status_changed", lifecycle: "running" },
@@ -24,7 +18,7 @@ describe("NotificationService", () => {
   });
 
   it("stores pr_opened and runtime_error notifications with details", () => {
-    const notifications = new NotificationService();
+    const notifications = new NotificationService("webmux");
 
     const pr = notifications.recordEvent(
       { worktreeId: "wt_search", branch: "feature/search", type: "pr_opened", url: "https://github.com/org/repo/pull/123" },
@@ -39,7 +33,7 @@ describe("NotificationService", () => {
   });
 
   it("dismisses notifications by id", () => {
-    const notifications = new NotificationService();
+    const notifications = new NotificationService("webmux");
     const item = notifications.recordEvent(
       { worktreeId: "wt_search", branch: "feature/search", type: "agent_stopped" },
     );
@@ -49,33 +43,31 @@ describe("NotificationService", () => {
     expect(notifications.list()).toHaveLength(0);
   });
 
-  it("streams initial notifications and broadcasts live updates", async () => {
-    const notifications = new NotificationService();
-    const initial = notifications.recordEvent(
+  it("stamps the project prefix on every notification", () => {
+    const notifications = new NotificationService("webmux");
+    const item = notifications.recordEvent(
       { worktreeId: "wt_search", branch: "feature/search", type: "agent_stopped" },
     );
 
-    const response = notifications.stream();
-    const reader = response.body!.getReader();
+    expect(item?.project).toBe("webmux");
+    expect(notifications.list()[0]?.project).toBe("webmux");
+  });
 
-    const initialChunk = await readChunk(reader);
-    expect(initialChunk).toContain("event: initial");
-    expect(initialChunk).toContain(`\"id\":${initial!.id}`);
+  it("emits live notification and dismiss events to subscribers until unsubscribed", () => {
+    const notifications = new NotificationService("webmux");
+    const events: NotificationEvent[] = [];
+    const unsubscribe = notifications.subscribe((event) => events.push(event));
 
-    const liveChunkPromise = readChunk(reader);
     const live = notifications.recordEvent(
       { worktreeId: "wt_search", branch: "feature/search", type: "pr_opened", url: "https://github.com/org/repo/pull/123" },
     );
-    const liveChunk = await liveChunkPromise;
-    expect(liveChunk).toContain("event: notification");
-    expect(liveChunk).toContain(`\"id\":${live!.id}`);
+    notifications.dismiss(live!.id);
+    unsubscribe();
+    notifications.recordEvent({ worktreeId: "wt_search", branch: "feature/search", type: "agent_stopped" });
 
-    const dismissChunkPromise = readChunk(reader);
-    expect(notifications.dismiss(live!.id)).toBe(true);
-    const dismissChunk = await dismissChunkPromise;
-    expect(dismissChunk).toContain("event: dismiss");
-    expect(dismissChunk).toContain(`\"id\":${live!.id}`);
-
-    await reader.cancel();
+    expect(events).toEqual([
+      { event: "notification", data: live! },
+      { event: "dismiss", data: { project: "webmux", id: live!.id } },
+    ]);
   });
 });

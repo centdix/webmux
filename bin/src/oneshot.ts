@@ -1,19 +1,20 @@
 import * as p from "@clack/prompts";
-import { apiPaths, AgentsUiConversationEventSchema, createApi, parseLinearTarget, type AgentSummary, type AgentsUiConversationMessage, type AgentsUiConversationEvent, type AgentsUiWorktreeConversationResponse, type CreateWorktreeRequest, type PostWorktreeToLinearTarget, type ProjectWorktreeSnapshot } from "@webmux/api-contract";
+import { AgentsUiConversationEventSchema, createProjectApi, projectApiBasePath, projectApiPaths, type ProjectApi, parseLinearTarget, type AgentSummary, type AgentsUiConversationMessage, type AgentsUiConversationEvent, type AgentsUiWorktreeConversationResponse, type CreateWorktreeRequest, type PostWorktreeToLinearTarget, type ProjectWorktreeSnapshot } from "@webmux/api-contract";
 import { createLinearIssue, fetchTeamByKey, type LinearIssue } from "../../backend/src/services/linear-service";
 import { buildSeedFromLinear, defaultSeedFromLinearDeps } from "../../backend/src/services/conversation-export-service";
 import { findDuplicateLinearIssue, polishLinearIssueTitle } from "../../backend/src/services/linear-title-service";
-import { CommandUsageError, formatServerError, resolveProjectBaseUrl } from "./shared";
+import { CommandUsageError, formatServerError, resolveServedProjectPrefix, serverOrigin } from "./shared";
 
-// The server serves each project under `/<prefix>`. `runOneshot` resolves the
-// scoped base once and stashes it here so every helper (api calls + the agents
-// WebSocket) targets the right project. Null → unscoped fallback (port only).
-let oneshotBaseUrl: string | null = null;
-function oneshotApi(port: number): ReturnType<typeof createApi> {
-  return createApi(oneshotBaseUrl ?? `http://localhost:${port}`);
+// The server mounts each project under `/api/projects/<prefix>`. `runOneshot`
+// resolves the served project once and stashes it here so every helper (api
+// calls + the agents WebSocket) targets the right project.
+let oneshotProject: string | null = null;
+function requireOneshotProject(): string {
+  if (oneshotProject === null) throw new Error("oneshot project not resolved");
+  return oneshotProject;
 }
-function oneshotPathPrefix(): string {
-  return oneshotBaseUrl ? new URL(oneshotBaseUrl).pathname.replace(/\/$/, "") : "";
+function oneshotApi(port: number): ProjectApi {
+  return createProjectApi(requireOneshotProject(), { origin: serverOrigin(port) });
 }
 
 export interface ParsedOneshotCommand {
@@ -449,7 +450,7 @@ function streamConversation(
 
   const connect = (): void => {
     if (closed) return;
-    const url = `ws://localhost:${port}${oneshotPathPrefix()}${apiPaths.streamAgentsWorktreeConversation.replace(":name", encodeURIComponent(branch))}`;
+    const url = `ws://localhost:${port}${projectApiBasePath(requireOneshotProject())}${projectApiPaths.streamAgentsWorktreeConversation.replace(":name", encodeURIComponent(branch))}`;
     const ws = new WebSocket(url);
     socket = ws;
     ws.addEventListener("open", () => {
@@ -778,7 +779,7 @@ export async function runOneshot(parsed: ParsedOneshotCommand, port: number): Pr
   };
 
   try {
-    oneshotBaseUrl = await resolveProjectBaseUrl(port);
+    oneshotProject = await resolveServedProjectPrefix(port);
   } catch (error) {
     stderr(`[${timestamp()}] [error] ${formatServerError(error, port)}`);
     return 1;

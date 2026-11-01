@@ -1,21 +1,63 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { PrEntry } from "./types";
+import type { AppConfig, PrEntry } from "./types";
 import {
+  LAST_PROJECT_STORAGE_KEY,
   LAST_SELECTED_WORKTREE_STORAGE_KEY,
+  LEGACY_SIDEBAR_WIDTH_STORAGE_KEY,
+  MAX_SIDEBAR_WIDTH,
+  SIDEBAR_WIDTH_STORAGE_KEY,
   WEB_CHAT_UI_STORAGE_KEY,
   FAVORITE_WORKTREES_STORAGE_KEY,
+  FAVORITE_WORKTREE_KEYS_STORAGE_KEY,
   ideLabelForUrl,
-  loadFavoriteWorktrees,
+  loadFavoriteWorktreeKeys,
+  loadLastProject,
   loadSavedSelectedWorktree,
+  loadSavedSidebarWidth,
   loadUseWebChatUi,
   makeIdeUrl,
+  projectRepos,
   resolveSelectedBranch,
   prBadgeClass,
   prStateTextClass,
-  saveFavoriteWorktrees,
+  saveFavoriteWorktreeKeys,
+  saveLastProject,
   saveSelectedWorktree,
+  saveSidebarWidth,
   saveUseWebChatUi,
 } from "./utils";
+
+describe("sidebar width persistence", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("defaults, and reads back a saved width within bounds", () => {
+    expect(loadSavedSidebarWidth()).toBe(268);
+    saveSidebarWidth(300.4);
+    expect(loadSavedSidebarWidth()).toBe(300);
+    localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, "9000");
+    expect(loadSavedSidebarWidth()).toBe(MAX_SIDEBAR_WIDTH);
+  });
+
+  it("widens a width saved before the project rail by the rail, once", () => {
+    localStorage.setItem(LEGACY_SIDEBAR_WIDTH_STORAGE_KEY, "250");
+
+    expect(loadSavedSidebarWidth()).toBe(298);
+    expect(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)).toBe("298");
+    expect(localStorage.getItem(LEGACY_SIDEBAR_WIDTH_STORAGE_KEY)).toBeNull();
+    expect(loadSavedSidebarWidth()).toBe(298);
+  });
+
+  it("keeps a migrated width within bounds and prefers the new key", () => {
+    localStorage.setItem(LEGACY_SIDEBAR_WIDTH_STORAGE_KEY, "480");
+    expect(loadSavedSidebarWidth()).toBe(MAX_SIDEBAR_WIDTH);
+    expect(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)).toBe(String(MAX_SIDEBAR_WIDTH));
+
+    localStorage.setItem(LEGACY_SIDEBAR_WIDTH_STORAGE_KEY, "200");
+    expect(loadSavedSidebarWidth()).toBe(MAX_SIDEBAR_WIDTH);
+  });
+});
 
 describe("worktree selection persistence", () => {
   beforeEach(() => {
@@ -51,33 +93,81 @@ describe("worktree selection persistence", () => {
     ).toBe("feature/open");
   });
 
-  it("stores and clears the last selected worktree", () => {
-    saveSelectedWorktree("feature/last-used");
+  it("stores and clears the last selected worktree per project", () => {
+    saveSelectedWorktree("proj-a", "feature/last-used");
 
-    expect(loadSavedSelectedWorktree()).toBe("feature/last-used");
-    expect(localStorage.getItem(LAST_SELECTED_WORKTREE_STORAGE_KEY)).toBe("feature/last-used");
+    expect(loadSavedSelectedWorktree("proj-a")).toBe("feature/last-used");
+    expect(loadSavedSelectedWorktree("proj-b")).toBeNull();
+    expect(localStorage.getItem(`${LAST_SELECTED_WORKTREE_STORAGE_KEY}:proj-a`)).toBe("feature/last-used");
 
-    saveSelectedWorktree(null);
+    saveSelectedWorktree("proj-a", null);
 
-    expect(loadSavedSelectedWorktree()).toBeNull();
-    expect(localStorage.getItem(LAST_SELECTED_WORKTREE_STORAGE_KEY)).toBeNull();
+    expect(loadSavedSelectedWorktree("proj-a")).toBeNull();
+    expect(localStorage.getItem(`${LAST_SELECTED_WORKTREE_STORAGE_KEY}:proj-a`)).toBeNull();
   });
 
-  it("stores favorite worktrees per project and clears them when empty", () => {
-    saveFavoriteWorktrees("proj-a", new Set(["feature/a"]));
+  it("migrates the unscoped selection into the first project that loads it", () => {
+    localStorage.setItem(LAST_SELECTED_WORKTREE_STORAGE_KEY, "feature/legacy");
 
-    expect(loadFavoriteWorktrees("proj-a")).toEqual(new Set(["feature/a"]));
-    expect(loadFavoriteWorktrees("proj-b")).toEqual(new Set());
+    expect(loadSavedSelectedWorktree("proj-a")).toBe("feature/legacy");
+    expect(localStorage.getItem(LAST_SELECTED_WORKTREE_STORAGE_KEY)).toBeNull();
+    expect(localStorage.getItem(`${LAST_SELECTED_WORKTREE_STORAGE_KEY}:proj-a`)).toBe("feature/legacy");
+    expect(loadSavedSelectedWorktree("proj-b")).toBeNull();
+  });
 
-    saveFavoriteWorktrees("proj-a", new Set());
+  it("keeps a scoped selection over the unscoped one", () => {
+    saveSelectedWorktree("proj-a", "feature/scoped");
+    localStorage.setItem(LAST_SELECTED_WORKTREE_STORAGE_KEY, "feature/legacy");
 
+    expect(loadSavedSelectedWorktree("proj-a")).toBe("feature/scoped");
+  });
+
+  it("stores and clears the last opened project", () => {
+    saveLastProject("proj-a");
+
+    expect(loadLastProject()).toBe("proj-a");
+    expect(localStorage.getItem(LAST_PROJECT_STORAGE_KEY)).toBe("proj-a");
+
+    saveLastProject(null);
+
+    expect(loadLastProject()).toBeNull();
+  });
+
+  it("stores favorites of every project by worktree key and clears them when empty", () => {
+    saveFavoriteWorktreeKeys(new Set(["proj-a:feature/a", "proj-b:feature/a"]));
+
+    expect(loadFavoriteWorktreeKeys("proj-a")).toEqual(new Set(["proj-a:feature/a", "proj-b:feature/a"]));
+
+    saveFavoriteWorktreeKeys(new Set());
+
+    expect(localStorage.getItem(FAVORITE_WORKTREE_KEYS_STORAGE_KEY)).toBeNull();
+  });
+
+  it("migrates the per-project favorites into worktree keys once", () => {
+    localStorage.setItem(FAVORITE_WORKTREE_KEYS_STORAGE_KEY, JSON.stringify(["proj-c:main"]));
+    localStorage.setItem(`${FAVORITE_WORKTREES_STORAGE_KEY}:proj-a`, JSON.stringify(["feature/a", "main"]));
+    localStorage.setItem(`${FAVORITE_WORKTREES_STORAGE_KEY}:proj-b`, JSON.stringify(["main"]));
+
+    const expected = new Set(["proj-c:main", "proj-a:feature/a", "proj-a:main", "proj-b:main"]);
+    expect(loadFavoriteWorktreeKeys("proj-a")).toEqual(expected);
     expect(localStorage.getItem(`${FAVORITE_WORKTREES_STORAGE_KEY}:proj-a`)).toBeNull();
+    expect(localStorage.getItem(`${FAVORITE_WORKTREES_STORAGE_KEY}:proj-b`)).toBeNull();
+    expect(loadFavoriteWorktreeKeys("proj-a")).toEqual(expected);
+  });
+
+  it("migrates the unscoped legacy favorites into the current project once", () => {
+    localStorage.setItem(FAVORITE_WORKTREES_STORAGE_KEY, JSON.stringify(["feature/x"]));
+
+    expect(loadFavoriteWorktreeKeys("proj-a")).toEqual(new Set(["proj-a:feature/x"]));
+    expect(localStorage.getItem(FAVORITE_WORKTREES_STORAGE_KEY)).toBeNull();
+    expect(loadFavoriteWorktreeKeys("proj-b")).toEqual(new Set(["proj-a:feature/x"]));
   });
 
   it("ignores malformed favorite worktrees data", () => {
-    localStorage.setItem(FAVORITE_WORKTREES_STORAGE_KEY, "not json");
+    localStorage.setItem(FAVORITE_WORKTREE_KEYS_STORAGE_KEY, "not json");
+    localStorage.setItem(`${FAVORITE_WORKTREES_STORAGE_KEY}:proj-a`, "{");
 
-    expect(loadFavoriteWorktrees("")).toEqual(new Set());
+    expect(loadFavoriteWorktreeKeys("proj-a")).toEqual(new Set());
   });
 
   it("stores and clears the web chat UI preference", () => {
@@ -119,6 +209,36 @@ describe("makeIdeUrl", () => {
     expect(makeIdeUrl("/tmp/repo", "devbox", "vscode")).toBe(
       "vscode://vscode-remote/ssh-remote+devbox/tmp/repo",
     );
+  });
+});
+
+describe("projectRepos", () => {
+  const config: AppConfig = {
+    name: "repo",
+    profiles: [],
+    agents: [],
+    defaultProfileName: "",
+    defaultAgentId: "claude",
+    autoName: false,
+    linearCreateTicketOption: false,
+    startupEnvs: {},
+    linkedRepos: [{ alias: "shared", dir: "/repos/shared" }, { alias: "remote-only" }],
+    linearAutoCreateWorktrees: false,
+    autoRemoveOnMerge: false,
+    projectDir: "/repos/app",
+    mainBranch: "trunk",
+    ide: "vscode",
+  };
+
+  it("lists the project's own repo, then its linked repos with a directory", () => {
+    expect(projectRepos(config, "")).toEqual([
+      { repo: null, label: "trunk", ideUrl: "vscode://file/repos/app" },
+      { repo: "shared", label: "shared", ideUrl: "vscode://file/repos/shared" },
+    ]);
+  });
+
+  it("only offers pulling main until the config loads", () => {
+    expect(projectRepos(undefined, "")).toEqual([{ repo: null, label: "main", ideUrl: null }]);
   });
 });
 

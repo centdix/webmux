@@ -5,6 +5,7 @@ import type { AgentsUiConversationState, WorktreeInfo } from "./types";
 
 function createWorktree(overrides: Partial<WorktreeInfo> = {}): WorktreeInfo {
   return {
+    project: "webmux",
     branch: "feature/mobile-chat",
     label: null,
     archived: false,

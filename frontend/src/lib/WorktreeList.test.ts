@@ -1,10 +1,12 @@
-import { fireEvent, render, screen, within } from "@testing-library/svelte";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/svelte";
+import type { ComponentProps } from "svelte";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import WorktreeList from "./WorktreeList.svelte";
-import type { WorktreeInfo, WorktreeListRow } from "./types";
+import type { PrEntry, ProjectListRows, WorktreeInfo, WorktreeListRow } from "./types";
 
-function createWorktree(branch: string): WorktreeInfo {
+function createWorktree(branch: string, project = "webmux"): WorktreeInfo {
   return {
+    project,
     branch,
     label: null,
     archived: false,
@@ -45,253 +47,352 @@ function createRow(worktree: WorktreeInfo, depth = 0): WorktreeListRow {
   return { worktree, depth };
 }
 
+function rowsOf(active: WorktreeInfo[], archived: WorktreeInfo[] = []): ProjectListRows {
+  return { active: active.map((worktree) => createRow(worktree)), archived: archived.map((worktree) => createRow(worktree)) };
+}
+
+function createPr(overrides: Partial<PrEntry> = {}): PrEntry {
+  return {
+    repo: "org/repo",
+    number: 7,
+    state: "open",
+    url: "https://github.com/org/repo/pull/7",
+    updatedAt: "",
+    ciStatus: "success",
+    ciChecks: [],
+    comments: [],
+    isDraft: false,
+    ...overrides,
+  };
+}
+
+type ListProps = ComponentProps<typeof WorktreeList>;
+
+function listProps(overrides: Partial<ListProps> = {}): ListProps {
+  return {
+    rows: rowsOf([]),
+    showArchived: false,
+    query: "",
+    error: null,
+    selected: null,
+    removing: new Set<string>(),
+    initializing: new Set<string>(),
+    archiving: new Set<string>(),
+    postingLinear: new Set<string>(),
+    notified: new Set<string>(),
+    favorites: new Set<string>(),
+    onselect: vi.fn(),
+    ontogglearchived: vi.fn(),
+    onretry: vi.fn(),
+    oncreate: vi.fn(),
+    onopen: vi.fn(),
+    onclose: vi.fn(),
+    onarchive: vi.fn(),
+    oncreatesubworktree: vi.fn(),
+    onremove: vi.fn(),
+    oneditlabel: vi.fn(),
+    oneditprofile: vi.fn(),
+    ontogglefavorite: vi.fn(),
+    ...overrides,
+  };
+}
+
+function renderList(overrides: Partial<ListProps> = {}): ReturnType<typeof render> {
+  return render(WorktreeList, { props: listProps(overrides) });
+}
+
+function row(name: string): HTMLElement {
+  return screen.getByRole("button", { name: new RegExp(`^${name}\\b`) });
+}
+
+async function openRowMenu(name: string): Promise<HTMLElement> {
+  await fireEvent.contextMenu(row(name));
+  return screen.getByRole("menu", { name });
+}
+
 describe("WorktreeList", () => {
-  it("calls onremove without selecting the row when the remove button is clicked", async () => {
+  afterEach(() => cleanup());
+
+  it("shows the ⋯ actions button on the selected row only", () => {
+    renderList({
+      rows: rowsOf([createWorktree("feature/a"), createWorktree("feature/b")]),
+      selected: { project: "webmux", branch: "feature/b" },
+    });
+
+    expect(screen.queryByRole("button", { name: "Actions for feature/a" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Actions for feature/b" })).toBeInTheDocument();
+    expect(row("feature/b")).toHaveAttribute("aria-current", "true");
+    expect(row("feature/a")).not.toHaveAttribute("aria-current");
+  });
+
+  it("shows the ⋯ actions button on every row on mobile, where there is no right-click", () => {
+    renderList({ rows: rowsOf([createWorktree("feature/a"), createWorktree("feature/b")]), isMobile: true });
+
+    expect(screen.getByRole("button", { name: "Actions for feature/a" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Actions for feature/b" })).toBeInTheDocument();
+  });
+
+  it("removes from the ⋯ menu without selecting the row", async () => {
     const onselect = vi.fn();
     const onremove = vi.fn();
-
-    const { container } = render(WorktreeList, {
-      props: {
-        rows: [createRow(createWorktree("feature/list-actions"))],
-        selected: null,
-        removing: new Set<string>(),
-        initializing: new Set<string>(),
-        archiving: new Set<string>(),
-        postingLinear: new Set<string>(),
-        notifiedBranches: new Set<string>(),
-        favorites: new Set<string>(),
-        onselect,
-        onclose: vi.fn(),
-        onarchive: vi.fn(),
-        oncreatesubworktree: vi.fn(),
-        onremove,
-        oneditprofile: vi.fn(),
-        ontogglefavorite: vi.fn(),
-      },
+    renderList({
+      rows: rowsOf([createWorktree("feature/list-actions")]),
+      selected: { project: "webmux", branch: "feature/list-actions" },
+      onselect,
+      onremove,
     });
 
-    await fireEvent.click(within(container).getByRole("button", { name: /actions for feature\/list-actions/i }));
-    await fireEvent.click(within(container).getByRole("button", { name: "Remove" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Actions for feature/list-actions" }));
+    await fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "Remove" }));
 
-    expect(onremove).toHaveBeenCalledWith("feature/list-actions");
+    expect(onremove).toHaveBeenCalledWith({ project: "webmux", branch: "feature/list-actions" });
     expect(onselect).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
-  it("disables row actions while a worktree is being removed", () => {
-    const { container } = render(WorktreeList, {
-      props: {
-        rows: [createRow(createWorktree("feature/list-removing"))],
-        selected: null,
-        removing: new Set(["feature/list-removing"]),
-        initializing: new Set<string>(),
-        archiving: new Set<string>(),
-        postingLinear: new Set<string>(),
-        notifiedBranches: new Set<string>(),
-        favorites: new Set<string>(),
-        onselect: vi.fn(),
-        onclose: vi.fn(),
-        onarchive: vi.fn(),
-        oncreatesubworktree: vi.fn(),
-        onremove: vi.fn(),
-        oneditprofile: vi.fn(),
-        ontogglefavorite: vi.fn(),
-      },
-    });
-
-    expect(screen.getByText("feature/list-removing").closest("button")).toBeDisabled();
-    expect(within(container).getByRole("button", { name: /actions for feature\/list-removing/i })).toBeDisabled();
-  });
-
-  it("shows a three-dot menu with row actions", async () => {
+  it("opens the row's context menu on right-click, with every row action", async () => {
     const onarchive = vi.fn();
+    renderList({ rows: rowsOf([createWorktree("feature/menu-actions")]), onarchive });
 
-    render(WorktreeList, {
-      props: {
-        rows: [createRow(createWorktree("feature/menu-actions"))],
-        selected: null,
-        removing: new Set<string>(),
-        initializing: new Set<string>(),
-        archiving: new Set<string>(),
-        postingLinear: new Set<string>(),
-        notifiedBranches: new Set<string>(),
-        favorites: new Set<string>(),
-        onselect: vi.fn(),
-        onclose: vi.fn(),
-        onarchive,
-        oncreatesubworktree: vi.fn(),
-        onremove: vi.fn(),
-        oneditprofile: vi.fn(),
-        ontogglefavorite: vi.fn(),
-      },
-    });
+    const menu = await openRowMenu("feature/menu-actions");
+    const labels = within(menu).getAllByRole("menuitem").map((item) => item.textContent?.trim());
+    expect(labels).toEqual([
+      "Close",
+      "Add to favorites",
+      "Edit label…",
+      "Change profile…",
+      "Create sub-worktree",
+      "Archive",
+      "Remove",
+    ]);
 
-    await fireEvent.click(screen.getByRole("button", { name: /actions for feature\/menu-actions/i }));
-
-    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Archive" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Merge" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument();
-
-    await fireEvent.click(screen.getByRole("button", { name: "Archive" }));
-    expect(onarchive).toHaveBeenCalledWith("feature/menu-actions");
+    await fireEvent.click(within(menu).getByRole("menuitem", { name: "Archive" }));
+    expect(onarchive).toHaveBeenCalledWith({ project: "webmux", branch: "feature/menu-actions" });
   });
 
-  it("calls oncreatesubworktree with the row branch from the menu", async () => {
+  it("drops the menu when its row leaves the list, so it does not come back with it", async () => {
+    const rows = rowsOf([createWorktree("feature/a"), createWorktree("feature/b")]);
+    const { rerender } = renderList({ rows });
+
+    await openRowMenu("feature/a");
+    await rerender({ rows: rowsOf([createWorktree("feature/b")]) });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    await rerender({ rows });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("opens at the pointer on right-click and under the row from the keyboard, keeping inside the viewport", async () => {
+    renderList({ rows: rowsOf([createWorktree("feature/kbd")]) });
+    vi.spyOn(row("feature/kbd"), "getBoundingClientRect").mockReturnValue(new DOMRect(30, 80, 200, 20));
+
+    await fireEvent.contextMenu(row("feature/kbd"), { button: 2, clientX: 200, clientY: 300 });
+    const menu = screen.getByRole("menu", { name: "feature/kbd" });
+    expect(menu.style.left).toBe("200px");
+    expect(menu.style.top).toBe("300px");
+
+    const innerWidth = window.innerWidth;
+    window.innerWidth = 150;
+    await fireEvent(window, new Event("resize"));
+    expect(menu.style.left).toBe("146px");
+    window.innerWidth = innerWidth;
+
+    await fireEvent.keyDown(document, { key: "Escape" });
+    await fireEvent.contextMenu(row("feature/kbd"), { button: 0, shiftKey: true });
+    expect(screen.getByRole("menu").style.left).toBe("30px");
+    expect(screen.getByRole("menu").style.top).toBe("102px");
+  });
+
+  it("moves through the menu with the arrow keys and gives the focus back on Escape", async () => {
+    renderList({ rows: rowsOf([{ ...createWorktree("feature/keys"), creating: true }]) });
+    row("feature/keys").focus();
+
+    const menu = await openRowMenu("feature/keys");
+    expect(within(menu).getByText("feature/keys")).toHaveAttribute("role", "presentation");
+    // Creating disables Close: focus starts on the first enabled item.
+    expect(document.activeElement).toBe(within(menu).getByRole("menuitem", { name: "Add to favorites" }));
+    await fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(within(menu).getByRole("menuitem", { name: "Edit label…" }));
+    await fireEvent.keyDown(document.activeElement!, { key: "End" });
+    expect(document.activeElement).toBe(within(menu).getByRole("menuitem", { name: "Remove" }));
+    await fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(within(menu).getByRole("menuitem", { name: "Add to favorites" }));
+    await fireEvent.keyDown(document.activeElement!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(within(menu).getByRole("menuitem", { name: "Remove" }));
+    await fireEvent.keyDown(document.activeElement!, { key: "Home" });
+    expect(document.activeElement).toBe(within(menu).getByRole("menuitem", { name: "Add to favorites" }));
+
+    await fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(row("feature/keys"));
+  });
+
+  it("closes the ⋯ menu on a second click of ⋯", async () => {
+    renderList({ rows: rowsOf([createWorktree("feature/toggle")]), selected: { project: "webmux", branch: "feature/toggle" } });
+    const more = screen.getByRole("button", { name: "Actions for feature/toggle" });
+
+    await fireEvent.click(more);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(more).toHaveAttribute("aria-expanded", "true");
+    await fireEvent.click(more);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(more).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("offers Open instead of Close on a closed worktree", async () => {
+    const onopen = vi.fn();
+    renderList({ rows: rowsOf([{ ...createWorktree("feature/closed"), mux: "" }]), onopen });
+
+    const menu = await openRowMenu("feature/closed");
+    expect(within(menu).queryByRole("menuitem", { name: "Close" })).not.toBeInTheDocument();
+    await fireEvent.click(within(menu).getByRole("menuitem", { name: "Open" }));
+
+    expect(onopen).toHaveBeenCalledWith({ project: "webmux", branch: "feature/closed" });
+  });
+
+  it("acts on the row's own project from the menu", async () => {
     const oncreatesubworktree = vi.fn();
+    const oneditlabel = vi.fn();
+    const onposttolinear = vi.fn();
+    renderList({ rows: rowsOf([createWorktree("feature/sub-base", "images")]), oncreatesubworktree, oneditlabel, onposttolinear });
 
-    render(WorktreeList, {
-      props: {
-        rows: [createRow(createWorktree("feature/sub-base"))],
-        selected: null,
-        removing: new Set<string>(),
-        initializing: new Set<string>(),
-        archiving: new Set<string>(),
-        postingLinear: new Set<string>(),
-        notifiedBranches: new Set<string>(),
-        favorites: new Set<string>(),
-        onselect: vi.fn(),
-        onclose: vi.fn(),
-        onarchive: vi.fn(),
-        oncreatesubworktree,
-        onremove: vi.fn(),
-        oneditprofile: vi.fn(),
-        ontogglefavorite: vi.fn(),
-      },
-    });
+    await fireEvent.click(within(await openRowMenu("feature/sub-base")).getByRole("menuitem", { name: "Create sub-worktree" }));
+    await fireEvent.click(within(await openRowMenu("feature/sub-base")).getByRole("menuitem", { name: "Edit label…" }));
+    await fireEvent.click(
+      within(await openRowMenu("feature/sub-base")).getByRole("menuitem", { name: "Post conversation to ENG-42" }),
+    );
 
-    await fireEvent.click(screen.getByRole("button", { name: /actions for feature\/sub-base/i }));
-    await fireEvent.click(screen.getByRole("button", { name: "Create sub-worktree" }));
-
-    expect(oncreatesubworktree).toHaveBeenCalledWith("feature/sub-base");
+    const ref = { project: "images", branch: "feature/sub-base" };
+    expect(oncreatesubworktree).toHaveBeenCalledWith(ref);
+    expect(oneditlabel).toHaveBeenCalledWith(ref);
+    expect(onposttolinear).toHaveBeenCalledWith(ref);
   });
 
-  it("toggles favorites with the always-visible star button without selecting the row", async () => {
-    const onselect = vi.fn();
+  it("toggles favorites from the menu and marks favorite rows with a star", async () => {
     const ontogglefavorite = vi.fn();
-
-    render(WorktreeList, {
-      props: {
-        rows: [createRow(createWorktree("feature/fav")), createRow(createWorktree("feature/plain"))],
-        selected: null,
-        removing: new Set<string>(),
-        initializing: new Set<string>(),
-        archiving: new Set<string>(),
-        postingLinear: new Set<string>(),
-        notifiedBranches: new Set<string>(),
-        favorites: new Set<string>(["feature/fav"]),
-        onselect,
-        onclose: vi.fn(),
-        onarchive: vi.fn(),
-        oncreatesubworktree: vi.fn(),
-        onremove: vi.fn(),
-        oneditprofile: vi.fn(),
-        ontogglefavorite,
-      },
+    renderList({
+      rows: rowsOf([createWorktree("feature/fav"), createWorktree("feature/plain")]),
+      favorites: new Set<string>(["webmux:feature/fav"]),
+      ontogglefavorite,
     });
 
-    const remove = screen.getByRole("button", { name: "Remove feature/fav from favorites" });
-    const add = screen.getByRole("button", { name: "Add feature/plain to favorites" });
-    expect(remove.getAttribute("aria-pressed")).toBe("true");
-    expect(add.getAttribute("aria-pressed")).toBe("false");
+    expect(within(row("feature/fav")).getByText("★")).toBeInTheDocument();
+    expect(within(row("feature/plain")).queryByText("★")).not.toBeInTheDocument();
 
-    await fireEvent.click(remove);
-    expect(ontogglefavorite).toHaveBeenCalledWith("feature/fav");
-
-    await fireEvent.click(add);
-    expect(ontogglefavorite).toHaveBeenCalledWith("feature/plain");
-    expect(onselect).not.toHaveBeenCalled();
+    await fireEvent.click(within(await openRowMenu("feature/fav")).getByRole("menuitem", { name: "Remove from favorites" }));
+    expect(ontogglefavorite).toHaveBeenCalledWith({ project: "webmux", branch: "feature/fav" });
+    await fireEvent.click(within(await openRowMenu("feature/plain")).getByRole("menuitem", { name: "Add to favorites" }));
+    expect(ontogglefavorite).toHaveBeenCalledWith({ project: "webmux", branch: "feature/plain" });
   });
 
-  it("renders labels as the primary row name with the branch below", () => {
-    render(WorktreeList, {
-      props: {
-        rows: [createRow({ ...createWorktree("feature/random-fallback"), label: "Search ranking" })],
-        selected: null,
-        removing: new Set<string>(),
-        initializing: new Set<string>(),
-        archiving: new Set<string>(),
-        postingLinear: new Set<string>(),
-        notifiedBranches: new Set<string>(),
-        favorites: new Set<string>(),
-        onselect: vi.fn(),
-        onclose: vi.fn(),
-        onarchive: vi.fn(),
-        oncreatesubworktree: vi.fn(),
-        onremove: vi.fn(),
-        oneditprofile: vi.fn(),
-        ontogglefavorite: vi.fn(),
-      },
+  it("disables a row and its actions while it is being removed", () => {
+    renderList({
+      rows: rowsOf([createWorktree("feature/list-removing")]),
+      selected: { project: "webmux", branch: "feature/list-removing" },
+      removing: new Set(["webmux:feature/list-removing"]),
     });
 
-    expect(screen.getByText("Search ranking")).toBeInTheDocument();
-    expect(screen.getByText("feature/random-fallback")).toBeInTheDocument();
-  });
-
-  it("places archived and closed row badges below the worktree name", () => {
-    render(WorktreeList, {
-      props: {
-        rows: [
-          createRow({
-            ...createWorktree("feature/very-long-archived-closed-name"),
-            archived: true,
-            mux: "",
-          }),
-        ],
-        selected: null,
-        removing: new Set<string>(),
-        initializing: new Set<string>(),
-        archiving: new Set<string>(),
-        postingLinear: new Set<string>(),
-        notifiedBranches: new Set<string>(),
-        favorites: new Set<string>(),
-        onselect: vi.fn(),
-        onclose: vi.fn(),
-        onarchive: vi.fn(),
-        oncreatesubworktree: vi.fn(),
-        onremove: vi.fn(),
-        oneditprofile: vi.fn(),
-        ontogglefavorite: vi.fn(),
-      },
-    });
-
-    const name = screen.getByText("feature/very-long-archived-closed-name");
-    const archived = screen.getByText("archived");
-    const closed = screen.getByText("closed");
-    const nameRow = name.closest("[data-worktree-name-row]");
-    const badgeRow = archived.closest("[data-worktree-badge-row]");
-
-    if (!nameRow || !badgeRow) {
-      throw new Error("Expected separate name and badge rows");
-    }
-
-    expect(nameRow).not.toContainElement(archived);
-    expect(badgeRow).toContainElement(archived);
-    expect(badgeRow).toContainElement(closed);
+    expect(row("feature/list-removing")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Actions for feature/list-removing" })).toBeDisabled();
   });
 
   it("disables the archive action while the row is archiving", async () => {
-    render(WorktreeList, {
-      props: {
-        rows: [createRow(createWorktree("feature/archiving"))],
-        selected: null,
-        removing: new Set<string>(),
-        initializing: new Set<string>(),
-        archiving: new Set<string>(["feature/archiving"]),
-        postingLinear: new Set<string>(),
-        notifiedBranches: new Set<string>(),
-        favorites: new Set<string>(),
-        onselect: vi.fn(),
-        onclose: vi.fn(),
-        onarchive: vi.fn(),
-        oncreatesubworktree: vi.fn(),
-        onremove: vi.fn(),
-        oneditprofile: vi.fn(),
-        ontogglefavorite: vi.fn(),
-      },
+    renderList({
+      rows: rowsOf([createWorktree("feature/archiving")]),
+      archiving: new Set<string>(["webmux:feature/archiving"]),
     });
 
-    await fireEvent.click(screen.getByRole("button", { name: /actions for feature\/archiving/i }));
+    expect(within(await openRowMenu("feature/archiving")).getByRole("menuitem", { name: "Archive" })).toBeDisabled();
+  });
 
-    expect(screen.getByRole("button", { name: "Archive" })).toBeDisabled();
+  it("names a row by its label, keeping the branch in its tooltip", () => {
+    renderList({ rows: rowsOf([{ ...createWorktree("feature/random-fallback"), label: "Search ranking" }]) });
+
+    const button = row("Search ranking");
+    expect(button.getAttribute("title")).toContain("feature/random-fallback");
+    expect(screen.queryByText("feature/random-fallback")).not.toBeInTheDocument();
+  });
+
+  it("shows one status glyph per row, the most urgent state first", () => {
+    renderList({
+      rows: rowsOf([
+        { ...createWorktree("feature/waiting"), agent: "waiting" },
+        { ...createWorktree("feature/unread"), agent: "done" },
+        { ...createWorktree("feature/closed"), mux: "" },
+        { ...createWorktree("feature/creating"), creating: true },
+      ]),
+      notified: new Set(["webmux:feature/unread"]),
+    });
+
+    const attentions = screen.getAllByRole("button").map((button) => button.querySelector("[data-attention]")?.getAttribute("data-attention"));
+    expect(attentions).toEqual(["waiting", "unread", "closed", "creating"]);
+  });
+
+  it("marks every PR with its state only", () => {
+    renderList({
+      rows: rowsOf([
+        { ...createWorktree("feature/failing"), prs: [createPr({ ciStatus: "failed" })] },
+        { ...createWorktree("feature/draft"), prs: [createPr({ isDraft: true })] },
+        { ...createWorktree("feature/merged"), prs: [createPr({ state: "merged" })] },
+        createWorktree("feature/none"),
+      ]),
+    });
+
+    expect(row("feature/failing").querySelector("[data-pr-state]")).toHaveAttribute("data-pr-state", "open");
+    expect(row("feature/draft").querySelector("[data-pr-state]")).toHaveAttribute("data-pr-state", "draft");
+    expect(row("feature/merged").querySelector("[data-pr-state]")).toHaveAttribute("data-pr-state", "merged");
+    expect(row("feature/none").querySelector("[data-pr-state]")).toBeNull();
+  });
+
+  it("nests sub-worktrees under their parent", () => {
+    render(WorktreeList, {
+      props: listProps({ rows: { active: [createRow(createWorktree("main")), createRow(createWorktree("feature/child"), 1)], archived: [] } }),
+    });
+
+    expect(row("feature/child").style.paddingLeft).toBe("20px");
+    expect(row("main").style.paddingLeft).toBe("6px");
+  });
+
+  it("folds archived worktrees at the bottom and unfolds them on demand", async () => {
+    const ontogglearchived = vi.fn();
+    const { rerender } = renderList({
+      rows: rowsOf([createWorktree("feature/active")], [{ ...createWorktree("feature/old"), archived: true }]),
+      ontogglearchived,
+    });
+
+    const toggle = screen.getByRole("button", { name: /Archived \(1\)/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("feature/old")).not.toBeInTheDocument();
+    await fireEvent.click(toggle);
+    expect(ontogglearchived).toHaveBeenCalledTimes(1);
+
+    await rerender({ showArchived: true });
+    expect(within(screen.getByRole("list", { name: "Archived worktrees" })).getByText("feature/old")).toBeInTheDocument();
+  });
+
+  it("shows the project's load error with a Retry", async () => {
+    const onretry = vi.fn();
+    renderList({ rows: rowsOf([createWorktree("stale")]), error: "git exploded", onretry });
+
+    expect(screen.getByText("Couldn't load worktrees")).toBeInTheDocument();
+    expect(screen.getByText("git exploded")).toBeInTheDocument();
+    expect(screen.getByText("stale")).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onretry).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers a new worktree when the project has none", async () => {
+    const oncreate = vi.fn();
+    renderList({ oncreate });
+
+    expect(screen.getByText("No worktrees yet.")).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "New worktree" }));
+    expect(oncreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("says when a search matches nothing active", () => {
+    renderList({ query: "zzz", rows: rowsOf([], [{ ...createWorktree("zzz-old"), archived: true }]) });
+
+    expect(screen.getByText('No active matches for "zzz".')).toBeInTheDocument();
   });
 });

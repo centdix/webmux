@@ -1,16 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
-  branchesWithAgentStatus,
+  buildProjectListRows,
   buildWorktreeListRows,
   countAgentStatusesIn,
-  countArchivedMatches,
-  filterWorktrees,
+  keysWithAgentStatus,
+  matchesWorktreeSearch,
   sortFavoritesFirst,
 } from "./worktree-list";
 import type { WorktreeInfo, WorktreeListRow } from "./types";
 
 function createWorktree(branch: string, overrides: Partial<WorktreeInfo> = {}): WorktreeInfo {
   return {
+    project: "webmux",
     branch,
     label: null,
     archived: false,
@@ -69,38 +70,10 @@ describe("buildWorktreeListRows", () => {
     ]);
   });
 
-  it("filters archived worktrees out by default and matches profile text", () => {
-    const worktrees = filterWorktrees([
-      createWorktree("feature/active", { profile: "sandbox" }),
-      createWorktree("feature/archived", { archived: true, profile: "default" }),
-    ], {
-      query: "sand",
-      showArchived: false,
-    });
-
-    expect(worktrees.map((worktree) => worktree.branch)).toEqual(["feature/active"]);
-  });
-
-  it("matches label text when searching worktrees", () => {
-    const worktrees = filterWorktrees([
-      createWorktree("feature/random-fallback", { label: "Search ranking" }),
-      createWorktree("feature/other"),
-    ], {
-      query: "ranking",
-      showArchived: false,
-    });
-
-    expect(worktrees.map((worktree) => worktree.branch)).toEqual(["feature/random-fallback"]);
-  });
-
-  it("counts archived matches separately from visible rows", () => {
-    const count = countArchivedMatches([
-      createWorktree("feature/alpha", { archived: true }),
-      createWorktree("feature/beta", { archived: true }),
-      createWorktree("feature/gamma"),
-    ], "beta");
-
-    expect(count).toBe(1);
+  it("matches label and profile text when searching worktrees", () => {
+    expect(matchesWorktreeSearch(createWorktree("feature/random-fallback", { label: "Search ranking" }), "ranking")).toBe(true);
+    expect(matchesWorktreeSearch(createWorktree("feature/active", { profile: "sandbox" }), "sand")).toBe(true);
+    expect(matchesWorktreeSearch(createWorktree("feature/other"), "ranking")).toBe(false);
   });
 });
 
@@ -112,7 +85,7 @@ describe("sortFavoritesFirst", () => {
   it("moves favorites to the top while keeping relative order", () => {
     const sorted = sortFavoritesFirst(
       [createWorktree("a"), createWorktree("b"), createWorktree("c"), createWorktree("d")],
-      new Set(["d", "b"]),
+      new Set(["webmux:d", "webmux:b"]),
     );
 
     expect(sorted.map((worktree) => worktree.branch)).toEqual(["b", "d", "a", "c"]);
@@ -126,7 +99,7 @@ describe("sortFavoritesFirst", () => {
           createWorktree("fav"),
           createWorktree("fav-child", { baseBranch: "fav" }),
         ],
-        new Set(["fav"]),
+        new Set(["webmux:fav"]),
       ),
     );
 
@@ -147,12 +120,16 @@ describe("countAgentStatusesIn", () => {
     createRow("e", { agent: "idle" }),
   ];
 
-  it("counts waiting and error rows within the given branch set", () => {
-    expect(countAgentStatusesIn(rows, new Set(["b", "c"]))).toEqual({
+  it("counts waiting and error rows within the given key set", () => {
+    expect(countAgentStatusesIn(rows, new Set(["webmux:b", "webmux:c"]))).toEqual({
       waiting: 1,
       error: 1,
       "done-unread": 0,
     });
+  });
+
+  it("counts every row when no key set is given", () => {
+    expect(countAgentStatusesIn(rows)).toEqual({ waiting: 2, error: 1, "done-unread": 0 });
   });
 
   it("returns zero counts for an empty set", () => {
@@ -160,7 +137,7 @@ describe("countAgentStatusesIn", () => {
   });
 
   it("ignores working and idle rows even when in the set", () => {
-    expect(countAgentStatusesIn(rows, new Set(["d", "e"]))).toEqual({
+    expect(countAgentStatusesIn(rows, new Set(["webmux:d", "webmux:e"]))).toEqual({
       waiting: 0,
       error: 0,
       "done-unread": 0,
@@ -173,7 +150,7 @@ describe("countAgentStatusesIn", () => {
       createRow("creating", { agent: "error", creating: true }),
       createRow("live", { agent: "waiting" }),
     ];
-    expect(countAgentStatusesIn(closedRows, new Set(["closed", "creating", "live"]))).toEqual({
+    expect(countAgentStatusesIn(closedRows, new Set(["webmux:closed", "webmux:creating", "webmux:live"]))).toEqual({
       waiting: 1,
       error: 0,
       "done-unread": 0,
@@ -186,9 +163,9 @@ describe("countAgentStatusesIn", () => {
       createRow("unseen-a", { agent: "done" }),
       createRow("unseen-b", { agent: "done" }),
     ];
-    const branches = new Set(["seen", "unseen-a", "unseen-b"]);
-    const notified = new Set(["unseen-a", "unseen-b"]);
-    expect(countAgentStatusesIn(doneRows, branches, notified)).toEqual({
+    const keys = new Set(["webmux:seen", "webmux:unseen-a", "webmux:unseen-b"]);
+    const notified = new Set(["webmux:unseen-a", "webmux:unseen-b"]);
+    expect(countAgentStatusesIn(doneRows, keys, notified)).toEqual({
       waiting: 0,
       error: 0,
       "done-unread": 2,
@@ -196,7 +173,7 @@ describe("countAgentStatusesIn", () => {
   });
 });
 
-describe("branchesWithAgentStatus", () => {
+describe("keysWithAgentStatus", () => {
   const rows = [
     createRow("first", { agent: "waiting" }),
     createRow("closed", { agent: "waiting", mux: "" }),
@@ -204,12 +181,46 @@ describe("branchesWithAgentStatus", () => {
     createRow("second", { agent: "waiting" }),
   ];
 
-  it("returns matching branches in list order, skipping hidden-icon rows", () => {
-    expect(branchesWithAgentStatus(rows, "waiting")).toEqual(["first", "second"]);
-    expect(branchesWithAgentStatus(rows, "error")).toEqual(["err"]);
+  it("returns matching keys in list order, skipping hidden-icon rows", () => {
+    expect(keysWithAgentStatus(rows, "waiting")).toEqual(["webmux:first", "webmux:second"]);
+    expect(keysWithAgentStatus(rows, "error")).toEqual(["webmux:err"]);
   });
 
-  it("restricts matches to the given branch set when provided", () => {
-    expect(branchesWithAgentStatus(rows, "waiting", new Set(["second"]))).toEqual(["second"]);
+  it("restricts matches to the given key set when provided", () => {
+    expect(keysWithAgentStatus(rows, "waiting", new Set(["webmux:second"]))).toEqual(["webmux:second"]);
+  });
+});
+
+function branchesOf(rows: WorktreeListRow[]): Array<[string, number]> {
+  return rows.map((row) => [row.worktree.branch, row.depth]);
+}
+
+describe("buildProjectListRows", () => {
+  const worktrees = [
+    createWorktree("main"),
+    createWorktree("feat/search"),
+    createWorktree("feat/search-child", { baseBranch: "feat/search" }),
+    createWorktree("old", { archived: true }),
+    createWorktree("old-child", { archived: true, baseBranch: "old" }),
+  ];
+
+  it("splits active and archived rows, each nesting its own sub-worktrees", () => {
+    const rows = buildProjectListRows(worktrees, { query: "", favorites: new Set() });
+
+    expect(branchesOf(rows.active)).toEqual([["main", 0], ["feat/search", 0], ["feat/search-child", 1]]);
+    expect(branchesOf(rows.archived)).toEqual([["old", 0], ["old-child", 1]]);
+  });
+
+  it("filters both groups by the search", () => {
+    const rows = buildProjectListRows(worktrees, { query: "old", favorites: new Set() });
+
+    expect(rows.active).toEqual([]);
+    expect(branchesOf(rows.archived)).toEqual([["old", 0], ["old-child", 1]]);
+  });
+
+  it("lists favorites first, keyed by project", () => {
+    const rows = buildProjectListRows(worktrees, { query: "", favorites: new Set(["webmux:feat/search", "other:main"]) });
+
+    expect(branchesOf(rows.active)).toEqual([["feat/search", 0], ["feat/search-child", 1], ["main", 0]]);
   });
 });

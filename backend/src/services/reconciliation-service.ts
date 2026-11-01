@@ -87,6 +87,8 @@ export interface ReconciliationServiceOptions {
 
 export interface ReconcileOptions {
   force?: boolean;
+  /** Overrides the service's default freshness window for this call. */
+  freshnessMs?: number;
 }
 
 interface ReconciledWorktreeState {
@@ -143,7 +145,7 @@ export class ReconciliationService {
       return await this.inFlight;
     }
 
-    if (!options.force && this.now() - this.lastReconciledAt < this.freshnessMs) {
+    if (!options.force && this.now() - this.lastReconciledAt < (options.freshnessMs ?? this.freshnessMs)) {
       return;
     }
 

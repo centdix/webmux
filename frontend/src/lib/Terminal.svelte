@@ -4,10 +4,11 @@
   import type { ITheme } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import { WebLinksAddon } from "@xterm/addon-web-links";
-  import { apiBase, uploadFiles } from "./api";
+  import { terminalSocketUrl, uploadFiles } from "./api";
   import "@xterm/xterm/css/xterm.css";
 
   let {
+    project,
     worktree,
     isMobile = false,
     initialPane,
@@ -16,6 +17,7 @@
     refreshingAgentTerminal = false,
     onrefreshagentterminal,
   }: {
+    project: string;
     worktree: string;
     isMobile?: boolean;
     initialPane?: number;
@@ -232,7 +234,7 @@
 
   async function uploadAndTypeFiles(files: File[]): Promise<void> {
     try {
-      const result = await uploadFiles(worktree, files);
+      const result = await uploadFiles(project, worktree, files);
       const paths = result.files.map((f) => f.path).join(" ");
       sendInput(paths);
     } catch (err: unknown) {
@@ -271,8 +273,7 @@
 
   function connect(announceReconnect = false): void {
     if (destroyed || ws?.readyState === WebSocket.OPEN || ws?.readyState === WebSocket.CONNECTING) return;
-    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-    const nextWs = new WebSocket(`${protocol}//${location.host}${apiBase}/ws/${encodeURIComponent(worktree)}`);
+    const nextWs = new WebSocket(terminalSocketUrl(project, worktree));
     ws = nextWs;
 
     nextWs.onmessage = (event) => {

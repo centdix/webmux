@@ -1,14 +1,25 @@
-import type { IdeKind, PrEntry, ProjectInitPhase, WorktreeCreationPhase, WorktreeInfo } from "./types";
+import type { AppConfig, IdeKind, PrEntry, ProjectInitPhase, ProjectRepo, WorktreeCreationPhase, WorktreeInfo } from "./types";
 import { THEME_KEYS, getTheme } from "./themes";
+import { worktreeKey } from "./worktree-ref";
 import type { ThemeKey } from "./themes";
 
 export const SSH_STORAGE_KEY = "wt-ssh-host";
 export const THEME_STORAGE_KEY = "wt-theme";
 export const LAST_SELECTED_WORKTREE_STORAGE_KEY = "wt-last-selected-worktree";
-export const SIDEBAR_WIDTH_STORAGE_KEY = "wt-sidebar-width";
+/** Rail included; the legacy key saved the list's width alone. */
+export const SIDEBAR_WIDTH_STORAGE_KEY = "wt-sidebar-width-with-rail";
+export const LEGACY_SIDEBAR_WIDTH_STORAGE_KEY = "wt-sidebar-width";
 export const WEB_CHAT_UI_STORAGE_KEY = "wt-use-web-chat-ui";
+/** Legacy favorites (`<key>:<project>` or unscoped `<key>` → branches), migrated on load. */
 export const FAVORITE_WORKTREES_STORAGE_KEY = "wt-favorite-worktrees";
-const DEFAULT_SIDEBAR_WIDTH = 220;
+export const FAVORITE_WORKTREE_KEYS_STORAGE_KEY = "wt-favorite-worktree-keys";
+export const LAST_PROJECT_STORAGE_KEY = "wt-last-project";
+const PROJECT_RAIL_WIDTH = 48;
+// The project rail + the 220px list.
+const DEFAULT_SIDEBAR_WIDTH = PROJECT_RAIL_WIDTH + 220;
+// The list keeps at least 140px beside the rail.
+export const MIN_SIDEBAR_WIDTH = PROJECT_RAIL_WIDTH + 140;
+export const MAX_SIDEBAR_WIDTH = 500;
 
 export function prLabel(pr: Pick<PrEntry, "repo" | "number">): string {
   return pr.repo ? `${pr.repo} #${pr.number}` : `PR #${pr.number}`;
@@ -78,6 +89,18 @@ export function makeIdeUrl(
   return `${scheme}://file${dir}`;
 }
 
+/** Repos a project header acts on: the project's own first, then each linked
+ *  repo with a directory. Until its config loads, only pulling main is known. */
+export function projectRepos(config: AppConfig | undefined, sshHost: string): ProjectRepo[] {
+  if (!config) return [{ repo: null, label: "main", ideUrl: null }];
+  return [
+    { repo: null, label: config.mainBranch || "main", ideUrl: makeIdeUrl(config.projectDir, sshHost, config.ide) },
+    ...config.linkedRepos.flatMap((linked) =>
+      linked.dir ? [{ repo: linked.alias, label: linked.alias, ideUrl: makeIdeUrl(linked.dir, sshHost, config.ide) }] : []
+    ),
+  ];
+}
+
 export function ideLabelForUrl(url: string): string {
   const scheme = url.split(":", 1)[0];
   const entry = Object.values(IDES).find((ide) => ide.scheme === scheme);
@@ -98,43 +121,88 @@ export function loadSavedTheme(): ThemeKey {
   return "github-dark";
 }
 
-export function loadSavedSelectedWorktree(): string | null {
-  const stored = localStorage.getItem(LAST_SELECTED_WORKTREE_STORAGE_KEY)?.trim();
+function projectStorageKey(baseKey: string, projectPrefix: string): string {
+  return projectPrefix ? `${baseKey}:${projectPrefix}` : baseKey;
+}
+
+function loadStoredString(key: string): string | null {
+  const stored = localStorage.getItem(key)?.trim();
   return stored ? stored : null;
 }
 
-export function saveSelectedWorktree(branch: string | null): void {
-  if (branch) {
-    localStorage.setItem(LAST_SELECTED_WORKTREE_STORAGE_KEY, branch);
+function saveStoredString(key: string, value: string | null): void {
+  if (value) {
+    localStorage.setItem(key, value);
     return;
   }
+  localStorage.removeItem(key);
+}
+
+export function loadLastProject(): string | null {
+  return loadStoredString(LAST_PROJECT_STORAGE_KEY);
+}
+
+export function saveLastProject(projectPrefix: string | null): void {
+  saveStoredString(LAST_PROJECT_STORAGE_KEY, projectPrefix);
+}
+
+export function loadSavedSelectedWorktree(projectPrefix: string): string | null {
+  const key = projectStorageKey(LAST_SELECTED_WORKTREE_STORAGE_KEY, projectPrefix);
+  const saved = loadStoredString(key);
+  if (saved || key === LAST_SELECTED_WORKTREE_STORAGE_KEY) return saved;
+  // One-time migration of the pre-multi-project unscoped selection.
+  const legacy = loadStoredString(LAST_SELECTED_WORKTREE_STORAGE_KEY);
   localStorage.removeItem(LAST_SELECTED_WORKTREE_STORAGE_KEY);
+  saveStoredString(key, legacy);
+  return legacy;
 }
 
-function favoriteWorktreesStorageKey(projectPrefix: string): string {
-  return projectPrefix ? `${FAVORITE_WORKTREES_STORAGE_KEY}:${projectPrefix}` : FAVORITE_WORKTREES_STORAGE_KEY;
+export function saveSelectedWorktree(projectPrefix: string, branch: string | null): void {
+  saveStoredString(projectStorageKey(LAST_SELECTED_WORKTREE_STORAGE_KEY, projectPrefix), branch);
 }
 
-export function loadFavoriteWorktrees(projectPrefix: string): Set<string> {
-  const stored = localStorage.getItem(favoriteWorktreesStorageKey(projectPrefix));
-  if (!stored) return new Set();
+function parseStringArray(stored: string | null): string[] {
+  if (!stored) return [];
   try {
     const parsed: unknown = JSON.parse(stored);
-    return Array.isArray(parsed)
-      ? new Set(parsed.filter((branch): branch is string => typeof branch === "string"))
-      : new Set();
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
   } catch {
-    return new Set();
+    return [];
   }
 }
 
-export function saveFavoriteWorktrees(projectPrefix: string, branches: Set<string>): void {
-  const key = favoriteWorktreesStorageKey(projectPrefix);
-  if (branches.size === 0) {
+/** Favorites of every project, as `worktreeKey`s. The first load folds the
+ *  per-project branch lists (`wt-favorite-worktrees:<project>`) into it, and
+ *  the pre-multi-project unscoped list into `currentProject`. */
+export function loadFavoriteWorktreeKeys(currentProject: string): Set<string> {
+  const keys = new Set(parseStringArray(localStorage.getItem(FAVORITE_WORKTREE_KEYS_STORAGE_KEY)));
+  const legacyPrefix = `${FAVORITE_WORKTREES_STORAGE_KEY}:`;
+  const legacyKeys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
+    .filter((key): key is string =>
+      key !== null && (key.startsWith(legacyPrefix) || (key === FAVORITE_WORKTREES_STORAGE_KEY && currentProject !== ""))
+    );
+  if (legacyKeys.length === 0) return keys;
+  for (const legacyKey of legacyKeys) {
+    const project = legacyKey === FAVORITE_WORKTREES_STORAGE_KEY ? currentProject : legacyKey.slice(legacyPrefix.length);
+    for (const branch of parseStringArray(localStorage.getItem(legacyKey))) {
+      keys.add(worktreeKey({ project, branch }));
+    }
+    localStorage.removeItem(legacyKey);
+  }
+  saveFavoriteWorktreeKeys(keys);
+  return keys;
+}
+
+function saveStringSet(key: string, values: ReadonlySet<string>): void {
+  if (values.size === 0) {
     localStorage.removeItem(key);
     return;
   }
-  localStorage.setItem(key, JSON.stringify([...branches]));
+  localStorage.setItem(key, JSON.stringify([...values]));
+}
+
+export function saveFavoriteWorktreeKeys(keys: ReadonlySet<string>): void {
+  saveStringSet(FAVORITE_WORKTREE_KEYS_STORAGE_KEY, keys);
 }
 
 export function applyTheme(key: ThemeKey): void {
@@ -146,13 +214,36 @@ export function applyTheme(key: ThemeKey): void {
   localStorage.setItem(THEME_STORAGE_KEY, key);
 }
 
+/** A text field keeping its own editing keys: inputs, textareas and
+ *  contenteditable, except the terminal's hidden input. */
+export function isTextEntryTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    !target.classList.contains("xterm-helper-textarea") &&
+    (target.isContentEditable || target.matches("input, textarea"))
+  );
+}
+
+export function clampSidebarWidth(width: number): number {
+  return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width));
+}
+
+function parseSidebarWidth(stored: string | null): number | null {
+  const n = stored ? parseInt(stored, 10) : NaN;
+  return !Number.isNaN(n) && n > 0 ? n : null;
+}
+
+/** The saved width, or a pre-rail one widened by the rail (moved to the new
+ *  key once). */
 export function loadSavedSidebarWidth(): number {
-  const stored = localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
-  if (stored) {
-    const n = parseInt(stored, 10);
-    if (!Number.isNaN(n) && n > 0) return n;
-  }
-  return DEFAULT_SIDEBAR_WIDTH;
+  const saved = parseSidebarWidth(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
+  if (saved !== null) return clampSidebarWidth(saved);
+  const legacy = parseSidebarWidth(localStorage.getItem(LEGACY_SIDEBAR_WIDTH_STORAGE_KEY));
+  if (legacy === null) return DEFAULT_SIDEBAR_WIDTH;
+  const migrated = clampSidebarWidth(legacy + PROJECT_RAIL_WIDTH);
+  saveSidebarWidth(migrated);
+  localStorage.removeItem(LEGACY_SIDEBAR_WIDTH_STORAGE_KEY);
+  return migrated;
 }
 
 export function saveSidebarWidth(width: number): void {

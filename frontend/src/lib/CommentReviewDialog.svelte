@@ -2,7 +2,7 @@
   import { untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import type { PrEntry, PrComment } from "./types";
-  import { api } from "./api";
+  import { projectApi } from "./api";
   import { normalizeTextForPrompt } from "./promptUtils";
   import { prLabel, errorMessage } from "./utils";
   import { getToastController } from "./toast-context";
@@ -11,11 +11,13 @@
   import LinkBtn from "./LinkBtn.svelte";
 
   let {
+    project,
     pr,
     branch,
     onclose,
     onsendsuccess,
   }: {
+    project: string;
     pr: PrEntry;
     branch: string;
     onclose: () => void;
@@ -86,7 +88,7 @@
       .map((c, i) => formatComment(c, i + 1))
       .join("\n\n");
     try {
-      await api.sendWorktreePrompt({
+      await projectApi(project).sendWorktreePrompt({
         params: { name: branch },
         body: {
           text: normalizeTextForPrompt(content, 20000),

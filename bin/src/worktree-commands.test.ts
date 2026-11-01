@@ -1311,7 +1311,7 @@ describe("runWorktreeCommand", () => {
         },
         {
           createRuntime: () => { throw new Error("unexpected"); },
-          resolveBaseUrl: async () => "http://localhost:5111/myproject",
+          resolveServedProject: async () => "myproject",
           stdout: (msg) => stdout.push(msg),
         },
       );
@@ -1319,7 +1319,7 @@ describe("runWorktreeCommand", () => {
       expect(exitCode).toBe(0);
       expect(stdout).toEqual(["Sent prompt to feature/search"]);
       expect(fetchCalls).toHaveLength(1);
-      expect(fetchCalls[0].url).toBe("http://localhost:5111/myproject/api/worktrees/feature%2Fsearch/send");
+      expect(fetchCalls[0].url).toBe("http://localhost:5111/api/projects/myproject/worktrees/feature%2Fsearch/send");
       expect(fetchCalls[0].init.method).toBe("POST");
       expect(JSON.parse(fetchCalls[0].init.body as string)).toEqual({
         text: "Fix the bug",
@@ -1345,7 +1345,7 @@ describe("runWorktreeCommand", () => {
         },
         {
           createRuntime: () => { throw new Error("unexpected"); },
-          resolveBaseUrl: async () => "http://localhost:5111/myproject",
+          resolveServedProject: async () => "myproject",
           stderr: (msg) => stderr.push(msg),
         },
       );
@@ -1369,7 +1369,7 @@ describe("runWorktreeCommand", () => {
         },
         {
           createRuntime: () => { throw new Error("unexpected"); },
-          resolveBaseUrl: async () => "http://localhost:9999/myproject",
+          resolveServedProject: async () => "myproject",
           stderr: (msg) => stderr.push(msg),
         },
       );
@@ -1613,7 +1613,7 @@ describe("runWorktreeCommand port", () => {
       { command: "port", args: ["web"], projectDir: "/repo", port: 5111 },
       {
         createRuntime: () => { throw new Error("unexpected"); },
-        resolveBaseUrl: async () => "http://localhost:5111/myproject",
+        resolveServedProject: async () => "myproject",
         resolveCurrentBranch: () => "feature/search",
         stdout: (msg) => stdout.push(msg),
       },
@@ -1621,7 +1621,7 @@ describe("runWorktreeCommand port", () => {
 
     expect(exitCode).toBe(0);
     expect(stdout).toEqual(["4100"]);
-    expect(fetchCalls[0].url).toBe("http://localhost:5111/myproject/api/worktrees/feature%2Fsearch/ports");
+    expect(fetchCalls[0].url).toBe("http://localhost:5111/api/projects/myproject/worktrees/feature%2Fsearch/ports");
     expect(fetchCalls[0].init.method).toBe("POST");
     expect(JSON.parse(fetchCalls[0].init.body as string)).toEqual({ label: "web" });
   });
@@ -1638,7 +1638,7 @@ describe("runWorktreeCommand port", () => {
       { command: "port", args: ["web", "--keep"], projectDir: "/repo", port: 5111 },
       {
         createRuntime: () => { throw new Error("unexpected"); },
-        resolveBaseUrl: async () => "http://localhost:5111/myproject",
+        resolveServedProject: async () => "myproject",
         resolveCurrentBranch: () => "feature/search",
         stdout: (msg) => stdout.push(msg),
       },
@@ -1663,7 +1663,7 @@ describe("runWorktreeCommand port", () => {
       { command: "port", args: ["ls"], projectDir: "/repo", port: 5111 },
       {
         createRuntime: () => { throw new Error("unexpected"); },
-        resolveBaseUrl: async () => "http://localhost:5111/myproject",
+        resolveServedProject: async () => "myproject",
         resolveCurrentBranch: () => "feature/search",
         stdout: (msg) => stdout.push(msg),
       },

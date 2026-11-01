@@ -28,6 +28,9 @@ export interface ProjectLoopController {
   stopLight(): void;
   startHeavy(): void;
   stopHeavy(): void;
+  /** Undo what `createLoops` registered outside the loops (served routes,
+   *  notification hub source). Runs once, from `remove()`, after the loops stop. */
+  dispose(): void;
 }
 
 const NOOP_LOOPS: ProjectLoopController = {
@@ -35,6 +38,7 @@ const NOOP_LOOPS: ProjectLoopController = {
   stopLight(): void {},
   startHeavy(): void {},
   stopHeavy(): void {},
+  dispose(): void {},
 };
 
 export interface ProjectManagerDeps<R extends RuntimeLike = WebmuxRuntime> {
@@ -116,6 +120,7 @@ export class ProjectManager<R extends RuntimeLike = WebmuxRuntime> {
     const controller = this.loops.get(prefix);
     controller?.stopHeavy();
     controller?.stopLight();
+    controller?.dispose();
     this.projects.delete(prefix);
     this.loops.delete(prefix);
     this.registry.remove(project.entry.path);

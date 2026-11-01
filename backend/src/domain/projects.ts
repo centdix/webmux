@@ -1,6 +1,6 @@
 /** A project webmux knows about, persisted in `~/.webmux/projects.json`.
  *  `path` is the resolved git root; `name` is the display label shown in the
- *  project switcher. */
+ *  dashboard sidebar. */
 export interface ProjectEntry {
   path: string;
   name: string;

@@ -334,11 +334,19 @@ export const WorktreeCreationStateSchema = z.object({
 
 export const AppNotificationSchema = z.object({
   id: z.number(),
+  /** Prefix of the project that emitted it; ids are only unique per project. */
+  project: z.string(),
   branch: z.string(),
   type: z.enum(["agent_stopped", "pr_opened", "runtime_error", "worktree_auto_removed"]),
   message: z.string(),
   url: z.string().optional(),
   timestamp: z.number(),
+});
+
+/** Payload of a `dismiss` event on the hub notification stream. */
+export const NotificationDismissalSchema = z.object({
+  project: z.string(),
+  id: z.number(),
 });
 
 export const WorktreeTabSchema = z.object({
@@ -644,6 +652,26 @@ export const ProjectsResponseSchema = z.object({
   projects: z.array(ProjectSummarySchema),
 });
 
+/** One project's worktrees, as returned by the hub's all-projects listing.
+ *  `error` is set (and `worktrees` empty) when that project's snapshot failed. */
+export const ProjectWorktreesSchema = z.object({
+  prefix: z.string(),
+  name: z.string(),
+  worktrees: z.array(ProjectWorktreeSnapshotSchema),
+  error: z.string().nullable(),
+});
+
+/** Only the dashboard polls this listing, so every call counts as dashboard
+ *  activity (which drives the per-project PR polling cadence). `focus` is the
+ *  project the dashboard is showing; an empty or unknown prefix is ignored. */
+export const AllProjectWorktreesQuerySchema = z.object({
+  focus: z.string().optional(),
+});
+
+export const AllProjectWorktreesResponseSchema = z.object({
+  projects: z.array(ProjectWorktreesSchema),
+});
+
 export const AddProjectRequestSchema = z.object({
   path: z.string().min(1),
 });
@@ -700,6 +728,9 @@ export const MigrateProjectsResponseSchema = z.object({
 
 export type ProjectSummary = z.infer<typeof ProjectSummarySchema>;
 export type ProjectsResponse = z.infer<typeof ProjectsResponseSchema>;
+export type ProjectWorktrees = z.infer<typeof ProjectWorktreesSchema>;
+export type AllProjectWorktreesQuery = z.infer<typeof AllProjectWorktreesQuerySchema>;
+export type AllProjectWorktreesResponse = z.infer<typeof AllProjectWorktreesResponseSchema>;
 export type AddProjectRequest = z.infer<typeof AddProjectRequestSchema>;
 export type AddProjectResponse = z.infer<typeof AddProjectResponseSchema>;
 export type ProjectInitPhase = z.infer<typeof ProjectInitPhaseSchema>;
@@ -760,6 +791,7 @@ export type LinearIssuesResponse = z.infer<typeof LinearIssuesResponseSchema>;
 export type AutoNameConfigResponse = z.infer<typeof AutoNameConfigResponseSchema>;
 export type WorktreeCreationState = z.infer<typeof WorktreeCreationStateSchema>;
 export type AppNotification = z.infer<typeof AppNotificationSchema>;
+export type NotificationDismissal = z.infer<typeof NotificationDismissalSchema>;
 export type ProjectWorktreeSnapshot = z.infer<typeof ProjectWorktreeSnapshotSchema>;
 export type WorktreeTab = z.infer<typeof WorktreeTabSchema>;
 export type WorktreeTabParams = z.infer<typeof WorktreeTabParamsSchema>;

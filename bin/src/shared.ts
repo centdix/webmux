@@ -1,6 +1,6 @@
 import { dirname, resolve } from "node:path";
 import { realpathSync } from "node:fs";
-import { createApi } from "@webmux/api-contract";
+import { createHubApi } from "@webmux/api-contract";
 import { run } from "../../backend/src/lib/shell";
 
 // Generic process/git/repo primitives live in the backend lib so backend code
@@ -73,20 +73,24 @@ function canonicalizePath(path: string): string {
   }
 }
 
-/** Base URL for talking to the active project on the running server. The server
- *  serves each project under `/<prefix>`, so a server-backed CLI command must
- *  target `http://localhost:<port>/<prefix>` for the project at `projectDir`.
+/** Origin of the local webmux server on `port`. */
+export function serverOrigin(port: number): string {
+  return `http://localhost:${port}`;
+}
+
+/** Prefix of the served project at `projectDir` on the running server. Every
+ *  per-project route lives under `/api/projects/<prefix>`, so a server-backed CLI
+ *  command needs it to build its project client.
  *  Throws a CommandUsageError when `projectDir` isn't a git repo (no project to
  *  scope to) or when its root resolves but isn't a served project. */
-export async function resolveProjectBaseUrl(port: number, projectDir: string = process.cwd()): Promise<string> {
-  const base = `http://localhost:${port}`;
+export async function resolveServedProjectPrefix(port: number, projectDir: string = process.cwd()): Promise<string> {
   const root = resolveProjectRoot(projectDir);
   if (!root) {
     throw new CommandUsageError(
       `Not inside a git repository, so webmux can't tell which project this command targets. cd into a project served by webmux (\`webmux project ls\` lists them) and try again.`,
     );
   }
-  const { projects } = await createApi(base).fetchProjects();
+  const { projects } = await createHubApi({ origin: serverOrigin(port) }).fetchProjects();
   const target = canonicalizePath(root);
   const match = projects.find((project) => canonicalizePath(project.path) === target);
   if (!match) {
@@ -94,19 +98,18 @@ export async function resolveProjectBaseUrl(port: number, projectDir: string = p
       `This project (${root}) isn't served by webmux on port ${port}. Run \`webmux project add\` or start \`webmux serve\` in it first.`,
     );
   }
-  return `${base}/${match.prefix}`;
+  return match.prefix;
 }
 
-/** The server serves each project under `/<prefix>`, so an in-process runtime
- *  that writes `control.env` must embed that prefix or the agent's status hooks
- *  POST to an unrouted path. Best-effort: returns `undefined` when the prefix
- *  can't be resolved (no server running, or the repo isn't a served project) so
- *  the caller writes no control URL at all rather than a wrong one. Status
- *  self-heals when the worktree is next opened/refreshed from a dashboard. */
+/** An in-process runtime that writes `control.env` must embed the project
+ *  prefix or the agent's status hooks POST to an unrouted path. Best-effort:
+ *  returns `undefined` when the prefix can't be resolved (no server running, or
+ *  the repo isn't a served project) so the caller writes no control URL at all
+ *  rather than a wrong one. Status self-heals when the worktree is next
+ *  opened/refreshed from a dashboard. */
 export async function resolveProjectPrefix(port: number, projectDir: string = process.cwd()): Promise<string | undefined> {
   try {
-    const base = await resolveProjectBaseUrl(port, projectDir);
-    return new URL(base).pathname.replace(/^\/+|\/+$/g, "") || undefined;
+    return await resolveServedProjectPrefix(port, projectDir);
   } catch {
     return undefined;
   }

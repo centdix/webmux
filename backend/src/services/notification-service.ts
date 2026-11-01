@@ -1,13 +1,21 @@
+import type { NotificationDismissal } from "@webmux/api-contract";
 import type { RuntimeEvent } from "../domain/events";
 
 export interface RuntimeNotification {
   id: number;
+  project: string;
   branch: string;
   type: "agent_stopped" | "pr_opened" | "runtime_error" | "worktree_auto_removed";
   message: string;
   url?: string;
   timestamp: number;
 }
+
+export type NotificationEvent =
+  | { event: "notification"; data: RuntimeNotification }
+  | { event: "dismiss"; data: NotificationDismissal };
+
+export type NotificationListener = (event: NotificationEvent) => void;
 
 function eventToNotificationInput(event: RuntimeEvent): { branch: string; type: RuntimeNotification["type"]; message: string; url?: string } | null {
   switch (event.type) {
@@ -24,26 +32,36 @@ function eventToNotificationInput(event: RuntimeEvent): { branch: string; type: 
 
 export class NotificationService {
   private readonly notifications: RuntimeNotification[] = [];
-  private readonly sseClients = new Set<ReadableStreamDefaultController<Uint8Array>>();
+  private readonly listeners = new Set<NotificationListener>();
   private nextId = 1;
 
-  constructor(private readonly maxItems = 50) {}
+  /** `project` is the prefix stamped on every notification so merged streams
+   *  can tell projects apart (ids are only unique per project). */
+  constructor(readonly project: string, private readonly maxItems = 50) {}
 
   list(): RuntimeNotification[] {
     return [...this.notifications];
+  }
+
+  subscribe(listener: NotificationListener): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   dismiss(id: number): boolean {
     const index = this.notifications.findIndex((notification) => notification.id === id);
     if (index === -1) return false;
     this.notifications.splice(index, 1);
-    this.broadcast("dismiss", { id });
+    this.emit({ event: "dismiss", data: { project: this.project, id } });
     return true;
   }
 
   notify(input: { branch: string; type: RuntimeNotification["type"]; message: string; url?: string }): RuntimeNotification {
     const notification: RuntimeNotification = {
       id: this.nextId,
+      project: this.project,
       branch: input.branch,
       type: input.type,
       message: input.message,
@@ -55,7 +73,7 @@ export class NotificationService {
     while (this.notifications.length > this.maxItems) {
       this.notifications.shift();
     }
-    this.broadcast("notification", notification);
+    this.emit({ event: "notification", data: notification });
     return notification;
   }
 
@@ -65,42 +83,7 @@ export class NotificationService {
     return this.notify(input);
   }
 
-  stream(): Response {
-    let controllerRef: ReadableStreamDefaultController<Uint8Array> | null = null;
-    const stream = new ReadableStream<Uint8Array>({
-      start: (controller) => {
-        controllerRef = controller;
-        this.sseClients.add(controller);
-        for (const notification of this.notifications) {
-          controller.enqueue(this.formatSse("initial", notification));
-        }
-      },
-      cancel: () => {
-        if (controllerRef) this.sseClients.delete(controllerRef);
-      },
-    });
-
-    return new Response(stream, {
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      },
-    });
-  }
-
-  private formatSse(event: string, data: unknown): Uint8Array {
-    return new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-  }
-
-  private broadcast(event: "notification" | "dismiss", data: RuntimeNotification | { id: number }): void {
-    const encoded = this.formatSse(event, data);
-    for (const controller of this.sseClients) {
-      try {
-        controller.enqueue(encoded);
-      } catch {
-        this.sseClients.delete(controller);
-      }
-    }
+  private emit(event: NotificationEvent): void {
+    for (const listener of this.listeners) listener(event);
   }
 }

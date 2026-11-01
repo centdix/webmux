@@ -11,6 +11,7 @@
   import Btn from "./Btn.svelte";
   import NotificationItem from "./NotificationItem.svelte";
   import { makeIdeUrl } from "./utils";
+  import { notificationKey } from "./worktree-ref";
 
   let {
     name,
@@ -52,7 +53,7 @@
     onReviewsClick: (pr: PrEntry) => void;
     ondirtyclick?: () => void;
     onbellopen?: () => void;
-    onnotificationselect?: (branch: string) => void;
+    onnotificationselect?: (notification: AppNotification) => void;
     archiving?: boolean;
   } = $props();
 
@@ -326,14 +327,14 @@
             </div>
           {:else}
             <ul class="list-none max-h-64 overflow-y-auto">
-              {#each notificationHistory as n (n.id)}
+              {#each notificationHistory as n (notificationKey(n))}
                 <li>
                   <button
                     type="button"
                     class="w-full px-3 py-2 text-left bg-transparent border-none text-inherit cursor-pointer hover:bg-hover flex items-center gap-2"
                     onclick={() => {
                       if (n.url) window.open(n.url, "_blank", "noopener,noreferrer");
-                      onnotificationselect?.(n.branch);
+                      onnotificationselect?.(n);
                       bellOpen = false;
                     }}
                   >

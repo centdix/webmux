@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { createApi } from "./client";
+import { createHubApi, createProjectApi } from "./client";
 
 function success(body: unknown): { status: number; body: unknown; headers: Headers } {
   return {
@@ -9,10 +9,11 @@ function success(body: unknown): { status: number; body: unknown; headers: Heade
   };
 }
 
-describe("createApi", () => {
+describe("createProjectApi", () => {
   it("encodes slash-containing path params before ts-rest interpolates them", async () => {
     const paths: string[] = [];
-    const api = createApi("https://example.com", {
+    const api = createProjectApi("myproject", {
+      origin: "https://example.com",
       api: async ({ path }) => {
         paths.push(path);
         return success({ ok: true });
@@ -24,12 +25,13 @@ describe("createApi", () => {
       body: { text: "Fix the failing tests" },
     });
 
-    expect(paths).toEqual(["https://example.com/api/worktrees/feature%2Fsearch/send"]);
+    expect(paths).toEqual(["https://example.com/api/projects/myproject/worktrees/feature%2Fsearch/send"]);
   });
 
   it("preserves numeric path params for notification and CI routes", async () => {
     const paths: string[] = [];
-    const api = createApi("https://example.com", {
+    const api = createProjectApi("myproject", {
+      origin: "https://example.com",
       api: async ({ path }) => {
         paths.push(path);
         if (path.endsWith("/dismiss")) {
@@ -43,13 +45,27 @@ describe("createApi", () => {
     await api.fetchCiLogs({ params: { runId: 317 } });
 
     expect(paths).toEqual([
-      "https://example.com/api/notifications/42/dismiss",
-      "https://example.com/api/ci-logs/317",
+      "https://example.com/api/projects/myproject/notifications/42/dismiss",
+      "https://example.com/api/projects/myproject/ci-logs/317",
     ]);
   });
 
+  it("rejects a 2xx HTML response (SPA fallback of a server without the route)", async () => {
+    const api = createProjectApi("myproject", {
+      origin: "https://example.com",
+      api: async () => ({
+        status: 200,
+        body: "<!doctype html><html></html>",
+        headers: new Headers({ "content-type": "text/html;charset=utf-8" }),
+      }),
+    });
+
+    await expect(api.fetchWorktrees()).rejects.toThrow("expected JSON, got HTML");
+  });
+
   it("throws API error messages from json error bodies", async () => {
-    const api = createApi("https://example.com", {
+    const api = createProjectApi("myproject", {
+      origin: "https://example.com",
       api: async () => ({
         status: 404,
         body: { error: "Not found" },
@@ -61,7 +77,8 @@ describe("createApi", () => {
   });
 
   it("throws API error messages from stringified json error bodies", async () => {
-    const api = createApi("https://example.com", {
+    const api = createProjectApi("myproject", {
+      origin: "https://example.com",
       api: async () => ({
         status: 502,
         body: JSON.stringify({ error: "Gateway unavailable" }),
@@ -70,5 +87,44 @@ describe("createApi", () => {
     });
 
     await expect(api.fetchCiLogs({ params: { runId: 99 } })).rejects.toThrow("Gateway unavailable");
+  });
+});
+
+describe("createProjectApi base path", () => {
+  it("defaults to same-origin relative URLs and encodes the project segment", async () => {
+    const paths: string[] = [];
+    const api = createProjectApi("my project", {
+      api: async ({ path }) => {
+        paths.push(path);
+        return success({ worktrees: [] });
+      },
+    });
+
+    await api.fetchWorktrees();
+
+    expect(paths).toEqual(["/api/projects/my%20project/worktrees"]);
+  });
+});
+
+describe("createHubApi", () => {
+  it("targets absolute hub paths on the given origin", async () => {
+    const paths: string[] = [];
+    const api = createHubApi({
+      origin: "https://example.com",
+      api: async ({ path }) => {
+        paths.push(path);
+        return success({ projects: [] });
+      },
+    });
+
+    await api.fetchAllProjectWorktrees();
+    await api.fetchAllProjectWorktrees({ query: { focus: "webmux" } });
+    await api.removeProject({ params: { prefix: "webmux" } });
+
+    expect(paths).toEqual([
+      "https://example.com/api/projects/worktrees",
+      "https://example.com/api/projects/worktrees?focus=webmux",
+      "https://example.com/api/projects/webmux",
+    ]);
   });
 });

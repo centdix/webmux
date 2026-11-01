@@ -7,7 +7,9 @@ import pkg from "../../package.json";
 import {
   AgentIdParamsSchema,
   AgentsSendMessageRequestSchema,
-  apiPaths,
+  hubApiPaths,
+  projectApiPaths,
+  AllProjectWorktreesQuerySchema,
   AvailableBranchesQuerySchema,
   CreateWorktreeRequestSchema,
   NotificationIdParamsSchema,
@@ -27,6 +29,7 @@ import {
   WorktreeNameParamsSchema,
 } from "@webmux/api-contract";
 import { log } from "./lib/log";
+import { serveUnmatchedRequest } from "./services/static-frontend-service";
 import {
   attach,
   detach,
@@ -72,7 +75,8 @@ import {
 } from "./services/project-init-service";
 import { isRecord, isStringArray } from "./lib/type-guards";
 import { parseJsonBody, parseParams, parseQuery } from "./api-validation";
-import { hasRecentDashboardActivity, touchDashboardActivity } from "./services/dashboard-activity";
+import { DashboardActivityTracker, FOCUSED_PR_SYNC_INTERVAL_MS } from "./services/dashboard-activity";
+import { NotificationHub } from "./services/notification-hub-service";
 import { buildArchivedWorktreePathSet, normalizeArchivePath } from "./services/archive-service";
 import { resolveAgentChatSupport, resolveAgentTerminalSubmitDelayMs } from "./services/agent-chat-service";
 import { validateCustomAgentInput } from "./services/agent-validation-service";
@@ -122,6 +126,8 @@ import {
 } from "./services/agents-ui-stream-service";
 import { classifyAgentsTerminalWorktreeError } from "./services/agents-ui-action-service";
 import { buildProjectSnapshot } from "./services/snapshot-service";
+import { hubReconcileOptions, listAllProjectWorktrees } from "./services/all-projects-worktrees-service";
+import type { ReconcileOptions } from "./services/reconciliation-service";
 import {
   ClaudeConversationService,
   isPendingClaudeConversationId,
@@ -143,6 +149,7 @@ import type {
 } from "./domain/agents-ui";
 import type { OneshotMeta, ProjectSnapshot, WorktreeSnapshot } from "./domain/model";
 import { isValidBranchName, isValidWorktreeName } from "./domain/policies";
+import { assembleServeRoutes } from "./domain/project-routes";
 import { createPortRegistrationService, createWebmuxRuntime, type WebmuxRuntime } from "./runtime";
 import { createInstanceRegistry, type InstanceEntry } from "./adapters/instance-registry";
 import { createProjectsRegistry } from "./adapters/projects-registry";
@@ -207,12 +214,13 @@ interface WsHandlers {
 
 /** Everything a single project exposes: its (unprefixed) route map, WebSocket
  *  handlers, and the light background-loop controls. Built by `createProjectApp`
- *  and bound to exactly one `WebmuxRuntime`. The global server prefixes each
- *  route key with `/${prefix}` and dispatches WS by `ws.data.prefix`. */
+ *  and bound to exactly one `WebmuxRuntime`. The global server mounts each
+ *  route key under `/api/projects/${prefix}` and dispatches WS by `ws.data.prefix`. */
 interface ProjectApp {
   prefix: string;
   routes: ProjectRoutes;
   wsHandlers: WsHandlers;
+  readWorktrees(reconcileOptions?: ReconcileOptions): Promise<WorktreeSnapshot[]>;
   startLight(): void;
   stopLight(): void;
 }
@@ -509,6 +517,11 @@ function sendAgentsWs(ws: { readyState: number; send: (data: string) => void }, 
   }
 }
 
+/** Log label for a project route: `METHOD /path` with the given params filled in. */
+function routeLabel(method: string, path: string, params: Record<string, string> = {}): string {
+  return `${method} ${path.replace(/:(\w+)/g, (placeholder: string, key: string) => params[key] ?? placeholder)}`;
+}
+
 /** Wrap an async API handler to catch and log unhandled errors. */
 function catching(label: string, fn: () => Promise<Response>): Promise<Response> {
   return fn().catch((err: unknown) => {
@@ -624,7 +637,6 @@ async function resolveAgentsTerminalWorktree(branch: string): Promise<{
 }
 
 async function apiGetNativeTerminalLaunch(branch: string): Promise<Response> {
-  touchDashboardActivity();
   ensureBranchNotBusy(branch);
   await reconciliationService.reconcile(PROJECT_DIR);
   const launch = buildNativeTerminalLaunch({
@@ -683,12 +695,12 @@ function makeCallbacks(ws: { send: (data: string) => void; readyState: number })
   };
 }
 
-async function readProjectSnapshot(): Promise<ProjectSnapshot> {
+async function readProjectSnapshot(reconcileOptions: ReconcileOptions = {}): Promise<ProjectSnapshot> {
   const linearApiKey = Bun.env.LINEAR_API_KEY;
   const linearIssuesPromise = config.integrations.linear.enabled && linearApiKey?.trim()
     ? fetchAssignedIssues()
     : Promise.resolve({ ok: true as const, data: [] });
-  await reconciliationService.reconcile(PROJECT_DIR);
+  await reconciliationService.reconcile(PROJECT_DIR, reconcileOptions);
   const archiveState = await archiveStateService.prune(projectRuntime.listWorktrees().map((worktree) => worktree.path));
   const linearResult = await linearIssuesPromise;
   const archivedPaths = buildArchivedWorktreePathSet(archiveState);
@@ -720,15 +732,11 @@ async function readProjectSnapshot(): Promise<ProjectSnapshot> {
 // --- API handler functions (thin I/O layer, testable by injecting deps) ---
 
 async function apiGetProject(): Promise<Response> {
-  touchDashboardActivity();
   return jsonResponse(await readProjectSnapshot());
 }
 
 async function apiGetWorktrees(): Promise<Response> {
-  touchDashboardActivity();
-  return jsonResponse({
-    worktrees: (await readProjectSnapshot()).worktrees,
-  });
+  return jsonResponse({ worktrees: await readWorktrees() });
 }
 
 function findSnapshotWorktree(snapshot: ProjectSnapshot, branch: string): WorktreeSnapshot | null {
@@ -911,7 +919,6 @@ async function sendClaudeStreamingMessage(input: {
 }
 
 async function apiAttachAgentsWorktree(branch: string): Promise<Response> {
-  touchDashboardActivity();
   const resolved = await resolveAgentsWorktree(branch);
   if (!resolved.ok) return resolved.response;
 
@@ -929,7 +936,6 @@ async function apiAttachAgentsWorktree(branch: string): Promise<Response> {
 }
 
 async function apiGetAgentsWorktreeHistory(branch: string): Promise<Response> {
-  touchDashboardActivity();
   const resolved = await resolveAgentsWorktree(branch);
   if (!resolved.ok) return resolved.response;
 
@@ -947,7 +953,6 @@ async function apiGetAgentsWorktreeHistory(branch: string): Promise<Response> {
 }
 
 async function apiSendAgentsWorktreeMessage(branch: string, req: Request): Promise<Response> {
-  touchDashboardActivity();
   await disarmOneshotIfArmed(branch, "agents-send-message");
   const parsed = await parseJsonBody(req, AgentsSendMessageRequestSchema);
   if (!parsed.ok) return parsed.response;
@@ -1011,7 +1016,6 @@ async function apiSendAgentsWorktreeMessage(branch: string, req: Request): Promi
 }
 
 async function apiInterruptAgentsWorktree(branch: string): Promise<Response> {
-  touchDashboardActivity();
   await disarmOneshotIfArmed(branch, "agents-interrupt");
   const resolved = await resolveAgentsWorktree(branch);
   if (!resolved.ok) return resolved.response;
@@ -1064,7 +1068,6 @@ async function apiInterruptAgentsWorktree(branch: string): Promise<Response> {
 }
 
 async function apiRefreshWorktreeAgentTerminal(branch: string): Promise<Response> {
-  touchDashboardActivity();
   return withMutatingTab(branch, async () => {
     await lifecycleService.refreshAgentTerminal(branch);
     return jsonResponse({ ok: true });
@@ -1959,14 +1962,14 @@ function parseAgentIdParam(params: Record<string, string>):
 // --- Server ---
 
   const routes: ProjectRoutes = {
-    [apiPaths.streamAgentsWorktreeConversation]: (req, server) => {
+    [projectApiPaths.streamAgentsWorktreeConversation]: (req, server) => {
       const branch = decodeURIComponent(req.params.name);
       return server.upgrade(req, { data: { kind: "agents", prefix: instancePrefix, branch, conversationId: null, unsubscribe: null } })
         ? undefined
         : new Response("WebSocket upgrade failed", { status: 400 });
     },
 
-    "/ws/:worktree": (req, server) => {
+    [projectApiPaths.streamTerminal]: (req, server) => {
       const branch = decodeURIComponent(req.params.worktree);
       return server.upgrade(req, {
         data: { kind: "terminal", prefix: instancePrefix, branch, worktreeId: null, attachId: null, attached: false },
@@ -1975,308 +1978,304 @@ function parseAgentIdParam(params: Record<string, string>):
         : new Response("WebSocket upgrade failed", { status: 400 });
     },
 
-    [apiPaths.fetchConfig]: {
+    [projectApiPaths.fetchConfig]: {
       GET: () => jsonResponse(getFrontendConfig()),
     },
 
-    [apiPaths.fetchAvailableBranches]: {
-      GET: (req) => catching("GET /api/branches", () => apiListBranches(req)),
+    [projectApiPaths.fetchAvailableBranches]: {
+      GET: (req) => catching(routeLabel("GET", projectApiPaths.fetchAvailableBranches), () => apiListBranches(req)),
     },
 
-    [apiPaths.fetchBaseBranches]: {
-      GET: () => catching("GET /api/base-branches", () => apiListBaseBranches()),
+    [projectApiPaths.fetchBaseBranches]: {
+      GET: () => catching(routeLabel("GET", projectApiPaths.fetchBaseBranches), () => apiListBaseBranches()),
     },
 
-    [apiPaths.fetchProject]: {
-      GET: () => catching("GET /api/project", () => apiGetProject()),
+    [projectApiPaths.fetchProject]: {
+      GET: () => catching(routeLabel("GET", projectApiPaths.fetchProject), () => apiGetProject()),
     },
 
-    [apiPaths.fetchAgents]: {
-      GET: () => catching("GET /api/agents", () => apiListAgents()),
-      POST: (req) => catching("POST /api/agents", () => apiCreateAgent(req)),
+    [projectApiPaths.fetchAgents]: {
+      GET: () => catching(routeLabel("GET", projectApiPaths.fetchAgents), () => apiListAgents()),
+      POST: (req) => catching(routeLabel("POST", projectApiPaths.createAgent), () => apiCreateAgent(req)),
     },
 
-    [apiPaths.validateAgent]: {
-      POST: (req) => catching("POST /api/agents/validate", () => apiValidateAgent(req)),
+    [projectApiPaths.validateAgent]: {
+      POST: (req) => catching(routeLabel("POST", projectApiPaths.validateAgent), () => apiValidateAgent(req)),
     },
 
-    [apiPaths.updateAgent]: {
+    [projectApiPaths.updateAgent]: {
       PUT: (req) => {
         const parsed = parseAgentIdParam(req.params);
         if (!parsed.ok) return parsed.response;
-        return catching("PUT /api/agents/:id", () => apiUpdateAgent(parsed.data, req));
+        return catching(routeLabel("PUT", projectApiPaths.updateAgent, { id: parsed.data }), () => apiUpdateAgent(parsed.data, req));
       },
       DELETE: (req) => {
         const parsed = parseAgentIdParam(req.params);
         if (!parsed.ok) return parsed.response;
-        return catching("DELETE /api/agents/:id", () => apiDeleteAgent(parsed.data));
+        return catching(routeLabel("DELETE", projectApiPaths.deleteAgent, { id: parsed.data }), () => apiDeleteAgent(parsed.data));
       },
     },
 
-    [apiPaths.attachAgentsWorktreeConversation]: {
+    [projectApiPaths.attachAgentsWorktreeConversation]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`POST ${apiPaths.attachAgentsWorktreeConversation}`, () => apiAttachAgentsWorktree(name));
+        return catching(routeLabel("POST", projectApiPaths.attachAgentsWorktreeConversation, { name }), () => apiAttachAgentsWorktree(name));
       },
     },
 
-    [apiPaths.fetchAgentsWorktreeConversationHistory]: {
+    [projectApiPaths.fetchAgentsWorktreeConversationHistory]: {
       GET: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`GET ${apiPaths.fetchAgentsWorktreeConversationHistory}`, () => apiGetAgentsWorktreeHistory(name));
+        return catching(routeLabel("GET", projectApiPaths.fetchAgentsWorktreeConversationHistory, { name }), () => apiGetAgentsWorktreeHistory(name));
       },
     },
 
-    [apiPaths.sendAgentsWorktreeConversationMessage]: {
+    [projectApiPaths.sendAgentsWorktreeConversationMessage]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
         return catching(
-          `POST ${apiPaths.sendAgentsWorktreeConversationMessage}`,
+          routeLabel("POST", projectApiPaths.sendAgentsWorktreeConversationMessage, { name }),
           () => apiSendAgentsWorktreeMessage(name, req),
         );
       },
     },
 
-    [apiPaths.interruptAgentsWorktreeConversation]: {
+    [projectApiPaths.interruptAgentsWorktreeConversation]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
         return catching(
-          `POST ${apiPaths.interruptAgentsWorktreeConversation}`,
+          routeLabel("POST", projectApiPaths.interruptAgentsWorktreeConversation, { name }),
           () => apiInterruptAgentsWorktree(name),
         );
       },
     },
 
-    "/api/runtime/events": {
-      POST: (req) => catching("POST /api/runtime/events", () => apiRuntimeEvent(req)),
+    [projectApiPaths.postRuntimeEvent]: {
+      POST: (req) => catching(routeLabel("POST", projectApiPaths.postRuntimeEvent), () => apiRuntimeEvent(req)),
     },
 
-    [apiPaths.fetchWorktrees]: {
-      GET: () => catching("GET /api/worktrees", () => apiGetWorktrees()),
-      POST: (req) => catching("POST /api/worktrees", () => apiCreateWorktree(req)),
+    [projectApiPaths.fetchWorktrees]: {
+      GET: () => catching(routeLabel("GET", projectApiPaths.fetchWorktrees), () => apiGetWorktrees()),
+      POST: (req) => catching(routeLabel("POST", projectApiPaths.createWorktree), () => apiCreateWorktree(req)),
     },
 
-    [apiPaths.removeWorktree]: {
+    [projectApiPaths.removeWorktree]: {
       DELETE: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`DELETE /api/worktrees/${name}`, () => apiDeleteWorktree(name));
+        return catching(routeLabel("DELETE", projectApiPaths.removeWorktree, { name }), () => apiDeleteWorktree(name));
       },
     },
 
-    [apiPaths.openWorktree]: {
+    [projectApiPaths.openWorktree]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`POST /api/worktrees/${name}/open`, () => apiOpenWorktree(name, req));
+        return catching(routeLabel("POST", projectApiPaths.openWorktree, { name }), () => apiOpenWorktree(name, req));
       },
     },
 
-    "/api/worktrees/:name/terminal-launch": {
+    [projectApiPaths.fetchNativeTerminalLaunch]: {
       GET: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`GET /api/worktrees/${name}/terminal-launch`, () => apiGetNativeTerminalLaunch(name));
+        return catching(routeLabel("GET", projectApiPaths.fetchNativeTerminalLaunch, { name }), () => apiGetNativeTerminalLaunch(name));
       },
     },
 
-    [apiPaths.closeWorktree]: {
+    [projectApiPaths.closeWorktree]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`POST /api/worktrees/${name}/close`, () => apiCloseWorktree(name));
+        return catching(routeLabel("POST", projectApiPaths.closeWorktree, { name }), () => apiCloseWorktree(name));
       },
     },
 
-    [apiPaths.refreshWorktreeAgentTerminal]: {
+    [projectApiPaths.refreshWorktreeAgentTerminal]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`POST /api/worktrees/${name}/agent-terminal/refresh`, () => apiRefreshWorktreeAgentTerminal(name));
+        return catching(routeLabel("POST", projectApiPaths.refreshWorktreeAgentTerminal, { name }), () => apiRefreshWorktreeAgentTerminal(name));
       },
     },
 
-    [apiPaths.setWorktreeArchived]: {
+    [projectApiPaths.setWorktreeArchived]: {
       PUT: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`PUT /api/worktrees/${name}/archive`, () => apiSetWorktreeArchived(name, req));
+        return catching(routeLabel("PUT", projectApiPaths.setWorktreeArchived, { name }), () => apiSetWorktreeArchived(name, req));
       },
     },
 
-    [apiPaths.postWorktreeToLinear]: {
+    [projectApiPaths.postWorktreeToLinear]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`POST /api/worktrees/${name}/linear/post`, () => apiPostWorktreeToLinear(name, req));
+        return catching(routeLabel("POST", projectApiPaths.postWorktreeToLinear, { name }), () => apiPostWorktreeToLinear(name, req));
       },
     },
 
-    [apiPaths.syncWorktreePrs]: {
+    [projectApiPaths.syncWorktreePrs]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`POST /api/worktrees/${name}/sync-prs`, () => apiSyncWorktreePrs(name));
+        return catching(routeLabel("POST", projectApiPaths.syncWorktreePrs, { name }), () => apiSyncWorktreePrs(name));
       },
     },
 
-    [apiPaths.setWorktreeLabel]: {
+    [projectApiPaths.setWorktreeLabel]: {
       PUT: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`PUT /api/worktrees/${name}/label`, () => apiSetWorktreeLabel(name, req));
+        return catching(routeLabel("PUT", projectApiPaths.setWorktreeLabel, { name }), () => apiSetWorktreeLabel(name, req));
       },
     },
 
-    [apiPaths.setWorktreeProfile]: {
+    [projectApiPaths.setWorktreeProfile]: {
       PUT: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`PUT /api/worktrees/${name}/profile`, () => apiSetWorktreeProfile(name, req));
+        return catching(routeLabel("PUT", projectApiPaths.setWorktreeProfile, { name }), () => apiSetWorktreeProfile(name, req));
       },
     },
 
-    [apiPaths.sendWorktreePrompt]: {
+    [projectApiPaths.sendWorktreePrompt]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`POST /api/worktrees/${name}/send`, () => apiSendPrompt(name, req));
+        return catching(routeLabel("POST", projectApiPaths.sendWorktreePrompt, { name }), () => apiSendPrompt(name, req));
       },
     },
 
-    "/api/worktrees/:name/upload": {
+    [projectApiPaths.uploadWorktreeFiles]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`POST /api/worktrees/${name}/upload`, () => apiUploadFiles(name, req));
+        return catching(routeLabel("POST", projectApiPaths.uploadWorktreeFiles, { name }), () => apiUploadFiles(name, req));
       },
     },
 
-    [apiPaths.createWorktreeTab]: {
+    [projectApiPaths.createWorktreeTab]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`POST /api/worktrees/${name}/tabs`, () => apiCreateWorktreeTab(name));
+        return catching(routeLabel("POST", projectApiPaths.createWorktreeTab, { name }), () => apiCreateWorktreeTab(name));
       },
     },
 
-    [apiPaths.selectWorktreeTab]: {
+    [projectApiPaths.selectWorktreeTab]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
         const tabId = decodeURIComponent(req.params.tabId ?? "");
-        return catching(`POST /api/worktrees/${name}/tabs/${tabId}/select`, () => apiSelectWorktreeTab(name, tabId));
+        return catching(routeLabel("POST", projectApiPaths.selectWorktreeTab, { name, tabId }), () => apiSelectWorktreeTab(name, tabId));
       },
     },
 
-    [apiPaths.deleteWorktreeTab]: {
+    [projectApiPaths.deleteWorktreeTab]: {
       DELETE: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
         const tabId = decodeURIComponent(req.params.tabId ?? "");
-        return catching(`DELETE /api/worktrees/${name}/tabs/${tabId}`, () => apiDeleteWorktreeTab(name, tabId));
+        return catching(routeLabel("DELETE", projectApiPaths.deleteWorktreeTab, { name, tabId }), () => apiDeleteWorktreeTab(name, tabId));
       },
     },
 
-    [apiPaths.worktreePorts]: {
+    [projectApiPaths.worktreePorts]: {
       GET: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`GET /api/worktrees/${name}/ports`, () => apiListWorktreePorts(name));
+        return catching(routeLabel("GET", projectApiPaths.worktreePorts, { name }), () => apiListWorktreePorts(name));
       },
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`POST /api/worktrees/${name}/ports`, () => apiRegisterWorktreePort(name, req));
+        return catching(routeLabel("POST", projectApiPaths.worktreePorts, { name }), () => apiRegisterWorktreePort(name, req));
       },
     },
 
-    [apiPaths.deleteWorktreePort]: {
+    [projectApiPaths.deleteWorktreePort]: {
       DELETE: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
         const label = decodeURIComponent(req.params.label ?? "");
-        return catching(`DELETE /api/worktrees/${name}/ports/${label}`, () => apiDeleteWorktreePort(name, label));
+        return catching(routeLabel("DELETE", projectApiPaths.deleteWorktreePort, { name, label }), () => apiDeleteWorktreePort(name, label));
       },
     },
 
-    [apiPaths.mergeWorktree]: {
+    [projectApiPaths.mergeWorktree]: {
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`POST /api/worktrees/${name}/merge`, () => apiMergeWorktree(name));
+        return catching(routeLabel("POST", projectApiPaths.mergeWorktree, { name }), () => apiMergeWorktree(name));
       },
     },
 
-    [apiPaths.fetchWorktreeDiff]: {
+    [projectApiPaths.fetchWorktreeDiff]: {
       GET: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(`GET /api/worktrees/${name}/diff`, () => apiGetWorktreeDiff(name));
+        return catching(routeLabel("GET", projectApiPaths.fetchWorktreeDiff, { name }), () => apiGetWorktreeDiff(name));
       },
     },
 
-    [apiPaths.fetchLinearIssues]: {
-      GET: () => catching("GET /api/linear/issues", () => apiGetLinearIssues()),
+    [projectApiPaths.fetchLinearIssues]: {
+      GET: () => catching(routeLabel("GET", projectApiPaths.fetchLinearIssues), () => apiGetLinearIssues()),
     },
 
-    [apiPaths.fetchAutoNameConfig]: {
-      GET: () => catching("GET /api/project/auto-name", async () => apiGetAutoNameConfig()),
+    [projectApiPaths.fetchAutoNameConfig]: {
+      GET: () => catching(routeLabel("GET", projectApiPaths.fetchAutoNameConfig), async () => apiGetAutoNameConfig()),
     },
 
-    [apiPaths.setLinearAutoCreate]: {
-      PUT: (req) => catching("PUT /api/linear/auto-create", () => apiSetLinearAutoCreate(req)),
+    [projectApiPaths.setLinearAutoCreate]: {
+      PUT: (req) => catching(routeLabel("PUT", projectApiPaths.setLinearAutoCreate), () => apiSetLinearAutoCreate(req)),
     },
 
-    [apiPaths.setAutoRemoveOnMerge]: {
-      PUT: (req) => catching("PUT /api/github/auto-remove-on-merge", () => apiSetAutoRemoveOnMerge(req)),
+    [projectApiPaths.setAutoRemoveOnMerge]: {
+      PUT: (req) => catching(routeLabel("PUT", projectApiPaths.setAutoRemoveOnMerge), () => apiSetAutoRemoveOnMerge(req)),
     },
 
-    [apiPaths.pullMain]: {
-      POST: (req) => catching("POST /api/pull-main", () => apiPullMain(req)),
+    [projectApiPaths.pullMain]: {
+      POST: (req) => catching(routeLabel("POST", projectApiPaths.pullMain), () => apiPullMain(req)),
     },
 
-    [apiPaths.fetchCiLogs]: {
+    [projectApiPaths.fetchCiLogs]: {
       GET: (req) => {
         const parsed = parseRunIdParam(req.params);
         if (!parsed.ok) return parsed.response;
-        return catching(`GET /api/ci-logs/${parsed.data}`, () => apiCiLogs(parsed.data));
+        return catching(routeLabel("GET", projectApiPaths.fetchCiLogs, { runId: String(parsed.data) }), () => apiCiLogs(parsed.data));
       },
     },
 
-    "/api/notifications/stream": {
-      GET: () => runtimeNotifications.stream(),
-    },
-
-    [apiPaths.dismissNotification]: {
+    [projectApiPaths.dismissNotification]: {
       POST: (req) => {
         const parsed = parseNotificationIdParam(req.params);
         if (!parsed.ok) return parsed.response;
@@ -2414,9 +2413,17 @@ function parseAgentIdParam(params: Record<string, string>):
   // auto-create, oneshot watcher, auto-pull). Heavy work (reconciliation,
   // terminal attach) is on-demand and therefore already active-only.
   function startLight(): void {
-    // Display sync (PR/CI status shown in the dashboard) stays gated on dashboard
-    // activity -- that data is only needed while someone is looking.
-    stopPrMonitor = startPrMonitor(getWorktreeGitDirs, config.integrations.github.linkedRepos, PROJECT_DIR, prSyncState, undefined, hasRecentDashboardActivity);
+    // Display sync (PR/CI status shown in the dashboard) is gated on dashboard
+    // activity -- fast for the project being viewed, slow for the others,
+    // off with no dashboard. It ticks at the fast interval; the gate skips.
+    stopPrMonitor = startPrMonitor(
+      getWorktreeGitDirs,
+      config.integrations.github.linkedRepos,
+      PROJECT_DIR,
+      prSyncState,
+      FOCUSED_PR_SYNC_INTERVAL_MS,
+      dashboardActivity.prSyncGate(instancePrefix),
+    );
     // Auto-remove is headless maintenance: it must run even when the dashboard is
     // closed, so it gets its own ungated sweep instead of riding the display sync.
     stopAutoRemoveMonitor = startAutoRemoveMonitor(async () => {
@@ -2460,7 +2467,11 @@ function parseAgentIdParam(params: Record<string, string>):
     stopSessionSnapshot = null;
   }
 
-  return { prefix: instancePrefix, routes, wsHandlers, startLight, stopLight };
+  async function readWorktrees(reconcileOptions: ReconcileOptions = {}): Promise<WorktreeSnapshot[]> {
+    return (await readProjectSnapshot(reconcileOptions)).worktrees;
+  }
+
+  return { prefix: instancePrefix, routes, wsHandlers, readWorktrees, startLight, stopLight };
 }
 
 function actualPort(server: Server<WsData>, requested: number): number {
@@ -2469,11 +2480,13 @@ function actualPort(server: Server<WsData>, requested: number): number {
 
 // ── Global multi-project server ─────────────────────────────────────────────
 // One process, one port. Every known project gets its own runtime + app; the
-// shared HTTP server prefixes each project's routes with `/${prefix}` and the
+// shared HTTP server mounts each project's routes under `/api/projects/${prefix}` and the
 // shared WebSocket handler dispatches by `ws.data.prefix`. Every project is
 // served in this one process; an unknown prefix just falls through to the SPA.
 
 const apps = new Map<string, ProjectApp>();
+// Fed by dashboard polls of the hub listing; sets each project's PR sync cadence.
+const dashboardActivity = new DashboardActivityTracker();
 // Open WebSockets per project, so we can run their cleanup when a project is
 // removed and track whether a project is currently being viewed (`active`).
 const openSockets = new Map<string, Set<ServerWebSocket<WsData>>>();
@@ -2481,6 +2494,8 @@ const instanceRegistry = createInstanceRegistry();
 // Tracks on-add project setups (scaffold config → analyze with Claude → ready)
 // so the UI + CLI can show progress. Hub-level: one per machine, keyed by repo.
 const projectInitTracker = new ProjectInitTracker();
+// Merged notification stream of every served project (`GET /api/notifications/stream`).
+const notificationHub = new NotificationHub();
 let manager: ProjectManager;
 let server: Server<WsData>;
 let BOUND_PORT = 0;
@@ -2500,6 +2515,26 @@ function toProjectSummary(p: ManagedProject): { prefix: string; name: string; pa
 
 function apiListProjects(): Response {
   return jsonResponse({ projects: manager.list().map(toProjectSummary) });
+}
+
+/** Worktrees of every served project, for the cross-project sidebar. Idle
+ *  projects reconcile on a long staleness window so polling stays cheap. */
+async function apiListAllProjectWorktrees(req: Request): Promise<Response> {
+  const parsed = parseQuery(req, AllProjectWorktreesQuerySchema);
+  if (!parsed.ok) return parsed.response;
+  const sources = manager.list().flatMap((p) => {
+    const app = apps.get(p.prefix);
+    if (!app) return [];
+    const reconcileOptions = hubReconcileOptions(p.active);
+    return [{ prefix: p.prefix, name: p.entry.name, readWorktrees: () => app.readWorktrees(reconcileOptions) }];
+  });
+  const projects = await listAllProjectWorktrees(parsed.data.focus, sources, dashboardActivity);
+  for (const project of projects) {
+    if (project.error !== null) {
+      log.warn(`[projects-worktrees] ${project.prefix}: ${project.error}`);
+    }
+  }
+  return jsonResponse({ projects });
 }
 
 /** A repo is a webmux project once it has a config file. */
@@ -2639,7 +2674,7 @@ function closeProjectSockets(prefix: string): void {
 async function apiRemoveProject(prefix: string): Promise<Response> {
   if (!apps.has(prefix)) return errorResponse("Project not found", 404);
   // Ordering matters: closeProjectSockets() runs the cleanup synchronously, then
-  // manager.remove() → stopLight() → apps.delete(prefix) also runs synchronously.
+  // manager.remove() → dispose() → apps.delete(prefix) also runs synchronously.
   // Bun fires the real `close` event for the sockets we just closed only after
   // this turn, by which point apps.delete has happened, so the global close
   // handler no-ops instead of double-running the cleanup. Keep these in order.
@@ -2665,61 +2700,38 @@ function apiListInstances(): Response {
 }
 
 /** Build the full route map: global hub endpoints plus every project's routes
- *  re-keyed under its `/${prefix}` segment. Rebuilt (via `server.reload`) on
+ *  re-keyed under `/api/projects/${prefix}`. Rebuilt (via `server.reload`) on
  *  every add/remove so newly known projects are served immediately. */
 function buildServeRoutes(): ProjectRoutes {
-  const routes: ProjectRoutes = {
-    [apiPaths.fetchProjects]: {
+  const hubRoutes: ProjectRoutes = {
+    [hubApiPaths.fetchProjects]: {
       GET: () => apiListProjects(),
       POST: (req) => catchingRoute("POST /api/projects", () => apiAddProject(req)),
     },
-    [apiPaths.projectInits]: {
+    [hubApiPaths.projectInits]: {
       GET: () => apiListProjectInits(),
     },
-    [apiPaths.migrateProjects]: {
+    [hubApiPaths.fetchAllProjectWorktrees]: {
+      GET: (req) => catchingRoute("GET /api/projects/worktrees", () => apiListAllProjectWorktrees(req)),
+    },
+    [hubApiPaths.migrateProjects]: {
       POST: (req) => catchingRoute("POST /api/projects/migrate", () => apiMigrateProjects(req)),
     },
-    [apiPaths.removeProject]: {
+    [hubApiPaths.removeProject]: {
       DELETE: (req) => catchingRoute("DELETE /api/projects/:prefix", () => apiRemoveProject(decodeURIComponent(req.params.prefix))),
     },
-    [apiPaths.fetchInstances]: {
+    [hubApiPaths.fetchInstances]: {
       GET: () => apiListInstances(),
     },
+    [hubApiPaths.streamNotifications]: {
+      GET: () => notificationHub.stream(),
+    },
   };
-  for (const app of apps.values()) {
-    for (const [pattern, entry] of Object.entries(app.routes)) {
-      routes[`/${app.prefix}${pattern}`] = entry;
-    }
-  }
-  return routes;
+  return assembleServeRoutes(hubRoutes, apps.values());
 }
 
 async function globalFetch(req: Request): Promise<Response> {
-  const url = new URL(req.url);
-
-  // Static frontend files in production mode (fallback for unmatched routes)
-  if (STATIC_DIR) {
-    const rawPath = url.pathname === "/" ? "index.html" : url.pathname;
-    const filePath = join(STATIC_DIR, rawPath);
-    const staticRoot = resolve(STATIC_DIR);
-    // Path traversal protection: resolved path must stay within STATIC_DIR
-    if (!resolve(filePath).startsWith(staticRoot + "/")) {
-      return new Response("Forbidden", { status: 403 });
-    }
-    const file = Bun.file(filePath);
-    if (await file.exists()) {
-      // Vite-hashed assets are immutable — cache forever
-      const headers: HeadersInit = rawPath.startsWith("/assets/")
-        ? { "Cache-Control": "public, max-age=31536000, immutable" }
-        : {};
-      return new Response(file, { headers });
-    }
-    // SPA fallback: serve index.html (never cache so new deploys take effect)
-    return new Response(Bun.file(join(STATIC_DIR, "index.html")), {
-      headers: { "Cache-Control": "no-cache" },
-    });
-  }
-  return new Response("Not Found", { status: 404 });
+  return serveUnmatchedRequest(req.method, new URL(req.url).pathname, STATIC_DIR, (prefix) => apps.has(prefix));
 }
 
 function trackSocket(ws: ServerWebSocket<WsData>): void {
@@ -2824,14 +2836,16 @@ manager = new ProjectManager({
   createLoops: (project): ProjectLoopController => {
     const app = createProjectApp(project.runtime, project.prefix);
     apps.set(project.prefix, app);
+    notificationHub.addSource(project.runtime.runtimeNotifications);
     return {
       startLight: (): void => app.startLight(),
-      stopLight: (): void => {
-        app.stopLight();
-        apps.delete(project.prefix);
-      },
+      stopLight: (): void => app.stopLight(),
       startHeavy: (): void => {},
       stopHeavy: (): void => {},
+      dispose: (): void => {
+        apps.delete(project.prefix);
+        notificationHub.removeSource(project.prefix);
+      },
     };
   },
 });

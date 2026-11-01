@@ -14,7 +14,7 @@ function createToast(
   return {
     id: "notification:1",
     source: "notification",
-    notificationId: 1,
+    notification: createNotification(),
     tone: "info",
     message: "Notification text",
     url: "https://example.com/notifications/1",
@@ -28,6 +28,7 @@ function createNotification(
 ): AppNotification {
   return {
     id: 1,
+    project: "webmux",
     branch: "feature/toast-sizing",
     type: "runtime_error",
     message: "Notification text",

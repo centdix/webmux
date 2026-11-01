@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CommandUsageError, formatServerError, resolveProjectBaseUrl } from "./shared";
+import { CommandUsageError, formatServerError, resolveServedProjectPrefix } from "./shared";
 
 describe("formatServerError", () => {
   test("passes HTTP errors through untouched", () => {
@@ -29,15 +29,15 @@ describe("formatServerError", () => {
   });
 });
 
-describe("resolveProjectBaseUrl", () => {
+describe("resolveServedProjectPrefix", () => {
   test("throws a clear usage error when run outside any git repository", async () => {
     // A non-git cwd can't be mapped to a served project, and the per-project
-    // routes only exist under /<prefix> — so returning the bare base would just
-    // 404. Surface the actionable message instead.
+    // routes only exist under /api/projects/<prefix> — so there is nothing to
+    // target. Surface the actionable message instead.
     const dir = await mkdtemp(join(tmpdir(), "webmux-nogit-"));
     let error: unknown;
     try {
-      await resolveProjectBaseUrl(5111, dir);
+      await resolveServedProjectPrefix(5111, dir);
     } catch (caught) {
       error = caught;
     } finally {

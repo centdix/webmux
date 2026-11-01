@@ -1,9 +1,9 @@
 import { unlinkSync } from "node:fs";
-import { createApi, type MigrateProjectsResponse } from "@webmux/api-contract";
+import { createHubApi, type MigrateProjectsResponse } from "@webmux/api-contract";
 import { createInstanceRegistry, type InstanceEntry } from "../../backend/src/adapters/instance-registry";
 import { listInstalledServices, type InstalledService, type ServiceRunner } from "./service-restart.ts";
 import { readPortFromUnit } from "./service.ts";
-import { formatServerError, run, withServerConnection } from "./shared.ts";
+import { formatServerError, run, serverOrigin, withServerConnection } from "./shared.ts";
 
 type Command = [bin: string, args: string[]];
 
@@ -52,7 +52,7 @@ export interface MigrateDeps {
 }
 
 async function defaultMigrate(port: number, paths: string[]): Promise<MigrateProjectsResponse> {
-  const api = createApi(`http://localhost:${port}`);
+  const api = createHubApi({ origin: serverOrigin(port) });
   return withServerConnection(port, () => api.migrateProjects({ body: { paths } }));
 }
 

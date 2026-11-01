@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { PrEntry } from "./types";
-  import { api } from "./api";
+  import { projectApi } from "./api";
   import { normalizeTextForPrompt } from "./promptUtils";
   import { prLabel, errorMessage } from "./utils";
   import { getToastController } from "./toast-context";
@@ -9,11 +9,13 @@
   import LinkBtn from "./LinkBtn.svelte";
 
   let {
+    project,
     pr,
     branch,
     onclose,
     onfixsuccess,
   }: {
+    project: string;
     pr: PrEntry;
     branch: string;
     onclose: () => void;
@@ -66,7 +68,7 @@
     logsError = "";
     loadingRunId = check.runId;
     try {
-      const { logs } = await api.fetchCiLogs({ params: { runId: check.runId } });
+      const { logs } = await projectApi(project).fetchCiLogs({ params: { runId: check.runId } });
       logsByRunId.set(check.runId, logs);
       logsByRunId = new Map(logsByRunId);
     } catch (err) {
@@ -92,7 +94,7 @@
       ].join("\n") + "\n";
     const sanitizedLogs = normalizeTextForPrompt(filteredLogs);
     try {
-      await api.sendWorktreePrompt({
+      await projectApi(project).sendWorktreePrompt({
         params: { name: branch },
         body: { text: sanitizedLogs, preamble },
       });

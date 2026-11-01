@@ -31,6 +31,7 @@ const AGENTS: AgentSummary[] = [
 
 function worktree(agentName: string | null): WorktreeInfo {
   return {
+    project: "webmux",
     branch: "feature",
     label: null,
     archived: false,

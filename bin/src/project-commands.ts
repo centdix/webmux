@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
-import { createApi, type ProjectInitPhase, type ProjectInitState } from "@webmux/api-contract";
-import { CommandUsageError, formatServerError } from "./shared";
+import { createHubApi, type ProjectInitPhase, type ProjectInitState } from "@webmux/api-contract";
+import { CommandUsageError, formatServerError, serverOrigin } from "./shared";
 import { runMigrate } from "./migrate.ts";
 
 const PROJECT_SETUP_POLL_INTERVAL_MS = 700;
@@ -131,7 +131,7 @@ export async function runProjectCommand(args: string[], port: number): Promise<n
     return runMigrate(port);
   }
 
-  const api = createApi(`http://localhost:${port}`);
+  const api = createHubApi({ origin: serverOrigin(port) });
   try {
     if (parsed.subcommand === "ls") {
       const { projects } = await api.fetchProjects();
