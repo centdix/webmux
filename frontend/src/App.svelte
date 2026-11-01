@@ -21,7 +21,6 @@
   import Btn from "./lib/Btn.svelte";
   import AddProjectForm from "./lib/AddProjectForm.svelte";
   import BaseDialog from "./lib/BaseDialog.svelte";
-  import MigrationBanner from "./lib/MigrationBanner.svelte";
   import type {
     AvailableBranch,
     AppConfig,
@@ -999,7 +998,6 @@
   {/if}
 
   <main class="flex-1 min-w-0 flex flex-col overflow-hidden">
-    <MigrationBanner />
     <TopBar
       name={selectedWorktree?.branch ?? null}
       worktree={selectedWorktree}

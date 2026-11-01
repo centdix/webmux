@@ -48,7 +48,6 @@ describe("deriveProjectPrefix", () => {
     expect(deriveProjectPrefix("/srv/assets", [])).toBe("assets-2");
     expect(deriveProjectPrefix("/srv/worktrees", [])).toBe("worktrees-2");
     expect(deriveProjectPrefix("/srv/init", [])).toBe("init-2");
-    expect(deriveProjectPrefix("/srv/migrate", [])).toBe("migrate-2");
   });
 
   it("reserves every static hub segment under the project mount point", () => {

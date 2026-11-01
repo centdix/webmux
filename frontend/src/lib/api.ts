@@ -22,7 +22,6 @@ import type {
   AppNotification,
   FileUploadResult,
   InitialProject,
-  InstanceSummary,
   NotificationDismissal,
   PostWorktreeToLinearResponse,
   PostWorktreeToLinearTarget,
@@ -50,7 +49,7 @@ export function projectApi(project: string): ProjectApi {
   return client;
 }
 
-/** Hub client — project list/add/remove + the migration sensor are global (no prefix). */
+/** Hub client — project list/add/remove are global (no prefix). */
 const hubApi = createHubApi();
 
 function mapAgentStatus(status: string): string {
@@ -264,13 +263,6 @@ export function deleteAgent(project: string, id: string): Promise<void> {
 
 export function validateAgent(project: string, body: UpsertCustomAgentRequest): Promise<ValidateCustomAgentResponse> {
   return projectApi(project).validateAgent({ body });
-}
-
-/** Other webmux servers running on this machine (migration sensor) — drives the
- *  banner that prompts the user to consolidate them with `webmux project migrate`. */
-export async function fetchInstances(): Promise<InstanceSummary[]> {
-  const response = await hubApi.fetchInstances();
-  return response.instances;
 }
 
 export async function fetchProjects(): Promise<ProjectSummary[]> {

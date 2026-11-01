@@ -340,7 +340,6 @@ async function main(args: string[] = process.argv.slice(2)): Promise<void> {
           const outcome = await updateInstalledService(svc, webmuxPath);
           const parts: string[] = [];
           if (outcome.regenerated) parts.push("regenerated unit");
-          if (outcome.migratedProject) parts.push(`migrated served project ${outcome.migratedProject}`);
           if (outcome.restarted) parts.push("restarted");
           if (!outcome.regenerated && !outcome.restarted && !outcome.error) parts.push("no change");
           const status = outcome.error
@@ -365,34 +364,18 @@ async function main(args: string[] = process.argv.slice(2)): Promise<void> {
   // other secret webmux loads, rather than leaking into every session and pane.
   for (const key of await loadEnvFile(webmuxConfigEnvPath())) projectEnvKeys.add(key);
 
-  // When the user didn't pin a port, point CLI commands at the live server for
-  // this project rather than the 5111 default. `webmux serve` walks to a free
-  // port when 5111 is taken, so the running instance is often elsewhere (e.g.
+  // When the user didn't pin a port, point CLI commands at the live server
+  // rather than the 5111 default. The running server is often elsewhere (e.g.
   // a service installed on 5112); server-backed commands like `oneshot` would
   // otherwise fail to connect.
   let effectivePort = parsed.port;
   if (!parsed.portExplicit) {
     const { resolveLiveServerPort } = await import("./instance-port.ts");
-    const resolved = resolveLiveServerPort({ defaultPort: parsed.port, cwd: process.cwd() });
+    const resolved = resolveLiveServerPort({ defaultPort: parsed.port });
     effectivePort = resolved.port;
     if (parsed.debug && resolved.source !== "default") {
-      console.error(`[webmux] resolved port ${resolved.port} from live instance (${resolved.source})`);
+      console.error(`[webmux] resolved port ${resolved.port} from live instance`);
     }
-  }
-
-  // Nudge toward consolidation when other webmux servers are running, on any
-  // command that reaches a project (everything dispatched below) except
-  // `project migrate`, which consolidates them itself. Cheap: a local registry
-  // read, silent unless peers exist, and to stderr so it never pollutes piped
-  // output. Only relevant before the user has consolidated, so it's transient.
-  const isProjectMigrate = parsed.command === "project" && parsed.commandArgs[0] === "migrate";
-  const reachesAProject = parsed.command === "oneshot"
-    || parsed.command === "linear"
-    || parsed.command === "project"
-    || isWorktreeCommand(parsed.command);
-  if (reachesAProject && !isProjectMigrate) {
-    const { warnIfOtherInstances } = await import("./migrate.ts");
-    warnIfOtherInstances(effectivePort);
   }
 
   if (parsed.command === "oneshot") {

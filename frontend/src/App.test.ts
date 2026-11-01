@@ -143,7 +143,6 @@ vi.mock("./lib/api", () => {
     terminalSocketUrl: vi.fn(() => "ws://localhost/ws"),
     uploadFiles: vi.fn(),
     fetchProjects: vi.fn(async () => []),
-    fetchInstances: vi.fn(async () => []),
     setUpProject: vi.fn(),
     removeProject: vi.fn(),
   };

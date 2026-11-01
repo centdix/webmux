@@ -52,7 +52,6 @@ export type {
   PostWorktreeToLinearTarget,
   FromLinearInput,
   IdeKind,
-  InstanceSummary,
   PrComment,
   PrEntry,
   ProfileConfig,

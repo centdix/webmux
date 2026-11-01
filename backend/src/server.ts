@@ -152,7 +152,7 @@ import type { ManagedWorktreeRuntimeState, OneshotMeta, ProjectSnapshot, Worktre
 import { isValidBranchName, isValidWorktreeName } from "./domain/policies";
 import { assembleServeRoutes } from "./domain/project-routes";
 import { createPortRegistrationService, createWebmuxRuntime, type WebmuxRuntime } from "./runtime";
-import { createInstanceRegistry, type InstanceEntry } from "./adapters/instance-registry";
+import { createInstanceRegistry } from "./adapters/instance-registry";
 import { createProjectsRegistry } from "./adapters/projects-registry";
 import { ProjectManager, type ManagedProject, type ProjectLoopController } from "./services/project-manager";
 import { isValidPortLabel } from "./domain/port-registrations";
@@ -2640,37 +2640,6 @@ function apiListProjectInits(): Response {
   });
 }
 
-/** Fold the repos served by leftover single-project instances into this server.
- *  `webmux project migrate` posts each other instance's projectDir here; we add
- *  and persist them so this dashboard serves them going forward. The CLI then
- *  stops the old instances' service units. Per-path failures are reported, not
- *  fatal, so one bad entry doesn't abort the rest. */
-async function apiMigrateProjects(req: BunRequest): Promise<Response> {
-  const body: unknown = await req.json().catch(() => null);
-  if (!isRecord(body) || !Array.isArray(body.paths) || body.paths.some((p) => typeof p !== "string")) {
-    return errorResponse("Request body must be { paths: string[] }", 400);
-  }
-  const paths = body.paths.map((p) => p.trim()).filter((p) => p !== "");
-  const migrated: Array<{ prefix: string; name: string; path: string; active: boolean }> = [];
-  const failed: Array<{ path: string; error: string }> = [];
-  for (const path of paths) {
-    try {
-      if (!isGitRepo(path)) throw new Error(`Not a git repository: ${path}`);
-      const project = manager.add(path);
-      migrated.push({
-        prefix: project.prefix,
-        name: project.entry.name,
-        path: project.entry.path,
-        active: project.active,
-      });
-    } catch (err: unknown) {
-      failed.push({ path, error: err instanceof Error ? err.message : String(err) });
-    }
-  }
-  if (migrated.length > 0) reloadRoutes();
-  return jsonResponse({ migrated, failed });
-}
-
 /** Run each open socket's per-project cleanup (tmux detach, agents unsubscribe)
  *  and close it. Must run BEFORE the app is removed — once `apps.delete` has
  *  happened the global close handler can no longer find the project's cleanup. */
@@ -2702,21 +2671,6 @@ async function apiRemoveProject(prefix: string): Promise<Response> {
   return jsonResponse({ ok: true });
 }
 
-/** List the OTHER webmux servers currently running on this machine (migration
- *  sensor). One multi-project server per machine is the goal, so any peer here
- *  is a leftover single-project instance the user should fold in with `webmux
- *  project migrate`. The frontend reads this to show a migration banner. */
-function apiListInstances(): Response {
-  return jsonResponse({
-    instances: instanceRegistry.listLive()
-      .filter((entry) => entry.port !== BOUND_PORT)
-      .map((entry) => ({
-        port: entry.port,
-        projectDir: entry.projectDir,
-      })),
-  });
-}
-
 /** Build the full route map: global hub endpoints plus every project's routes
  *  re-keyed under `/api/projects/${prefix}`. Rebuilt (via `server.reload`) on
  *  every add/remove so newly known projects are served immediately. */
@@ -2732,14 +2686,8 @@ function buildServeRoutes(): ProjectRoutes {
     [hubApiPaths.fetchAllProjectWorktrees]: {
       GET: (req) => catchingRoute("GET /api/projects/worktrees", () => apiListAllProjectWorktrees(req)),
     },
-    [hubApiPaths.migrateProjects]: {
-      POST: (req) => catchingRoute("POST /api/projects/migrate", () => apiMigrateProjects(req)),
-    },
     [hubApiPaths.removeProject]: {
       DELETE: (req) => catchingRoute("DELETE /api/projects/:prefix", () => apiRemoveProject(decodeURIComponent(req.params.prefix))),
-    },
-    [hubApiPaths.fetchInstances]: {
-      GET: () => apiListInstances(),
     },
     [hubApiPaths.streamNotifications]: {
       GET: () => notificationHub.stream(),
@@ -2802,18 +2750,17 @@ function startServer(port: number, routes: ProjectRoutes): Server<WsData> {
   });
 }
 
-/** Bind the HTTP server to `PORT`. webmux is one server per machine now, so a
- *  bind conflict almost always means another webmux is already running — fail
- *  loudly and point at `webmux project migrate` rather than silently landing on
- *  a different port (which would just create the duplicate we're trying to
- *  avoid). */
+/** Bind the HTTP server to `PORT`. webmux is one server per machine, so a bind
+ *  conflict almost always means another webmux is already running — fail loudly
+ *  rather than silently landing on a different port (which would just create a
+ *  duplicate server). */
 function bindServer(routes: ProjectRoutes): Server<WsData> {
   try {
     return startServer(PORT, routes);
   } catch (err: unknown) {
     const code = (err as { code?: string } | null)?.code;
     if (code === "EADDRINUSE") {
-      log.error(`[serve] port ${PORT} is already in use — another webmux is likely running there. Stop it, pick another --port, or run \`webmux project migrate\` to consolidate.`);
+      log.error(`[serve] port ${PORT} is already in use — another webmux is likely running there. Stop it or pick another --port.`);
     }
     throw err;
   }
@@ -2888,19 +2835,9 @@ startSerializedInterval(
   15_000,
 );
 
-// Self-register as a migration sensor: record this server's port + the repo it
-// was started for, so a survivor can detect leftover single-project instances
-// and `webmux project migrate` can recover each one's repo. No prefix/federation
-// here — every project is served in this one process.
-const homeCwd = Bun.env.WEBMUX_PROJECT_DIR ?? process.cwd();
-const homeRoot = isGitRepo(homeCwd) ? projectRoot(homeCwd) : homeCwd;
-
-const selfEntry: InstanceEntry = {
-  port: BOUND_PORT,
-  projectDir: homeRoot,
-  pid: process.pid,
-};
-instanceRegistry.register(selfEntry);
+// Self-register so the CLI (host and sandbox containers) can discover this
+// server's port.
+instanceRegistry.register({ port: BOUND_PORT, pid: process.pid });
 log.info(`[serve] registered instance port=${BOUND_PORT} projects=${manager.list().length}`);
 
 function deregisterSelf(): void {
