@@ -1388,7 +1388,7 @@ async function apiCreateWorktree(req: Request): Promise<Response> {
   }
 
   if (resolvedBranch) {
-    const targetBranches = buildCreateWorktreeTargets(resolvedBranch, selectedAgents).map((target) => target.branch);
+    const targetBranches = buildCreateWorktreeTargets(resolvedBranch, selectedAgents.map((agent) => ({ agent }))).map((target) => target.branch);
     for (const targetBranch of targetBranches) {
       ensureBranchNotBusy(targetBranch);
     }

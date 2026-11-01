@@ -105,18 +105,17 @@ export function prefixAgentBranch(agent: AgentId, branch: string): string {
   return `${agent}-${branch}`;
 }
 
-export function buildCreateWorktreeTargets(
+export function buildCreateWorktreeTargets<T extends { agent: AgentId }>(
   branch: string,
-  agentIds: AgentId[],
-): CreateWorktreeTarget[] {
-  if (agentIds.length <= 1) {
-    const agent = agentIds[0];
-    return agent ? [{ branch, agent }] : [];
+  entries: T[],
+): Array<T & CreateWorktreeTarget> {
+  if (entries.length <= 1) {
+    return entries.map((entry) => ({ ...entry, branch }));
   }
 
-  return agentIds.map((agent) => ({
-    branch: prefixAgentBranch(agent, branch),
-    agent,
+  return entries.map((entry) => ({
+    ...entry,
+    branch: prefixAgentBranch(entry.agent, branch),
   }));
 }
 
@@ -221,19 +220,19 @@ export class LifecycleService {
       throw new LifecycleError("Creating multiple agents is only supported for new worktrees", 400);
     }
 
-    const worktreeIds = agentIds.map(() => randomUUID());
+    const pendingTargets = agentIds.map((agent) => ({ agent, worktreeId: randomUUID() }));
     const branch = await this.resolveBranch(input.branch, input.prompt, mode);
-    const targets = buildCreateWorktreeTargets(branch, agentIds);
+    const targets = buildCreateWorktreeTargets(branch, pendingTargets);
     const createdBranches: string[] = [];
 
     try {
-      for (const [index, target] of targets.entries()) {
+      for (const target of targets) {
         const created = await this.createResolvedWorktree({
           ...input,
           mode,
           branch: target.branch,
           agent: target.agent,
-          worktreeId: worktreeIds[index],
+          worktreeId: target.worktreeId,
         });
         createdBranches.push(created.branch);
       }

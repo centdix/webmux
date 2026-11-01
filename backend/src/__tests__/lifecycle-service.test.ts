@@ -383,10 +383,10 @@ describe("LifecycleService", () => {
   }
 
   it("builds original and agent-prefixed targets from selected agents", () => {
-    expect(buildCreateWorktreeTargets("feature/search", ["claude"])).toEqual([
+    expect(buildCreateWorktreeTargets("feature/search", [{ agent: "claude" }])).toEqual([
       { branch: "feature/search", agent: "claude" },
     ]);
-    expect(buildCreateWorktreeTargets("feature/search", ["claude", "codex", "gemini"])).toEqual([
+    expect(buildCreateWorktreeTargets("feature/search", [{ agent: "claude" }, { agent: "codex" }, { agent: "gemini" }])).toEqual([
       { branch: "claude-feature/search", agent: "claude" },
       { branch: "codex-feature/search", agent: "codex" },
       { branch: "gemini-feature/search", agent: "gemini" },
@@ -528,7 +528,26 @@ describe("LifecycleService", () => {
     const repoRoot = await initRepo();
     const runtime = new ProjectRuntime();
     const tmux = new FakeTmuxGateway();
-    const lifecycle = makeLifecycleService(repoRoot, tmux, runtime);
+    const reportedIds = new Set<string>();
+    const finishedIds = new Set<string>();
+    const lifecycle = makeLifecycleService(
+      repoRoot,
+      tmux,
+      runtime,
+      new FakeDockerGateway(),
+      new FakeHookRunner(),
+      TEST_CONFIG,
+      new BunGitGateway(),
+      new FakeAutoNameService(),
+      {
+        onProgress: (progress) => {
+          reportedIds.add(progress.worktreeId);
+        },
+        onFinished: (worktreeId) => {
+          finishedIds.add(worktreeId);
+        },
+      },
+    );
     const git = new BunGitGateway();
 
     run(["git", "branch", "codex-feature/search", "main"], repoRoot);
@@ -545,6 +564,8 @@ describe("LifecycleService", () => {
       buildProjectSessionName(repoRoot),
       buildWorktreeWindowName("claude-feature/search"),
     )).toBe(false);
+    expect(reportedIds.size).toBeGreaterThan(0);
+    expect(finishedIds).toEqual(reportedIds);
   });
 
   it("rejects invalid multi-agent selections", async () => {

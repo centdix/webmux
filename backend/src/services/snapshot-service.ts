@@ -134,17 +134,17 @@ export function buildWorktreeSnapshots(input: BuildWorktreeSnapshotsInput): Work
   const runtimeWorktrees = input.runtime.listWorktrees();
   const runtimeIds = new Set(runtimeWorktrees.map((state) => state.worktreeId));
   const creatingById = new Map(creatingWorktrees.map((worktree) => [worktree.worktreeId, worktree]));
-  // Branch fallback, only for creations not yet listed under their id: between
+  // Path fallback, only for creations not yet listed under their id: between
   // `git worktree add` and the meta write, a reconcile lists the new worktree
   // under its unmanaged id.
-  const creatingByBranch = new Map(
+  const creatingByPath = new Map(
     creatingWorktrees
       .filter((worktree) => !runtimeIds.has(worktree.worktreeId))
-      .map((worktree) => [worktree.branch, worktree]),
+      .map((worktree) => [worktree.path, worktree]),
   );
   const mergedCreatingIds = new Set<string>();
   const worktrees = runtimeWorktrees.map((state) => {
-    const creating = creatingById.get(state.worktreeId) ?? creatingByBranch.get(state.branch) ?? null;
+    const creating = creatingById.get(state.worktreeId) ?? creatingByPath.get(state.path) ?? null;
     if (creating) mergedCreatingIds.add(creating.worktreeId);
     return mapWorktreeSnapshot(
       state,

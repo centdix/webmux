@@ -326,7 +326,7 @@ describe("buildProjectSnapshot", () => {
     ]);
   });
 
-  it("merges by branch while the new worktree is still listed under its unmanaged id", () => {
+  it("merges by path while the new worktree is still listed under its unmanaged id", () => {
     const runtime = new ProjectRuntime();
     runtime.upsertWorktree({
       worktreeId: "unmanaged:/repo/__worktrees/feature-pending",
@@ -356,7 +356,42 @@ describe("buildProjectSnapshot", () => {
     expect(snapshot.worktrees.map((worktree) => worktree.id)).toEqual(["wt_pending"]);
   });
 
-  it("keeps merged runtime and creating worktrees sorted by branch", () => {
+  it("does not merge a creation into another creation's row of the same branch", () => {
+    const runtime = new ProjectRuntime();
+    runtime.upsertWorktree({
+      worktreeId: "unmanaged:/repo/__worktrees/feature-pending-a",
+      branch: "feature/pending",
+      path: "/repo/__worktrees/feature-pending-a",
+      runtime: "host",
+    });
+    const creating = (worktreeId: string, path: string): CreatingWorktreeState => ({
+      worktreeId,
+      branch: "feature/pending",
+      path,
+      profile: "default",
+      agentName: "claude",
+      phase: "creating_worktree",
+      source: "ui",
+    });
+
+    const snapshot = buildProjectSnapshot({
+      projectName: "Project",
+      mainBranch: "main",
+      runtime,
+      notifications: [],
+      creatingWorktrees: [
+        creating("wt_a", "/repo/__worktrees/feature-pending-a"),
+        creating("wt_b", "/repo/__worktrees/feature-pending-b"),
+      ],
+    });
+
+    expect(snapshot.worktrees.map((worktree) => [worktree.id, worktree.path])).toEqual([
+      ["wt_a", "/repo/__worktrees/feature-pending-a"],
+      ["wt_b", "/repo/__worktrees/feature-pending-b"],
+    ]);
+  });
+
+  it("lists a creating worktree first, then closed ones by branch", () => {
     const runtime = new ProjectRuntime();
     runtime.upsertWorktree({
       worktreeId: "wt_zebra",
