@@ -88,6 +88,7 @@ function buildAgentInvocation(input: {
   resumeConversationId?: string;
   forkFromSessionId?: string;
   pinSessionId?: string;
+  appServerSocketPath?: string;
 }): string {
   if (input.agent.kind === "builtin") {
     return getAgentAdapter(input.agent.implementation.agent).buildCommand({
@@ -100,6 +101,7 @@ function buildAgentInvocation(input: {
       resumeConversationId: input.resumeConversationId,
       forkFromSessionId: input.forkFromSessionId,
       pinSessionId: input.pinSessionId,
+      appServerSocketPath: input.appServerSocketPath,
     });
   }
 
@@ -129,6 +131,7 @@ function buildAgentCommand(input: {
   resumeConversationId?: string;
   forkFromSessionId?: string;
   pinSessionId?: string;
+  appServerSocketPath?: string;
 }, bootstrap = buildRuntimeBootstrap): string {
   return `${bootstrap(input.runtimeEnvPath)}; ${buildAgentInvocation(input)}`;
 }
@@ -162,6 +165,7 @@ export function buildAgentPaneCommand(input: {
   resumeConversationId?: string;
   forkFromSessionId?: string;
   pinSessionId?: string;
+  appServerSocketPath?: string;
 }): string {
   return buildAgentCommand(input);
 }

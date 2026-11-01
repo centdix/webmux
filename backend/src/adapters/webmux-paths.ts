@@ -24,6 +24,12 @@ export function webmuxRuntimeStateDir(): string {
   });
 }
 
+/** Unix socket of a worktree's `codex app-server`. Kept short (unix socket paths max out
+ *  around 104-108 bytes) and in a dir of its own: codex chmods the socket's parent to 0700. */
+export function codexAppServerSocketPath(worktreeId: string): string {
+  return join(webmuxRuntimeStateDir(), "cx", `${worktreeId}.sock`);
+}
+
 /** webmux's XDG-style config directory (`~/.config/webmux`). Home to the
  *  control token and the optional global env file. Distinct from the
  *  `~/.webmux` runtime-state dir (projects registry, live-instance registry),
