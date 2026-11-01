@@ -452,7 +452,7 @@ function restoreBrowserMocks(): void {
 }
 
 async function openCreateDialogAndSubmit(branch: string): Promise<void> {
-  await fireEvent.click(screen.getByTitle("New Worktree (Cmd+K)"));
+  await fireEvent.click(screen.getByTitle("New worktree (Cmd+K)"));
   await screen.findByText("New Worktree");
   await fireEvent.input(screen.getByLabelText(/Branch name/i), {
     target: { value: branch },
@@ -461,7 +461,7 @@ async function openCreateDialogAndSubmit(branch: string): Promise<void> {
 }
 
 async function openCreateDialogWithBaseAndSubmit(branch: string, baseBranch: string): Promise<void> {
-  await fireEvent.click(screen.getByTitle("New Worktree (Cmd+K)"));
+  await fireEvent.click(screen.getByTitle("New worktree (Cmd+K)"));
   await screen.findByText("New Worktree");
   await fireEvent.input(screen.getByLabelText(/Branch name/i), {
     target: { value: branch },
@@ -469,6 +469,33 @@ async function openCreateDialogWithBaseAndSubmit(branch: string, baseBranch: str
   await fireEvent.click(screen.getByRole("button", { name: "Base branch" }));
   await fireEvent.click(await screen.findByRole("button", { name: baseBranch }));
   await fireEvent.click(screen.getByRole("button", { name: "Create" }));
+}
+
+/** The rail button of a project: choosing it shows that project's list. */
+async function chooseProject(name: string): Promise<void> {
+  const rail = await screen.findByRole("navigation", { name: "Projects" });
+  await fireEvent.click(await within(rail).findByRole("button", { name }));
+}
+
+function railProjectNames(): string[] {
+  const rail = screen.getByRole("navigation", { name: "Projects" });
+  return Array.from(rail.querySelectorAll<HTMLElement>("[data-project-rail-item]")).map(
+    (item) => item.dataset.projectRailItem ?? "",
+  );
+}
+
+function rowButton(branch: string): HTMLElement {
+  return screen.getByRole("button", { name: new RegExp(`^${branch}\\b`, "i") });
+}
+
+function queryRowButton(branch: string): HTMLElement | null {
+  return screen.queryByRole("button", { name: new RegExp(`^${branch}\\b`, "i") });
+}
+
+/** Right-click a row of the current project's list. */
+async function openRowMenu(branch: string): Promise<HTMLElement> {
+  await fireEvent.contextMenu(await screen.findByRole("button", { name: new RegExp(`^${branch}\\b`, "i") }));
+  return screen.getByRole("menu");
 }
 
 describe("App create selection", () => {
@@ -611,9 +638,9 @@ describe("App create selection", () => {
 
     renderApp();
     await waitFor(() => expect(document.title).toBe("repo - Dashboard"));
-    await fireEvent.click(await screen.findByRole("button", { name: /^feature\/img\b/i }));
+    await chooseProject("images");
     await waitFor(() => expect(document.title).toBe("images - Dashboard"));
-    await fireEvent.click(screen.getByRole("button", { name: /^feature\/web\b/i }));
+    await chooseProject(PROJECT);
 
     expect(document.title).toBe("repo - Dashboard");
     expect(api.fetchConfig).toHaveBeenCalledTimes(3);
@@ -682,7 +709,7 @@ describe("App create selection", () => {
     expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("main");
   });
 
-  it("reports the selected worktree's project with every poll", async () => {
+  it("reports the rail's project with every poll", async () => {
     otherProjects.list = [{
       prefix: "images",
       name: "images",
@@ -693,7 +720,7 @@ describe("App create selection", () => {
     renderApp();
     await waitFor(() => expect(fetchAllProjectWorktrees).toHaveBeenCalledWith(PROJECT));
 
-    await fireEvent.click(await screen.findByRole("button", { name: /^feature\/img\b/i }));
+    await chooseProject("images");
     expect(await screen.findByTitle("feature/img")).toBeInTheDocument();
     vi.mocked(fetchAllProjectWorktrees).mockClear();
     document.dispatchEvent(new Event("visibilitychange"));
@@ -701,14 +728,23 @@ describe("App create selection", () => {
     await waitFor(() => expect(fetchAllProjectWorktrees).toHaveBeenCalledWith("images"));
   });
 
-  it("shows a project's fetch error in the sidebar", async () => {
+  it("shows a project's fetch error in the sidebar and retries from it", async () => {
     vi.mocked(fetchAllProjectWorktrees).mockResolvedValueOnce([
       { prefix: PROJECT, name: PROJECT, worktrees: [], error: "git exploded" },
     ]);
 
     renderApp();
 
-    expect(await screen.findByText("Failed to load worktrees: git exploded")).toBeInTheDocument();
+    expect(await screen.findByText("Couldn't load worktrees")).toBeInTheDocument();
+    expect(screen.getByText("git exploded")).toBeInTheDocument();
+    const rail = screen.getByRole("navigation", { name: "Projects" });
+    expect(rail.querySelector('[data-rail-badge="error"]')).not.toBeNull();
+    vi.mocked(fetchAllProjectWorktrees).mockClear();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(fetchAllProjectWorktrees).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByText("Couldn't load worktrees")).not.toBeInTheDocument());
   });
 
   it("keeps the saved selection when the project's first poll fails", async () => {
@@ -720,7 +756,7 @@ describe("App create selection", () => {
 
     render(App, { props: { selection, onNoProjects: vi.fn() } });
 
-    expect(await screen.findByText("Failed to load worktrees: git exploded")).toBeInTheDocument();
+    expect(await screen.findByText("git exploded")).toBeInTheDocument();
     expect(selection.selected).toEqual({ project: PROJECT, branch: "feature/saved" });
     expect(window.location.hash).toBe(`#${PROJECT}/feature/saved`);
     expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("feature/saved");
@@ -750,7 +786,7 @@ describe("App create selection", () => {
     await openCreateDialogAndSubmit("feature/new");
     await waitFor(() => expect(fetchWorktrees).toHaveBeenCalledTimes(2));
 
-    await fireEvent.click(screen.getByRole("button", { name: /^feature\/img\b/i }));
+    await chooseProject("images");
     expect(await screen.findByTitle("feature/img")).toBeInTheDocument();
 
     createResult.resolve({ primaryBranch: "feature/new", branches: ["feature/new"] });
@@ -760,10 +796,6 @@ describe("App create selection", () => {
     expect(screen.getByTitle("feature/img")).toBeInTheDocument();
     expect(window.location.hash).toBe("#images/feature/img");
   });
-
-  function projectSectionNames(): string[] {
-    return screen.getAllByRole("region").map((region) => region.getAttribute("aria-label") ?? "");
-  }
 
   function useThreeProjects(): void {
     otherProjects.list = [
@@ -778,25 +810,86 @@ describe("App create selection", () => {
     vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("main"), createWorktree("feature/web")]);
   }
 
-  it("lists every project under its header, in a stable order whatever is selected", async () => {
+  it("rails every project in a stable order and lists the chosen one's worktrees only", async () => {
     useThreeProjects();
 
     renderApp();
     await screen.findByTitle("main");
-    expect(projectSectionNames()).toEqual(["webmux", "images", "docs"]);
+    expect(railProjectNames()).toEqual(["webmux", "images", "docs"]);
+    expect(screen.getByRole("heading", { name: PROJECT })).toBeInTheDocument();
+    expect(rowButton("feature/web")).toBeInTheDocument();
+    expect(queryRowButton("feature/img")).not.toBeInTheDocument();
 
-    const images = screen.getByRole("region", { name: "images" });
-    await fireEvent.click(within(images).getByRole("button", { name: /^feature\/img\b/i }));
+    await chooseProject("images");
 
-    expect(await screen.findByTitle("feature/img")).toBeInTheDocument();
+    await waitFor(() => expect(window.location.hash).toBe("#images/main"));
     expect(window.location.pathname).toBe("/");
-    expect(window.location.hash).toBe("#images/feature/img");
-    expect(projectSectionNames()).toEqual(["webmux", "images", "docs"]);
-    expect(within(screen.getByRole("region", { name: "webmux" })).getByRole("button", { name: /^feature\/web\b/i }))
-      .toBeInTheDocument();
+    expect(railProjectNames()).toEqual(["webmux", "images", "docs"]);
+    expect(screen.getByRole("heading", { name: "images" })).toBeInTheDocument();
+    const rail = screen.getByRole("navigation", { name: "Projects" });
+    expect(within(rail).getByRole("button", { name: "images" })).toHaveAttribute("aria-current", "page");
+    expect(within(rail).getByRole("button", { name: PROJECT })).not.toHaveAttribute("aria-current");
+    expect(rowButton("feature/img")).toBeInTheDocument();
+    expect(queryRowButton("feature/web")).not.toBeInTheDocument();
   });
 
-  it("moves through every project's rows with Cmd+Up/Down", async () => {
+  it("reselects a project's last selected worktree when coming back to it", async () => {
+    useThreeProjects();
+    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "feature/web");
+
+    renderApp();
+    await screen.findByTitle("feature/web");
+    await chooseProject("images");
+    await fireEvent.click(rowButton("feature/img"));
+    await waitFor(() => expect(window.location.hash).toBe("#images/feature/img"));
+
+    await chooseProject(PROJECT);
+    await waitFor(() => expect(window.location.hash).toBe(`#${PROJECT}/feature/web`));
+    await chooseProject("images");
+    await waitFor(() => expect(window.location.hash).toBe("#images/feature/img"));
+  });
+
+  it("shows an empty state with New worktree for a project without worktrees", async () => {
+    useThreeProjects();
+    otherProjects.list[1] = { ...otherProjects.list[1]!, worktrees: [] };
+
+    renderApp();
+    await screen.findByTitle("main");
+    await chooseProject("docs");
+
+    await waitFor(() => expect(window.location.hash).toBe("#docs"));
+    expect(screen.getByText("No worktrees yet.")).toBeInTheDocument();
+    expect(screen.getByText("No worktrees in docs yet")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "New worktree" })).toHaveLength(2);
+  });
+
+  it("badges rail projects with what needs you and running agents", async () => {
+    useThreeProjects();
+    otherProjects.list[0] = {
+      ...otherProjects.list[0]!,
+      worktrees: [
+        createWorktree("main", { project: "images", agent: "waiting", mux: "✓" }),
+        createWorktree("feature/img", { project: "images", agent: "error", mux: "✓" }),
+      ],
+    };
+    otherProjects.list[1] = {
+      ...otherProjects.list[1]!,
+      worktrees: [createWorktree("feature/doc", { project: "docs", agent: "working", mux: "✓" })],
+    };
+
+    renderApp();
+    await screen.findByTitle("main");
+    const rail = screen.getByRole("navigation", { name: "Projects" });
+    const images = within(rail).getByRole("button", { name: "images" });
+    const docs = within(rail).getByRole("button", { name: "docs" });
+
+    expect(images.querySelector('[data-rail-badge="needs-you"]')).toHaveTextContent("2");
+    expect(images).toHaveAttribute("title", "images · 2 need you");
+    expect(docs.querySelector('[data-rail-badge="running"]')).not.toBeNull();
+    expect(docs.querySelector('[data-rail-badge="needs-you"]')).toBeNull();
+  });
+
+  it("moves within the project with Cmd+Up/Down and between projects with Cmd+Shift+Up/Down", async () => {
     useThreeProjects();
     localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "feature/web");
 
@@ -804,47 +897,32 @@ describe("App create selection", () => {
     await screen.findByTitle("feature/web");
 
     await fireEvent.keyDown(window, { key: "ArrowDown", metaKey: true });
+    expect(window.location.hash).toBe(`#${PROJECT}/feature/web`);
+    await fireEvent.keyDown(window, { key: "ArrowUp", metaKey: true });
+    await waitFor(() => expect(window.location.hash).toBe(`#${PROJECT}/main`));
+
+    await fireEvent.keyDown(window, { key: "ArrowDown", metaKey: true, shiftKey: true });
     await waitFor(() => expect(window.location.hash).toBe("#images/main"));
     await fireEvent.keyDown(window, { key: "ArrowDown", metaKey: true });
-    await fireEvent.keyDown(window, { key: "ArrowDown", metaKey: true });
+    await waitFor(() => expect(window.location.hash).toBe("#images/feature/img"));
+    await fireEvent.keyDown(window, { key: "ArrowDown", metaKey: true, shiftKey: true });
     await waitFor(() => expect(window.location.hash).toBe("#docs/feature/doc"));
-    await fireEvent.keyDown(window, { key: "ArrowUp", metaKey: true });
+    await fireEvent.keyDown(window, { key: "ArrowDown", ctrlKey: true, shiftKey: true });
+    expect(window.location.hash).toBe("#docs/feature/doc");
+    await fireEvent.keyDown(window, { key: "ArrowUp", ctrlKey: true, shiftKey: true });
     await waitFor(() => expect(window.location.hash).toBe("#images/feature/img"));
   });
 
-  it("collapses a project from its header and keeps it collapsed after a remount", async () => {
-    useThreeProjects();
-
-    renderApp();
-    await screen.findByTitle("main");
-    const header = within(screen.getByRole("region", { name: "images" })).getByRole("button", { name: /^images/ });
-    await fireEvent.click(header);
-
-    expect(header).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByRole("button", { name: /^feature\/img\b/i })).not.toBeInTheDocument();
-    expect(JSON.parse(localStorage.getItem("wt-collapsed-projects") ?? "[]")).toEqual(["images"]);
-
-    cleanup();
-    renderApp();
-    await screen.findByTitle("main");
-    expect(within(screen.getByRole("region", { name: "images" })).getByRole("button", { name: /^images/ }))
-      .toHaveAttribute("aria-expanded", "false");
-    expect(screen.getByRole("button", { name: /^feature\/doc\b/i })).toBeInTheDocument();
-  });
-
-  it("searches every project and hides those without a match", async () => {
+  it("searches the chosen project's worktrees", async () => {
     useThreeProjects();
 
     renderApp();
     await screen.findByTitle("main");
     await fireEvent.input(screen.getByLabelText("Search worktrees"), { target: { value: "doc" } });
+    expect(screen.getByText('No matches for "doc".')).toBeInTheDocument();
 
-    expect(projectSectionNames()).toEqual(["docs"]);
-    expect(screen.getByRole("button", { name: /^feature\/doc\b/i })).toBeInTheDocument();
-
-    await fireEvent.input(screen.getByLabelText("Search worktrees"), { target: { value: "nothing-matches" } });
-    expect(screen.queryAllByRole("region")).toEqual([]);
-    expect(screen.getByText('No matches for "nothing-matches".')).toBeInTheDocument();
+    await chooseProject("docs");
+    expect(rowButton("feature/doc")).toBeInTheDocument();
   });
 
   it("creates a sub-worktree in the parent row's project", async () => {
@@ -853,9 +931,8 @@ describe("App create selection", () => {
 
     renderApp();
     await screen.findByTitle("main");
-    const docs = screen.getByRole("region", { name: "docs" });
-    await fireEvent.click(within(docs).getByRole("button", { name: /actions for feature\/doc/i }));
-    await fireEvent.click(within(docs).getByRole("button", { name: "Create sub-worktree" }));
+    await chooseProject("docs");
+    await fireEvent.click(within(await openRowMenu("feature/doc")).getByRole("button", { name: "Create sub-worktree" }));
     expect(await screen.findByText("New Sub-Worktree")).toBeInTheDocument();
     await fireEvent.input(screen.getByLabelText(/Branch name/i), { target: { value: "feature/doc-child" } });
     await fireEvent.click(screen.getByRole("button", { name: "Create" }));
@@ -873,9 +950,8 @@ describe("App create selection", () => {
 
     renderApp();
     await screen.findByTitle("main");
-    const docs = screen.getByRole("region", { name: "docs" });
-    await fireEvent.click(within(docs).getByRole("button", { name: /actions for feature\/doc/i }));
-    await fireEvent.click(within(docs).getByRole("button", { name: "Create sub-worktree" }));
+    await chooseProject("docs");
+    await fireEvent.click(within(await openRowMenu("feature/doc")).getByRole("button", { name: "Create sub-worktree" }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.queryByText("New Sub-Worktree")).not.toBeInTheDocument();
 
@@ -895,15 +971,14 @@ describe("App create selection", () => {
 
     renderApp();
     await screen.findByTitle("main");
-    const docs = screen.getByRole("region", { name: "docs" });
-    await fireEvent.click(within(docs).getByRole("button", { name: /actions for feature\/doc/i }));
-    await fireEvent.click(within(docs).getByRole("button", { name: "Create sub-worktree" }));
+    await chooseProject("docs");
+    await fireEvent.click(within(await openRowMenu("feature/doc")).getByRole("button", { name: "Create sub-worktree" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Failed to load the docs config: offline");
     expect(screen.queryByText("New Sub-Worktree")).not.toBeInTheDocument();
   });
 
-  it("closes, archives and removes another project's row through that project's API", async () => {
+  it("closes, archives and removes a row through its project's API", async () => {
     useThreeProjects();
     otherProjects.list[1] = {
       ...otherProjects.list[1]!,
@@ -912,10 +987,9 @@ describe("App create selection", () => {
 
     renderApp();
     await screen.findByTitle("main");
+    await chooseProject("docs");
     async function runRowAction(label: string): Promise<void> {
-      const docs = screen.getByRole("region", { name: "docs" });
-      await fireEvent.click(within(docs).getByRole("button", { name: /actions for feature\/doc/i }));
-      await fireEvent.click(within(docs).getByRole("button", { name: label }));
+      await fireEvent.click(within(await openRowMenu("feature/doc")).getByRole("button", { name: label }));
     }
 
     await runRowAction("Close");
@@ -934,58 +1008,21 @@ describe("App create selection", () => {
     expect(projectOfFirstCall(api.removeWorktree)).toBe("docs");
   });
 
-  it("expands a collapsed project when the restored selection lands in it", async () => {
-    useThreeProjects();
-    localStorage.setItem("wt-collapsed-projects", JSON.stringify([PROJECT, "docs"]));
-    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "feature/web");
-
-    renderApp();
-
-    expect(await screen.findByTitle("feature/web")).toBeInTheDocument();
-    const header = within(screen.getByRole("region", { name: PROJECT })).getByRole("button", { name: /^webmux/ });
-    await waitFor(() => expect(header).toHaveAttribute("aria-expanded", "true"));
-    expect(screen.getByRole("button", { name: /^feature\/web\b/i })).toBeInTheDocument();
-    expect(within(screen.getByRole("region", { name: "docs" })).getByRole("button", { name: /^docs/ }))
-      .toHaveAttribute("aria-expanded", "false");
-  });
-
-  async function selectThenCollapse(project: string, branch: string): Promise<void> {
-    const region = screen.getByRole("region", { name: project });
-    await fireEvent.click(within(region).getByRole("button", { name: new RegExp(`^${branch}\\b`, "i") }));
-    await waitFor(() => expect(window.location.hash).toBe(`#${project}/${branch}`));
-    await fireEvent.click(within(region).getByRole("button", { name: new RegExp(`^${project}`) }));
-    expect(within(region).queryByRole("button", { name: new RegExp(`^${branch}\\b`, "i") })).not.toBeInTheDocument();
-  }
-
-  it("steps from a selection the user collapsed to the rows around its project", async () => {
+  it("selects the row above a removed worktree, within its project", async () => {
     useThreeProjects();
 
     renderApp();
     await screen.findByTitle("main");
-    await selectThenCollapse("images", "main");
-
-    await fireEvent.keyDown(window, { key: "ArrowUp", metaKey: true });
-    await waitFor(() => expect(window.location.hash).toBe(`#${PROJECT}/feature/web`));
-    expect(within(screen.getByRole("region", { name: "images" })).getByRole("button", { name: /^images/ }))
-      .toHaveAttribute("aria-expanded", "false");
-
-    await selectThenCollapse("webmux", "feature/web");
-    await fireEvent.keyDown(window, { key: "ArrowDown", metaKey: true });
-    await waitFor(() => expect(window.location.hash).toBe("#docs/feature/doc"));
-  });
-
-  it("selects the row above a removed worktree hidden in a collapsed project", async () => {
-    useThreeProjects();
-
-    renderApp();
-    await screen.findByTitle("main");
-    await selectThenCollapse("images", "main");
+    await chooseProject("images");
+    await fireEvent.click(rowButton("feature/img"));
+    await waitFor(() => expect(window.location.hash).toBe("#images/feature/img"));
 
     await fireEvent.keyDown(window, { key: "d", metaKey: true });
     await fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Remove" }));
 
-    await waitFor(() => expect(api.removeWorktree).toHaveBeenCalledWith({ params: { name: "main" } }));
-    await waitFor(() => expect(window.location.hash).toBe(`#${PROJECT}/feature/web`));
+    await waitFor(() => expect(api.removeWorktree).toHaveBeenCalledWith({ params: { name: "feature/img" } }));
+    expect(projectOfFirstCall(api.removeWorktree)).toBe("images");
+    await waitFor(() => expect(window.location.hash).toBe("#images/main"));
   });
 
   it("keeps the current selection when a new worktree is created from an existing selection", async () => {
@@ -1132,9 +1169,10 @@ describe("App create selection", () => {
       vi.mocked(api.createWorktree).mockResolvedValue({ primaryBranch: "feature/new", branches: ["feature/new"] });
     });
 
-    it("creates a worktree in the header's project from its + button and its menu", async () => {
+    it("creates a worktree in the chosen project from the header's + button and its menu", async () => {
       useImagesProject();
       renderApp();
+      await chooseProject("images");
 
       await fireEvent.click(await screen.findByRole("button", { name: "New worktree in images" }));
       await submitCreate("feature/plus");
@@ -1146,51 +1184,29 @@ describe("App create selection", () => {
       expect(projectOfLastCall(api.createWorktree)).toBe("images");
     });
 
-    function headerBar(name: string): HTMLElement {
-      const bar = screen.getByRole("region", { name }).querySelector<HTMLElement>("[data-project-header-bar]");
-      if (!bar) throw new Error(`no header bar for ${name}`);
-      return bar;
-    }
-
-    it("raises an open menu's header above the following sticky headers", async () => {
-      useImagesProject();
+    it("keeps a single menu open across the header and row menus", async () => {
       renderApp();
 
       await openProjectMenu(PROJECT);
+      expect(screen.getByRole("button", { name: "Remove project" })).toBeInTheDocument();
 
-      expect(headerBar(PROJECT)).toHaveClass("has-[[data-popup-menu]]:z-10");
-      expect(headerBar(PROJECT).matches(":has([data-popup-menu])")).toBe(true);
-      expect(headerBar("images").matches(":has([data-popup-menu])")).toBe(false);
-    });
-
-    it("keeps a single menu open across header and row menus", async () => {
-      useImagesProject();
-      renderApp();
-
-      await openProjectMenu(PROJECT);
-      await openProjectMenu("images");
-      expect(screen.getAllByRole("button", { name: "Remove project" })).toHaveLength(1);
-      expect(headerBar("images").matches(":has([data-popup-menu])")).toBe(true);
-
-      await fireEvent.click(screen.getByRole("button", { name: "Actions for feature/web" }));
+      await fireEvent.click(await screen.findByRole("button", { name: "Actions for feature/web" }));
       expect(screen.queryByRole("button", { name: "Remove project" })).not.toBeInTheDocument();
-      const webmux = screen.getByRole("region", { name: PROJECT });
-      expect(within(webmux).getByRole("button", { name: "Archive" })).toBeInTheDocument();
+      expect(within(screen.getByRole("menu")).getByRole("button", { name: "Archive" })).toBeInTheDocument();
 
       await openProjectMenu(PROJECT);
-      expect(within(webmux).queryByRole("button", { name: "Archive" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Remove project" })).toBeInTheDocument();
     });
 
-    it("closes an open menu when another header's + is clicked", async () => {
-      useImagesProject();
+    it("closes the project menu when a row is right-clicked", async () => {
       renderApp();
 
       await openProjectMenu(PROJECT);
-      await fireEvent.click(screen.getByRole("button", { name: "New worktree in images" }));
+      const menu = await openRowMenu("feature/web");
 
       expect(screen.queryByRole("button", { name: "Remove project" })).not.toBeInTheDocument();
-      expect(await screen.findByText("New Worktree")).toBeInTheDocument();
+      expect(within(menu).getByRole("button", { name: "Archive" })).toBeInTheDocument();
     });
 
     it("pulls the header's project and opens it in the IDE", async () => {
@@ -1201,6 +1217,7 @@ describe("App create selection", () => {
         linkedRepos: [{ alias: "shared", dir: "/repos/shared" }],
       }));
       renderApp();
+      await chooseProject("images");
 
       await openProjectMenu("images");
       expect(await screen.findByRole("link", { name: "Open in Cursor" })).toHaveAttribute("href", "cursor://file/repos/images");
@@ -1219,43 +1236,42 @@ describe("App create selection", () => {
       expect(projectOfLastCall(api.pullMain)).toBe("images");
     });
 
-    it("creates with Cmd+K in the selected worktree's project", async () => {
+    it("creates with Cmd+K in the chosen project", async () => {
       useImagesProject();
       renderApp();
 
-      await fireEvent.click(await screen.findByRole("button", { name: /^feature\/img\b/i }));
+      await chooseProject("images");
       await fireEvent.keyDown(window, { key: "k", metaKey: true });
       await submitCreate("feature/cmdk");
 
       expect(projectOfLastCall(api.createWorktree)).toBe("images");
     });
 
-    it("creates with Cmd+K in the first project when nothing is selected", async () => {
+    it("creates with Cmd+K in the chosen project when it has no worktree", async () => {
       useImagesProject([]);
       renderApp("images");
 
-      await screen.findByText("Select a worktree");
-      await screen.findByRole("region", { name: "images" });
+      await screen.findByText("No worktrees yet.");
       await fireEvent.keyDown(window, { key: "k", metaKey: true });
       await submitCreate("feature/cmdk");
 
-      expect(projectOfLastCall(api.createWorktree)).toBe(PROJECT);
+      expect(projectOfLastCall(api.createWorktree)).toBe("images");
     });
 
-    it("adds a project, which then shows under its header", async () => {
+    it("adds a project from the rail, which then shows on it", async () => {
       vi.mocked(setUpProject).mockImplementation(async () => {
         useImagesProject();
         return { prefix: "images" };
       });
       renderApp();
-      await screen.findByRole("region", { name: PROJECT });
+      await screen.findByRole("heading", { name: PROJECT });
 
       await fireEvent.click(screen.getByRole("button", { name: "Add project" }));
       await fireEvent.input(screen.getByLabelText("Path to a git repo"), { target: { value: "/repos/images" } });
       await fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Add" }));
 
       expect(setUpProject).toHaveBeenCalledWith("/repos/images", expect.any(Function));
-      expect(await screen.findByRole("region", { name: "images" })).toBeInTheDocument();
+      await waitFor(() => expect(railProjectNames()).toEqual([PROJECT, "images"]));
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
 
@@ -1266,7 +1282,8 @@ describe("App create selection", () => {
       });
       vi.mocked(fetchProjects).mockResolvedValue([{ prefix: PROJECT, name: PROJECT, path: "/repo", active: true }]);
       const { onNoProjects } = renderApp();
-      await fireEvent.click(await screen.findByRole("button", { name: /^feature\/img\b/i }));
+      await screen.findByTitle("feature/web");
+      await chooseProject("images");
       expect(await screen.findByTitle("feature/img")).toBeInTheDocument();
 
       await openProjectMenu("images");
@@ -1275,29 +1292,10 @@ describe("App create selection", () => {
       await fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Remove" }));
 
       expect(removeProject).toHaveBeenCalledWith("images");
-      await waitFor(() => expect(screen.queryByRole("region", { name: "images" })).not.toBeInTheDocument());
+      await waitFor(() => expect(railProjectNames()).toEqual([PROJECT]));
       expect(await screen.findByTitle("feature/web")).toBeInTheDocument();
       expect(window.location.hash).toBe(`#${PROJECT}/feature/web`);
       expect(onNoProjects).not.toHaveBeenCalled();
-    });
-
-    it("keeps the selection when removing another project", async () => {
-      useImagesProject();
-      vi.mocked(removeProject).mockImplementation(async () => {
-        otherProjects.list = [];
-      });
-      vi.mocked(fetchProjects).mockResolvedValue([{ prefix: PROJECT, name: PROJECT, path: "/repo", active: true }]);
-      renderApp();
-      await fireEvent.click(await screen.findByRole("button", { name: /^feature\/web\b/i }));
-      expect(await screen.findByTitle("feature/web")).toBeInTheDocument();
-
-      await openProjectMenu("images");
-      await fireEvent.click(screen.getByRole("button", { name: "Remove project" }));
-      await fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Remove" }));
-
-      await waitFor(() => expect(screen.queryByRole("region", { name: "images" })).not.toBeInTheDocument());
-      expect(screen.getByTitle("feature/web")).toBeInTheDocument();
-      expect(window.location.hash).toBe(`#${PROJECT}/feature/web`);
     });
 
     it("falls back to the empty state once the last project is removed", async () => {
@@ -1350,7 +1348,7 @@ describe("App create selection", () => {
 
     await screen.findByText("Select a worktree");
 
-    await fireEvent.click(screen.getByTitle("New Worktree (Cmd+K)"));
+    await fireEvent.click(screen.getByTitle("New worktree (Cmd+K)"));
     await screen.findByText("New Worktree");
     await fireEvent.click(screen.getByRole("switch", { name: /enable multiple agent selection/i }));
     await fireEvent.click(screen.getByRole("checkbox", { name: "Codex" }));
@@ -1370,7 +1368,7 @@ describe("App create selection", () => {
     expect(screen.getByTitle("claude-feature/new")).toBeInTheDocument();
   });
 
-  it("hides archived worktrees until the archived toggle is enabled", async () => {
+  it("folds archived worktrees at the bottom until unfolded", async () => {
     vi.mocked(fetchWorktrees).mockResolvedValue([
       createWorktree("feature/active"),
       createWorktree("feature/archived", { archived: true }),
@@ -1381,11 +1379,24 @@ describe("App create selection", () => {
     await screen.findByRole("button", { name: /^feature\/active\b/i });
     expect(screen.queryByRole("button", { name: /feature\/archived/i })).not.toBeInTheDocument();
 
-    await fireEvent.click(screen.getByRole("switch", { name: /show archived worktrees/i }));
+    await fireEvent.click(screen.getByRole("button", { name: "Archived (1)" }));
 
     expect(
       await screen.findByRole("button", { name: /^feature\/archived\b/i }),
     ).toBeInTheDocument();
+  });
+
+  it("labels a row from its context menu", async () => {
+    vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("main"), createWorktree("feature/other")]);
+    vi.mocked(setWorktreeLabel).mockResolvedValue("Other work");
+
+    renderApp();
+    await screen.findByTitle("main");
+    await fireEvent.click(within(await openRowMenu("feature/other")).getByRole("button", { name: "Edit label…" }));
+    await fireEvent.input(screen.getByLabelText("Label"), { target: { value: "Other work" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(setWorktreeLabel).toHaveBeenCalledWith(PROJECT, "feature/other", "Other work"));
   });
 
   it("keeps the current selection while filtering the worktree list", async () => {
@@ -1591,7 +1602,7 @@ describe("App create selection", () => {
     return docs;
   }
 
-  it("ties the Linear panel to the selected worktree's project, from its cache when coming back", async () => {
+  it("ties the Linear panel to the chosen project, from its cache when coming back", async () => {
     useThreeProjects();
     const docs = useDocsClient();
     vi.mocked(api.fetchLinearIssues).mockResolvedValue(
@@ -1602,15 +1613,13 @@ describe("App create selection", () => {
     await fireEvent.click(await screen.findByRole("button", { name: /^Linear \(1\) · webmux\b/ }));
     expect(await screen.findByText("Webmux issue")).toBeInTheDocument();
 
-    const docsSection = screen.getByRole("region", { name: "docs" });
-    await fireEvent.click(within(docsSection).getByRole("button", { name: /^feature\/doc\b/i }));
+    await chooseProject("docs");
 
     expect(await screen.findByRole("button", { name: /^Linear \(1\) · docs\b/ })).toBeInTheDocument();
     expect(await screen.findByText("Docs issue")).toBeInTheDocument();
     expect(screen.queryByText("Webmux issue")).not.toBeInTheDocument();
 
-    const webmuxSection = screen.getByRole("region", { name: "webmux" });
-    await fireEvent.click(within(webmuxSection).getByRole("button", { name: /^feature\/web\b/i }));
+    await chooseProject(PROJECT);
 
     // Straight from the cache: no flash and no refetch within the throttle window.
     expect(screen.getByText("Webmux issue")).toBeInTheDocument();
@@ -1625,8 +1634,7 @@ describe("App create selection", () => {
 
     renderApp();
     await screen.findByTitle("main");
-    const docsSection = screen.getByRole("region", { name: "docs" });
-    await fireEvent.click(within(docsSection).getByRole("button", { name: /^feature\/doc\b/i }));
+    await chooseProject("docs");
     await fireEvent.click(await screen.findByRole("button", { name: /^Linear \(1\) · docs\b/ }));
     await fireEvent.click(await screen.findByRole("button", { name: "Implement" }));
     await screen.findByText("New Worktree");
@@ -1647,8 +1655,7 @@ describe("App create selection", () => {
 
     renderApp();
     await screen.findByTitle("main");
-    const docsSection = screen.getByRole("region", { name: "docs" });
-    await fireEvent.click(within(docsSection).getByRole("button", { name: /^feature\/doc\b/i }));
+    await chooseProject("docs");
     await fireEvent.click(await screen.findByRole("button", { name: /^Linear \(1\) · docs\b/ }));
     await fireEvent.click(await screen.findByRole("button", { name: /Docs issue/ }));
     const detail = await screen.findByRole("dialog");
@@ -1656,8 +1663,7 @@ describe("App create selection", () => {
     // Shortcuts stay off while the details are open, but the selection can still move.
     await fireEvent.keyDown(window, { key: "ArrowUp", metaKey: true });
     expect(screen.getByRole("button", { name: /^Linear \(1\) · docs\b/ })).toBeInTheDocument();
-    const webmuxSection = screen.getByRole("region", { name: "webmux" });
-    await fireEvent.click(within(webmuxSection).getByRole("button", { name: /^feature\/web\b/i }));
+    await chooseProject(PROJECT);
     expect(await screen.findByRole("button", { name: /^Linear \(0\) · webmux\b/ })).toBeInTheDocument();
 
     await fireEvent.click(within(detail).getByRole("button", { name: "Implement" }));
@@ -1710,7 +1716,7 @@ describe("App create selection", () => {
 
     renderApp();
 
-    await fireEvent.click(screen.getByTitle("New Worktree (Cmd+K)"));
+    await fireEvent.click(screen.getByTitle("New worktree (Cmd+K)"));
     await screen.findByText("New Worktree");
 
     expect(screen.queryByRole("switch", { name: /create linear ticket/i })).not.toBeInTheDocument();
@@ -1728,7 +1734,7 @@ describe("App create selection", () => {
 
     renderApp();
 
-    await fireEvent.click(screen.getByTitle("New Worktree (Cmd+K)"));
+    await fireEvent.click(screen.getByTitle("New worktree (Cmd+K)"));
     await screen.findByText("New Worktree");
 
     const linearToggle = screen.getByRole("switch", { name: /create linear ticket/i });
@@ -1772,7 +1778,7 @@ describe("App create selection", () => {
 
     renderApp();
 
-    await fireEvent.click(screen.getByTitle("New Worktree (Cmd+K)"));
+    await fireEvent.click(screen.getByTitle("New worktree (Cmd+K)"));
     await screen.findByText("New Worktree");
 
     await fireEvent.click(screen.getByRole("switch", { name: /enable multiple agent selection/i }));
@@ -1794,7 +1800,7 @@ describe("App create selection", () => {
 
     renderApp();
 
-    await fireEvent.click(screen.getByTitle("New Worktree (Cmd+K)"));
+    await fireEvent.click(screen.getByTitle("New worktree (Cmd+K)"));
     await screen.findByText("New Worktree");
 
     await fireEvent.click(screen.getByRole("switch", { name: /enable multiple agent selection/i }));
@@ -1854,7 +1860,7 @@ describe("App create selection", () => {
 
     renderApp();
 
-    await fireEvent.click(screen.getByTitle("New Worktree (Cmd+K)"));
+    await fireEvent.click(screen.getByTitle("New worktree (Cmd+K)"));
     await screen.findByText("New Worktree");
 
     await waitFor(() => {
@@ -1872,7 +1878,7 @@ describe("App create selection", () => {
     });
 
     await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    await fireEvent.click(screen.getByTitle("New Worktree (Cmd+K)"));
+    await fireEvent.click(screen.getByTitle("New worktree (Cmd+K)"));
     await screen.findByText("New Worktree");
 
     await waitFor(() => {
@@ -1899,7 +1905,7 @@ describe("App create selection", () => {
 
     renderApp();
 
-    await fireEvent.click(screen.getByTitle("New Worktree (Cmd+K)"));
+    await fireEvent.click(screen.getByTitle("New worktree (Cmd+K)"));
     await screen.findByText("New Worktree");
     await fireEvent.click(screen.getByRole("button", { name: "Use existing branch" }));
 

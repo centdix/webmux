@@ -5,10 +5,8 @@ import {
   LAST_SELECTED_WORKTREE_STORAGE_KEY,
   WEB_CHAT_UI_STORAGE_KEY,
   FAVORITE_WORKTREES_STORAGE_KEY,
-  COLLAPSED_PROJECTS_STORAGE_KEY,
   FAVORITE_WORKTREE_KEYS_STORAGE_KEY,
   ideLabelForUrl,
-  loadCollapsedProjects,
   loadFavoriteWorktreeKeys,
   loadLastProject,
   loadSavedSelectedWorktree,
@@ -18,7 +16,6 @@ import {
   resolveSelectedBranch,
   prBadgeClass,
   prStateTextClass,
-  saveCollapsedProjects,
   saveFavoriteWorktreeKeys,
   saveLastProject,
   saveSelectedWorktree,
@@ -127,16 +124,6 @@ describe("worktree selection persistence", () => {
     expect(loadFavoriteWorktreeKeys("proj-a")).toEqual(new Set(["proj-a:feature/x"]));
     expect(localStorage.getItem(FAVORITE_WORKTREES_STORAGE_KEY)).toBeNull();
     expect(loadFavoriteWorktreeKeys("proj-b")).toEqual(new Set(["proj-a:feature/x"]));
-  });
-
-  it("stores the collapsed projects and clears them when none is left", () => {
-    expect(loadCollapsedProjects()).toEqual(new Set());
-
-    saveCollapsedProjects(new Set(["proj-a", "proj-b"]));
-    expect(loadCollapsedProjects()).toEqual(new Set(["proj-a", "proj-b"]));
-
-    saveCollapsedProjects(new Set());
-    expect(localStorage.getItem(COLLAPSED_PROJECTS_STORAGE_KEY)).toBeNull();
   });
 
   it("ignores malformed favorite worktrees data", () => {

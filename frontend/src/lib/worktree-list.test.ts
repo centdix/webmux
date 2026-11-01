@@ -1,17 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildProjectListRows,
   buildWorktreeListRows,
-  buildWorktreeListSections,
   countAgentStatusesIn,
-  countArchivedMatches,
-  displayedWorktrees,
-  filterWorktrees,
   keysWithAgentStatus,
-  navigationKeys,
+  matchesWorktreeSearch,
   sortFavoritesFirst,
-  type WorktreeListSectionsOptions,
 } from "./worktree-list";
-import type { ProjectWorktreeList, WorktreeInfo, WorktreeListRow } from "./types";
+import type { WorktreeInfo, WorktreeListRow } from "./types";
 
 function createWorktree(branch: string, overrides: Partial<WorktreeInfo> = {}): WorktreeInfo {
   return {
@@ -74,38 +70,10 @@ describe("buildWorktreeListRows", () => {
     ]);
   });
 
-  it("filters archived worktrees out by default and matches profile text", () => {
-    const worktrees = filterWorktrees([
-      createWorktree("feature/active", { profile: "sandbox" }),
-      createWorktree("feature/archived", { archived: true, profile: "default" }),
-    ], {
-      query: "sand",
-      showArchived: false,
-    });
-
-    expect(worktrees.map((worktree) => worktree.branch)).toEqual(["feature/active"]);
-  });
-
-  it("matches label text when searching worktrees", () => {
-    const worktrees = filterWorktrees([
-      createWorktree("feature/random-fallback", { label: "Search ranking" }),
-      createWorktree("feature/other"),
-    ], {
-      query: "ranking",
-      showArchived: false,
-    });
-
-    expect(worktrees.map((worktree) => worktree.branch)).toEqual(["feature/random-fallback"]);
-  });
-
-  it("counts archived matches separately from visible rows", () => {
-    const count = countArchivedMatches([
-      createWorktree("feature/alpha", { archived: true }),
-      createWorktree("feature/beta", { archived: true }),
-      createWorktree("feature/gamma"),
-    ], "beta");
-
-    expect(count).toBe(1);
+  it("matches label and profile text when searching worktrees", () => {
+    expect(matchesWorktreeSearch(createWorktree("feature/random-fallback", { label: "Search ranking" }), "ranking")).toBe(true);
+    expect(matchesWorktreeSearch(createWorktree("feature/active", { profile: "sandbox" }), "sand")).toBe(true);
+    expect(matchesWorktreeSearch(createWorktree("feature/other"), "ranking")).toBe(false);
   });
 });
 
@@ -223,120 +191,36 @@ describe("keysWithAgentStatus", () => {
   });
 });
 
-function createProject(prefix: string, worktrees: WorktreeInfo[], error: string | null = null): ProjectWorktreeList {
-  return { prefix, name: prefix.toUpperCase(), worktrees, error };
+function branchesOf(rows: WorktreeListRow[]): Array<[string, number]> {
+  return rows.map((row) => [row.worktree.branch, row.depth]);
 }
 
-function sectionOptions(overrides: Partial<WorktreeListSectionsOptions> = {}): WorktreeListSectionsOptions {
-  return { query: "", showArchived: false, favorites: new Set(), collapsed: new Set(), ...overrides };
-}
-
-describe("buildWorktreeListSections", () => {
-  const projects = [
-    createProject("beta", [createWorktree("main", { project: "beta" }), createWorktree("feat/search", { project: "beta" })]),
-    createProject("alpha", [createWorktree("main", { project: "alpha" })]),
-    createProject("gamma", [createWorktree("old", { project: "gamma", archived: true })]),
+describe("buildProjectListRows", () => {
+  const worktrees = [
+    createWorktree("main"),
+    createWorktree("feat/search"),
+    createWorktree("feat/search-child", { baseBranch: "feat/search" }),
+    createWorktree("old", { archived: true }),
+    createWorktree("old-child", { archived: true, baseBranch: "old" }),
   ];
 
-  it("keeps every project in the given order with its header data", () => {
-    const sections = buildWorktreeListSections(projects, sectionOptions());
+  it("splits active and archived rows, each nesting its own sub-worktrees", () => {
+    const rows = buildProjectListRows(worktrees, { query: "", favorites: new Set() });
 
-    expect(sections.map((section) => [section.prefix, section.name, section.rows.length])).toEqual([
-      ["beta", "BETA", 2],
-      ["alpha", "ALPHA", 1],
-      ["gamma", "GAMMA", 0],
-    ]);
-    expect(sections[2]?.emptyMessage).toBe("No active worktrees.");
-    expect(sections[0]?.emptyMessage).toBeNull();
+    expect(branchesOf(rows.active)).toEqual([["main", 0], ["feat/search", 0], ["feat/search-child", 1]]);
+    expect(branchesOf(rows.archived)).toEqual([["old", 0], ["old-child", 1]]);
   });
 
-  it("sorts favorites first within each project, keyed by project", () => {
-    const sections = buildWorktreeListSections(projects, sectionOptions({ favorites: new Set(["beta:feat/search", "alpha:x"]) }));
+  it("filters both groups by the search", () => {
+    const rows = buildProjectListRows(worktrees, { query: "old", favorites: new Set() });
 
-    expect(sections[0]?.rows.map((row) => row.worktree.branch)).toEqual(["feat/search", "main"]);
+    expect(rows.active).toEqual([]);
+    expect(branchesOf(rows.archived)).toEqual([["old", 0], ["old-child", 1]]);
   });
 
-  it("drops the projects without a match while searching", () => {
-    const sections = buildWorktreeListSections(projects, sectionOptions({ query: "search" }));
+  it("lists favorites first, keyed by project", () => {
+    const rows = buildProjectListRows(worktrees, { query: "", favorites: new Set(["webmux:feat/search", "other:main"]) });
 
-    expect(sections.map((section) => section.prefix)).toEqual(["beta"]);
-    expect(sections[0]?.rows.map((row) => row.worktree.branch)).toEqual(["feat/search"]);
-  });
-
-  it("keeps a failed project while searching so its fetch error stays visible", () => {
-    const sections = buildWorktreeListSections(
-      [...projects, createProject("broken", [], "git exploded")],
-      sectionOptions({ query: "search" }),
-    );
-
-    expect(sections.map((section) => [section.prefix, section.error])).toEqual([
-      ["beta", null],
-      ["broken", "git exploded"],
-    ]);
-  });
-
-  it("applies show archived to every project", () => {
-    const sections = buildWorktreeListSections(projects, sectionOptions({ showArchived: true, query: "old" }));
-
-    expect(sections.map((section) => section.prefix)).toEqual(["gamma"]);
-  });
-
-  it("marks collapsed projects but still counts their rows", () => {
-    const sections = buildWorktreeListSections(projects, sectionOptions({ collapsed: new Set(["beta"]) }));
-
-    expect(sections[0]).toMatchObject({ prefix: "beta", collapsed: true });
-    expect(sections[0]?.rows).toHaveLength(2);
-    expect(sections[1]?.collapsed).toBe(false);
-  });
-
-  it("keeps a failed project with its last rows and no empty message", () => {
-    const sections = buildWorktreeListSections(
-      [createProject("broken", [], "git exploded"), createProject("stale", [createWorktree("a", { project: "stale" })], "timeout")],
-      sectionOptions(),
-    );
-
-    expect(sections.map((section) => [section.error, section.emptyMessage, section.rows.length])).toEqual([
-      ["git exploded", null, 0],
-      ["timeout", null, 1],
-    ]);
-  });
-});
-
-describe("displayedWorktrees", () => {
-  it("lists the rows of expanded projects top to bottom", () => {
-    const sections = buildWorktreeListSections(
-      [
-        createProject("beta", [createWorktree("b1", { project: "beta" }), createWorktree("b2", { project: "beta" })]),
-        createProject("alpha", [createWorktree("a1", { project: "alpha" })]),
-        createProject("gamma", [createWorktree("g1", { project: "gamma" })]),
-      ],
-      sectionOptions({ collapsed: new Set(["alpha"]) }),
-    );
-
-    expect(displayedWorktrees(sections).map((w) => `${w.project}:${w.branch}`)).toEqual([
-      "beta:b1",
-      "beta:b2",
-      "gamma:g1",
-    ]);
-  });
-});
-
-describe("navigationKeys", () => {
-  const sections = buildWorktreeListSections(
-    [
-      createProject("beta", [createWorktree("b1", { project: "beta" })]),
-      createProject("alpha", [createWorktree("a1", { project: "alpha" }), createWorktree("a2", { project: "alpha" })]),
-      createProject("gamma", [createWorktree("g1", { project: "gamma" })]),
-    ],
-    sectionOptions({ collapsed: new Set(["alpha"]) }),
-  );
-
-  it("lists the displayed rows when the selection is one of them or absent", () => {
-    expect(navigationKeys(sections, null)).toEqual(["beta:b1", "gamma:g1"]);
-    expect(navigationKeys(sections, { project: "gamma", branch: "g1" })).toEqual(["beta:b1", "gamma:g1"]);
-  });
-
-  it("slots a selection hidden in a collapsed project at its section's place", () => {
-    expect(navigationKeys(sections, { project: "alpha", branch: "a2" })).toEqual(["beta:b1", "alpha:a2", "gamma:g1"]);
+    expect(branchesOf(rows.active)).toEqual([["feat/search", 0], ["feat/search-child", 1], ["main", 0]]);
   });
 });

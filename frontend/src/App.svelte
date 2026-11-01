@@ -17,10 +17,11 @@
   import WorktreeLabelDialog from "./lib/WorktreeLabelDialog.svelte";
   import WorktreeProfileDialog from "./lib/WorktreeProfileDialog.svelte";
   import ProjectActionsMenu from "./lib/ProjectActionsMenu.svelte";
+  import ProjectRail from "./lib/ProjectRail.svelte";
+  import Btn from "./lib/Btn.svelte";
   import AddProjectForm from "./lib/AddProjectForm.svelte";
   import BaseDialog from "./lib/BaseDialog.svelte";
   import MigrationBanner from "./lib/MigrationBanner.svelte";
-  import Toggle from "./lib/Toggle.svelte";
   import type {
     AvailableBranch,
     AppConfig,
@@ -48,16 +49,10 @@
     saveUseWebChatUi,
     loadFavoriteWorktreeKeys,
     saveFavoriteWorktreeKeys,
-    loadCollapsedProjects,
-    saveCollapsedProjects,
     projectRepos,
   } from "./lib/utils";
-  import {
-    buildWorktreeListSections,
-    countArchivedMatches,
-    matchesWorktreeSearch,
-    navigationKeys,
-  } from "./lib/worktree-list";
+  import { buildProjectListRows, matchesWorktreeSearch } from "./lib/worktree-list";
+  import { buildProjectRail } from "./lib/project-rail";
   import { supportsWorktreeChat, supportsWorktreeTabs } from "./lib/agent-capabilities";
   import { getTheme } from "./lib/themes";
   import type { ThemeKey } from "./lib/themes";
@@ -130,25 +125,18 @@
   const pull = new ProjectPull(showToast);
   const removal = new ProjectRemoval(handleProjectRemoved);
 
-  /** The current project: the selected worktree's (the last one when nothing
-   *  is selected). The sidebar lists every project regardless; this only
-   *  drives the initial fallback selection. */
-  let project = $derived(selection.project);
-  /** Project of the selected worktree (the current one when none): the main
-   *  panel, its dialogs, the config they read and the Linear panel all target
-   *  it. */
-  let activeProject = $derived(selection.selected?.project ?? project);
-  /** Where Cmd+K creates: the selected worktree's project, else the first. */
-  let defaultCreateProject = $derived(selection.selected?.project ?? store.projects[0]?.prefix ?? project);
+  /** The project chosen on the rail, which always holds the selected
+   *  worktree: the sidebar lists it, and the main panel, its dialogs, the
+   *  config they read, the Linear panel, Cmd+K and the poll focus target it. */
+  let activeProject = $derived(selection.project);
   let config = $derived(configs.get(activeProject) ?? DEFAULT_CONFIG);
   let linearData = $derived(linear.get(activeProject));
   let linearIssues = $derived(linearData?.issues ?? []);
   let linearAvailability = $derived(linearData?.availability ?? "disabled");
-  let hasLoadedWorktrees = $derived(store.hasLoaded(project));
+  let hasLoadedWorktrees = $derived(store.hasLoaded(activeProject));
   let selectedBranch = $derived(selection.branch);
   // The boot project inherits the unscoped legacy favorites.
   let favoriteKeys = $state(untrack(() => loadFavoriteWorktreeKeys(selection.project)));
-  let collapsedProjects = $state(loadCollapsedProjects());
 
   function worktreeSupportsChat(worktree: WorktreeInfo | undefined): boolean {
     return supportsWorktreeChat(config.agents, worktree);
@@ -160,7 +148,7 @@
 
   /** A branch of the current project as a ref. */
   function refOf(branch: string): WorktreeRef {
-    return { project, branch };
+    return { project: activeProject, branch };
   }
 
   let removeRef = $state<WorktreeRef | null>(null);
@@ -328,7 +316,8 @@
   });
 
   // Sidebar resize
-  const MIN_SIDEBAR_WIDTH = 140;
+  // The project rail takes 48px; the list keeps at least 140px.
+  const MIN_SIDEBAR_WIDTH = 188;
   const MAX_SIDEBAR_WIDTH = 500;
   const SIDEBAR_KEYBOARD_STEP = 10;
   let sidebarWidth = $state(
@@ -381,33 +370,19 @@
     | undefined = $state();
 
   let trimmedWorktreeSearch = $derived(searchQuery.trim());
-  let allWorktrees = $derived(store.projects.flatMap((entry) => entry.worktrees));
-  let archivedWorktreeCount = $derived(allWorktrees.filter((w) => w.archived).length);
-  let hiddenArchivedMatchCount = $derived(
-    showArchivedWorktrees ? 0 : countArchivedMatches(allWorktrees, trimmedWorktreeSearch),
+  let railItems = $derived(buildProjectRail(store.projects, notifications.unreadWorktrees));
+  let activeProjectName = $derived(store.nameOf(activeProject) ?? activeProject);
+  let listRows = $derived(
+    buildProjectListRows(store.worktreesOf(activeProject), { query: trimmedWorktreeSearch, favorites: favoriteKeys }),
   );
-  let worktreeSections = $derived(
-    buildWorktreeListSections(store.projects, {
-      query: trimmedWorktreeSearch,
-      showArchived: showArchivedWorktrees,
-      favorites: favoriteKeys,
-      collapsed: collapsedProjects,
-    }),
-  );
-  /** Rows on screen, across projects, minus those being removed. */
-  let navigableKeys = $derived(
-    navigationKeys(worktreeSections, selection.selected).filter((key) => !store.removing.keys.has(key)),
-  );
-  /** The current project's rows passing the filters (collapsed or not). */
+  /** The current project's rows on screen, top to bottom: the order
+   *  Cmd+Up/Down and the neighbor picked on remove follow. */
   let visibleWorktrees = $derived(
-    worktreeSections.find((section) => section.prefix === project)?.rows.map((row) => row.worktree) ?? [],
+    [...listRows.active, ...(showArchivedWorktrees ? listRows.archived : [])].map((row) => row.worktree),
   );
-  let creatingCount = $derived(allWorktrees.filter((w) => w.creating).length);
-  let activeCreateCount = $derived(Math.max(pendingCreateCount, creatingCount));
+  let visibleKeys = $derived(visibleWorktrees.map(worktreeKey));
+  let navigableKeys = $derived(visibleKeys.filter((key) => !store.removing.keys.has(key)));
   let selectableWorktrees = $derived(visibleWorktrees.filter((w) => !store.removing.has(w)));
-  let createIndicatorLabel = $derived(
-    activeCreateCount === 1 ? "Creating..." : `Creating ${activeCreateCount}...`,
-  );
   let selectedWorktree = $derived(
     selection.selected && !store.removing.has(selection.selected) ? store.find(selection.selected) : undefined,
   );
@@ -431,13 +406,6 @@
   );
   let showLinearPanel = $derived(linearAvailability !== "disabled");
   let linearCollapsed = $state(true);
-  let worktreeListEmptyMessage = $derived(
-    trimmedWorktreeSearch
-      ? hiddenArchivedMatchCount > 0
-        ? "Archived matches are hidden."
-        : `No matches for "${trimmedWorktreeSearch}".`
-      : "No worktrees found.",
-  );
 
   $effect(() => {
     const nextSelectedBranch = resolveSelectedBranch(
@@ -472,18 +440,6 @@
 
   $effect(() => {
     store.setPollInterval(pollIntervalMs);
-  });
-
-  // A selection restored or auto-picked inside a collapsed project expands it;
-  // collapsing the selected worktree's project by hand leaves it collapsed.
-  let selectedWorktreeKey = $derived(selectedWorktree ? worktreeKey(selectedWorktree) : null);
-  $effect(() => {
-    if (!selectedWorktreeKey) return;
-    untrack(() => {
-      if (selectedWorktree && collapsedProjects.has(selectedWorktree.project)) {
-        toggleProjectCollapsed(selectedWorktree.project);
-      }
-    });
   });
 
   $effect(() => {
@@ -586,6 +542,8 @@
   let showPaneBar = $derived(isMobile && canConnect && !showWebChat && paneBarPanes.length > 0);
 
   function openCreateDialog(targetProject: string, issue: LinearIssue | null = null): void {
+    // The dialog waits on the config: retry a failed load now, not after the throttle.
+    if (!configs.get(targetProject)) configs.invalidate(targetProject);
     createProject = targetProject;
     includeRemoteBranches = false;
     assignIssue = issue;
@@ -594,11 +552,8 @@
   }
 
   function openSubworktreeDialog(parent: WorktreeRef): void {
-    createProject = parent.project;
-    includeRemoteBranches = false;
-    assignIssue = null;
+    openCreateDialog(parent.project);
     lockedBaseBranch = parent.branch;
-    showCreateDialog = true;
   }
 
   function closeCreateDialog(): void {
@@ -684,8 +639,7 @@
 
   function selectNeighborOf(ref: WorktreeRef): void {
     if (!sameWorktree(ref, selection.selected)) return;
-    const ordered = navigationKeys(worktreeSections, ref);
-    const neighbor = neighborBranch(ordered, worktreeKey(ref), store.removing.keys);
+    const neighbor = neighborBranch(visibleKeys, worktreeKey(ref), store.removing.keys);
     selection.select(neighbor ? parseWorktreeKey(neighbor) : null);
   }
 
@@ -698,7 +652,6 @@
     if (trimmedWorktreeSearch && !matchesWorktreeSearch(worktree, trimmedWorktreeSearch)) {
       searchQuery = "";
     }
-    if (collapsedProjects.has(ref.project)) toggleProjectCollapsed(ref.project);
   }
 
   function toggleFavoriteWorktree(ref: WorktreeRef): void {
@@ -709,11 +662,11 @@
     saveFavoriteWorktreeKeys(next);
   }
 
-  function toggleProjectCollapsed(prefix: string): void {
-    const next = new Set(collapsedProjects);
-    if (!next.delete(prefix)) next.add(prefix);
-    collapsedProjects = next;
-    saveCollapsedProjects(next);
+  /** Show a project's list (rail, Cmd+Shift+Up/Down) and reselect its last
+   *  selected worktree, without remounting anything. */
+  function switchToProject(prefix: string): void {
+    if (pendingCreate && pendingCreate.project !== prefix) cancelCreateAutoSelect();
+    selection.switchProject(prefix);
   }
 
   /** Select a worktree of any project (sidebar row, toast, bell): its project
@@ -740,7 +693,7 @@
     }
     if (pendingCreate?.project === prefix) cancelCreateAutoSelect();
     // The selection can't stay on a removed project.
-    if (project === prefix) selection.switchProject(next);
+    if (activeProject === prefix) selection.switchProject(next);
     store.drop(prefix);
     configs.delete(prefix);
     linear.delete(prefix);
@@ -754,9 +707,8 @@
     await actions.remove(ref);
   }
 
-  function openLabelDialog(): void {
-    if (!selectedWorktree) return;
-    labelRef = refOf(selectedWorktree.branch);
+  function openLabelDialog(ref: WorktreeRef): void {
+    labelRef = { project: ref.project, branch: ref.branch };
     labelError = "";
   }
 
@@ -833,14 +785,19 @@
     const mod = e.metaKey || e.ctrlKey;
     if (!mod) return;
 
-    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && e.shiftKey) {
+      e.preventDefault();
+      const prefixes = railItems.map((item) => item.prefix);
+      const next = stepBranch(prefixes, activeProject, e.key === "ArrowUp" ? -1 : 1);
+      if (next && next !== activeProject) switchToProject(next);
+    } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
       e.preventDefault();
       const current = selection.selected ? worktreeKey(selection.selected) : null;
       const next = stepBranch(navigableKeys, current, e.key === "ArrowUp" ? -1 : 1);
       if (next !== current) selection.select(next ? parseWorktreeKey(next) : null);
     } else if (e.key === "k" || e.key === "K") {
       e.preventDefault();
-      openCreateDialog(defaultCreateProject);
+      openCreateDialog(activeProject);
     } else if (e.key === "d" || e.key === "D") {
       e.preventDefault();
       if (selectedBranch) removeRef = refOf(selectedBranch);
@@ -920,41 +877,56 @@
     <aside
       class="{isMobile
         ? 'fixed inset-0 z-50 w-full'
-        : ''} bg-sidebar border-r border-edge flex flex-col overflow-hidden shrink-0"
+        : ''} bg-sidebar border-r border-edge flex overflow-hidden shrink-0"
       style={isMobile ? '' : `width: ${sidebarWidth}px`}
     >
-      <div class="p-4 border-b border-edge">
-        <div class="flex items-center justify-between">
-          <h1 class="text-base font-semibold truncate">webmux</h1>
-          <div class="flex items-center gap-2">
-            <button
-              class="h-8 px-2 gap-1.5 rounded-md border border-edge bg-surface text-accent text-xs flex items-center justify-center cursor-pointer hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed"
-              onclick={() => openCreateDialog(defaultCreateProject)}
-              title="New Worktree (Cmd+K)"
-              ><span class="text-lg leading-none">+</span> New</button
-            >
+      <ProjectRail
+        items={railItems}
+        current={activeProject}
+        showShortcuts={!isMobile}
+        onselect={switchToProject}
+        onaddproject={() => (showAddProjectDialog = true)}
+        onsettings={() => (showSettingsDialog = true)}
+      />
+      <div class="flex min-w-0 flex-1 flex-col">
+        <div class="flex flex-col gap-2 px-2.5 pt-3 pb-2">
+          <div class="flex items-center gap-1">
+            <h1 class="min-w-0 flex-1 truncate text-sm font-semibold" title={activeProjectName}>{activeProjectName}</h1>
+            <ProjectActionsMenu
+              name={activeProjectName}
+              repos={projectRepos(configs.get(activeProject), sshHost)}
+              onopen={() => configs.ensure(activeProject)}
+              oncreate={() => openCreateDialog(activeProject)}
+              onpull={(repo) => pull.start({ project: activeProject, repo })}
+              onremove={() => removal.start({ prefix: activeProject, name: activeProjectName })}
+            />
             {#if isMobile}
               <button
-                class="h-8 w-8 rounded-md border border-edge bg-surface text-muted text-sm flex items-center justify-center cursor-pointer hover:bg-hover"
+                type="button"
+                class="h-6 w-6 shrink-0 rounded flex items-center justify-center text-muted hover:text-primary hover:bg-hover cursor-pointer"
                 onclick={() => (sidebarOpen = false)}
-                title="Close sidebar">&times;</button
+                title="Close sidebar"
+                aria-label="Close sidebar">&times;</button
               >
             {/if}
           </div>
-        </div>
-        {#if activeCreateCount > 0}
-          <div class="mt-2 flex items-center gap-1 text-[10px] text-muted">
-            <span class="spinner"></span>
-            {createIndicatorLabel}
-          </div>
-        {/if}
-        <div class="mt-3 flex flex-col gap-2">
           <div class="relative">
+            <svg
+              class="pointer-events-none absolute top-1/2 left-2 -translate-y-1/2 text-muted"
+              width="12"
+              height="12"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              aria-hidden="true"><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5L14 14" /></svg
+            >
             <input
               type="search"
               bind:this={worktreeSearchInput}
               bind:value={searchQuery}
-              class="w-full h-7 rounded-md border border-edge bg-surface px-2 pr-6 text-xs text-primary placeholder:text-muted focus:outline-none focus:border-accent"
+              class="w-full h-7 rounded-md border border-edge bg-surface pl-7 pr-6 text-xs text-primary placeholder:text-muted focus:outline-none focus:border-accent"
               placeholder="Search worktrees"
               aria-label="Search worktrees"
             />
@@ -970,84 +942,44 @@
               >&times;</button>
             {/if}
           </div>
-          <div class="flex items-center gap-2 text-[11px] text-muted">
-            <label class="flex items-center gap-2 cursor-pointer">
-              <Toggle
-                checked={showArchivedWorktrees}
-                size="sm"
-                aria-label="Show archived worktrees"
-                ontoggle={(checked) => {
-                  showArchivedWorktrees = checked;
-                }}
-              />
-              <span>Show archived{archivedWorktreeCount > 0 ? ` (${archivedWorktreeCount})` : ""}</span>
-            </label>
-          </div>
         </div>
-      </div>
-      <WorktreeList
-        sections={worktreeSections}
-        selected={selection.selected}
-        removing={store.removing.keys}
-        initializing={store.opening.keys}
-        archiving={store.archiving.keys}
-        postingLinear={store.postingLinear.keys}
-        notified={notifications.unreadWorktrees}
-        favorites={favoriteKeys}
-        emptyMessage={worktreeListEmptyMessage}
-        onselect={selectWorktree}
-        onclose={(ref) => void actions.close(ref)}
-        onarchive={(ref) => void actions.toggleArchived(ref)}
-        onremove={(ref) => (removeRef = ref)}
-        oneditprofile={openProfileDialog}
-        oncreatesubworktree={openSubworktreeDialog}
-        ontogglefavorite={toggleFavoriteWorktree}
-        onposttolinear={handlePostToLinear}
-        ontogglecollapsed={toggleProjectCollapsed}
-      >
-        {#snippet projectActions(section)}
-          <ProjectActionsMenu
-            name={section.name}
-            repos={projectRepos(configs.get(section.prefix), sshHost)}
-            onopen={() => configs.ensure(section.prefix)}
-            oncreate={() => openCreateDialog(section.prefix)}
-            onpull={(repo) => pull.start({ project: section.prefix, repo })}
-            onremove={() => removal.start({ prefix: section.prefix, name: section.name })}
-          />
-        {/snippet}
-      </WorktreeList>
-      <div class="shrink-0 border-t border-edge px-3 py-2">
-        <button
-          type="button"
-          class="w-full flex items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-xs text-muted bg-transparent cursor-pointer hover:bg-hover hover:text-primary"
-          onclick={() => (showAddProjectDialog = true)}
-        ><span class="text-base leading-none" aria-hidden="true">+</span> Add project</button>
-      </div>
-      {#if showLinearPanel}
-        <LinearPanel
-          projectName={store.nameOf(activeProject) ?? activeProject}
-          issues={linearIssues}
-          availability={linearAvailability}
-          onassign={handleAssignIssue}
-          onselect={(issue) => (detailIssue = { issue, project: activeProject })}
-          bind:collapsed={linearCollapsed}
+        <WorktreeList
+          rows={listRows}
+          showArchived={showArchivedWorktrees}
+          query={trimmedWorktreeSearch}
+          error={store.errorOf(activeProject)}
+          selected={selection.selected}
+          removing={store.removing.keys}
+          initializing={store.opening.keys}
+          archiving={store.archiving.keys}
+          postingLinear={store.postingLinear.keys}
+          notified={notifications.unreadWorktrees}
+          favorites={favoriteKeys}
+          onselect={selectWorktree}
+          ontogglearchived={() => (showArchivedWorktrees = !showArchivedWorktrees)}
+          onretry={() => void store.refresh()}
+          oncreate={() => openCreateDialog(activeProject)}
+          onopen={(ref) => void actions.open(ref)}
+          onclose={(ref) => void actions.close(ref)}
+          onarchive={(ref) => void actions.toggleArchived(ref)}
+          onremove={(ref) => (removeRef = ref)}
+          oneditlabel={openLabelDialog}
+          oneditprofile={openProfileDialog}
+          oncreatesubworktree={openSubworktreeDialog}
+          ontogglefavorite={toggleFavoriteWorktree}
+          onposttolinear={handlePostToLinear}
         />
-      {/if}
-      {#if !isMobile}
-        <div
-          class="shrink-0 border-t border-edge px-4 py-3 text-[11px] text-muted flex flex-col gap-1"
-        >
-          <div class="flex justify-between">
-            <span>Navigate</span><kbd class="opacity-60">Cmd+Up/Down</kbd>
-          </div>
-          <div class="flex justify-between">
-            <span>New worktree</span><kbd class="opacity-60">Cmd+K</kbd>
-          </div>
-          <div class="flex justify-between">
-            <span>Remove</span><kbd class="opacity-60">Cmd+D</kbd>
-          </div>
-        </div>
-      {/if}
+        {#if showLinearPanel}
+          <LinearPanel
+            projectName={activeProjectName}
+            issues={linearIssues}
+            availability={linearAvailability}
+            onassign={handleAssignIssue}
+            onselect={(issue) => (detailIssue = { issue, project: activeProject })}
+            bind:collapsed={linearCollapsed}
+          />
+        {/if}
+      </div>
     </aside>
     {#if !isMobile}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions (focusable ARIA separator used for keyboard-resizable sidebar) -->
@@ -1088,7 +1020,9 @@
       onremove={() => {
         if (selectedBranch) removeRef = refOf(selectedBranch);
       }}
-      oneditlabel={openLabelDialog}
+      oneditlabel={() => {
+        if (selectedWorktree) openLabelDialog(selectedWorktree);
+      }}
       onsettings={() => (showSettingsDialog = true)}
       ondirtyclick={openDiffDialog}
       onCiClick={(pr) => (ciDetailsPr = pr)}
@@ -1186,8 +1120,13 @@
         </div>
       </div>
     {:else}
-      <div class="flex-1 flex items-center justify-center text-muted text-sm">
-        <p>Select a worktree from the sidebar to connect</p>
+      <div class="flex-1 flex flex-col items-center justify-center gap-3 text-muted text-sm">
+        {#if hasLoadedWorktrees && store.worktreesOf(activeProject).length === 0 && store.errorOf(activeProject) === null}
+          <p>No worktrees in {activeProjectName} yet</p>
+          <Btn variant="accent-outline" onclick={() => openCreateDialog(activeProject)}>New worktree</Btn>
+        {:else}
+          <p>Select a worktree from the sidebar to connect</p>
+        {/if}
       </div>
     {/if}
 

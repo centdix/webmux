@@ -12,8 +12,8 @@ export const WEB_CHAT_UI_STORAGE_KEY = "wt-use-web-chat-ui";
 export const FAVORITE_WORKTREES_STORAGE_KEY = "wt-favorite-worktrees";
 export const FAVORITE_WORKTREE_KEYS_STORAGE_KEY = "wt-favorite-worktree-keys";
 export const LAST_PROJECT_STORAGE_KEY = "wt-last-project";
-export const COLLAPSED_PROJECTS_STORAGE_KEY = "wt-collapsed-projects";
-const DEFAULT_SIDEBAR_WIDTH = 220;
+// 48px project rail + the 220px list.
+const DEFAULT_SIDEBAR_WIDTH = 268;
 
 export function prLabel(pr: Pick<PrEntry, "repo" | "number">): string {
   return pr.repo ? `${pr.repo} #${pr.number}` : `PR #${pr.number}`;
@@ -197,15 +197,6 @@ function saveStringSet(key: string, values: ReadonlySet<string>): void {
 
 export function saveFavoriteWorktreeKeys(keys: ReadonlySet<string>): void {
   saveStringSet(FAVORITE_WORKTREE_KEYS_STORAGE_KEY, keys);
-}
-
-/** Prefixes of the projects collapsed in the sidebar. */
-export function loadCollapsedProjects(): Set<string> {
-  return new Set(parseStringArray(localStorage.getItem(COLLAPSED_PROJECTS_STORAGE_KEY)));
-}
-
-export function saveCollapsedProjects(prefixes: ReadonlySet<string>): void {
-  saveStringSet(COLLAPSED_PROJECTS_STORAGE_KEY, prefixes);
 }
 
 export function applyTheme(key: ThemeKey): void {

@@ -1,12 +1,13 @@
 <script lang="ts">
-  import { untrack, type Snippet } from "svelte";
-  import type { WorktreeInfo, WorktreeListSection, WorktreeRef } from "./types";
-  import PrBadge from "./PrBadge.svelte";
-  import WorktreeProjectHeader from "./WorktreeProjectHeader.svelte";
-  import LinearBadge from "./LinearBadge.svelte";
-  import AgentStatusIcon, { agentIconVisible } from "./AgentStatusIcon.svelte";
+  import { untrack } from "svelte";
+  import type { ProjectListRows, WorktreeInfo, WorktreeListRow, WorktreeRef } from "./types";
   import AgentStatusCount from "./AgentStatusCount.svelte";
-  import { worktreeCreationPhaseLabel } from "./utils";
+  import Btn from "./Btn.svelte";
+  import ContextMenu from "./ContextMenu.svelte";
+  import IconBtn from "./IconBtn.svelte";
+  import MenuItem from "./MenuItem.svelte";
+  import PrMark from "./PrMark.svelte";
+  import WorktreeStatusGlyph from "./WorktreeStatusGlyph.svelte";
   import {
     OVERFLOW_STATUS_BAR_STATUSES,
     OVERFLOW_STATUS_LABELS,
@@ -14,17 +15,17 @@
     keysWithAgentStatus,
     type OverflowStatusBarStatus,
   } from "./worktree-list";
+  import { actionablePr, attentionLabel, attentionOf, type Attention } from "./worktree-status";
   import { worktreeKey } from "./worktree-ref";
-  import { dismissible } from "./dismissible";
-  import MenuItem from "./MenuItem.svelte";
 
   type RowPosition = "above" | "visible" | "below";
 
-  let openMenuKey = $state<string | null>(null);
-
   // Worktree sets hold `worktreeKey`s; every callback gets the row's ref.
   let {
-    sections,
+    rows,
+    showArchived,
+    query,
+    error,
     selected,
     removing,
     initializing,
@@ -32,19 +33,28 @@
     postingLinear,
     notified,
     favorites,
-    emptyMessage = "No worktrees found.",
     onselect,
+    ontogglearchived,
+    onretry,
+    oncreate,
+    onopen,
     onclose,
     onarchive,
     onremove,
+    oneditlabel,
     oneditprofile,
     oncreatesubworktree,
     ontogglefavorite,
     onposttolinear,
-    ontogglecollapsed,
-    projectActions,
   }: {
-    sections: WorktreeListSection[];
+    /** The current project's rows, filtered by the search. */
+    rows: ProjectListRows;
+    /** The archived group, folded at the bottom, is open. */
+    showArchived: boolean;
+    /** The trimmed search, for the empty message. */
+    query: string;
+    /** The project's last load error. */
+    error: string | null;
     selected: WorktreeRef | null;
     removing: ReadonlySet<string>;
     initializing: ReadonlySet<string>;
@@ -52,47 +62,52 @@
     postingLinear: ReadonlySet<string>;
     notified: ReadonlySet<string>;
     favorites: ReadonlySet<string>;
-    /** Shown when no project is listed (e.g. a search without any match). */
-    emptyMessage?: string;
     onselect: (ref: WorktreeRef) => void;
+    ontogglearchived: () => void;
+    onretry: () => void;
+    /** New worktree in this project, offered when it has none. */
+    oncreate: () => void;
+    onopen: (ref: WorktreeRef) => void;
     onclose: (ref: WorktreeRef) => void;
     onarchive: (ref: WorktreeRef) => void;
     onremove: (ref: WorktreeRef) => void;
+    oneditlabel: (ref: WorktreeRef) => void;
     oneditprofile: (ref: WorktreeRef) => void;
     oncreatesubworktree: (ref: WorktreeRef) => void;
     ontogglefavorite: (ref: WorktreeRef) => void;
     onposttolinear?: (ref: WorktreeRef) => void;
-    ontogglecollapsed: (project: string) => void;
-    /** Rendered in each project's header. */
-    projectActions?: Snippet<[WorktreeListSection]>;
   } = $props();
 
   let selectedKey = $derived(selected ? worktreeKey(selected) : null);
-  // Rows on screen across every project, in display order.
-  let rows = $derived(sections.flatMap((section) => (section.collapsed ? [] : section.rows)));
+  /** Rows on screen, top to bottom. */
+  let shownRows = $derived([...rows.active, ...(showArchived ? rows.archived : [])]);
 
-  function toggleMenu(key: string): void {
-    openMenuKey = openMenuKey === key ? null : key;
+  let menu = $state<{ key: string; x: number; y: number } | null>(null);
+  let menuWorktree = $derived(menu ? shownRows.find((row) => worktreeKey(row.worktree) === menu?.key)?.worktree : undefined);
+
+  /** Right-click opens at the pointer, the ⋯ button under itself. */
+  function openMenu(event: MouseEvent, key: string): void {
+    event.preventDefault();
+    if (event.type === "click" && event.currentTarget instanceof HTMLElement) {
+      const rect = event.currentTarget.getBoundingClientRect();
+      menu = { key, x: rect.left, y: rect.bottom + 2 };
+    } else {
+      menu = { key, x: event.clientX, y: event.clientY };
+    }
   }
 
   function runMenuAction(ref: WorktreeRef, action: (ref: WorktreeRef) => void): void {
-    openMenuKey = null;
-    action(ref);
+    menu = null;
+    action({ project: ref.project, branch: ref.branch });
   }
 
   let listEl = $state<HTMLDivElement | null>(null);
   let rowPositions = $state<Map<string, RowPosition>>(new Map());
   let cycleCursor = $state<Record<string, string>>({});
 
-  // Measure the rendered bars (each sits `top-2`/`bottom-2` = 8px off the scroll edge)
-  // and the sticky project header so the observer's margins occlude exactly the
-  // band they cover — no magic number.
+  // Measure the rendered bars (each sits `top-2`/`bottom-2` = 8px off the scroll
+  // edge) so the observer's margins occlude exactly the band they cover.
   const BAR_OFFSET = 8;
-  let stickyHeaderHeight = $state(0);
-  $effect(() => {
-    sections.length;
-    stickyHeaderHeight = listEl?.querySelector<HTMLElement>("[data-project-header-bar]")?.offsetHeight ?? 0;
-  });
   let topBarEl = $state<HTMLElement | null>(null);
   let bottomBarEl = $state<HTMLElement | null>(null);
   let topBarHeight = $state(0);
@@ -104,13 +119,12 @@
     bottomBarHeight = bottomBarEl?.offsetHeight ?? 0;
   });
   let rootMargin = $derived(
-    `-${Math.max(stickyHeaderHeight, topBarHeight ? topBarHeight + BAR_OFFSET : 0)}px 0px ` +
-      `-${bottomBarHeight ? bottomBarHeight + BAR_OFFSET : 0}px 0px`,
+    `-${topBarHeight ? topBarHeight + BAR_OFFSET : 0}px 0px -${bottomBarHeight ? bottomBarHeight + BAR_OFFSET : 0}px 0px`,
   );
 
   // The identity of the rows present, independent of per-row status churn — changes
-  // only when rows are added, removed, collapsed or expanded, not on every agent-status poll.
-  let rowsIdentity = $derived(rows.map((row) => worktreeKey(row.worktree)).join("\n"));
+  // only when rows are added or removed, not on every agent-status poll.
+  let rowsIdentity = $derived(shownRows.map((row) => worktreeKey(row.worktree)).join("\n"));
 
   // Track whether each row is scrolled above, into, or below the viewport so the
   // top/bottom floating bars can summarise the agent statuses hidden in each direction.
@@ -123,7 +137,7 @@
     // Drop tracking for rows that have left the list (untracked so scroll
     // updates to rowPositions don't re-run this effect and rebuild the observer).
     untrack(() => {
-      const present = new Set(rows.map((row) => worktreeKey(row.worktree)));
+      const present = new Set(shownRows.map((row) => worktreeKey(row.worktree)));
       const pruned = new Map([...rowPositions].filter(([key]) => present.has(key)));
       if (pruned.size !== rowPositions.size) rowPositions = pruned;
     });
@@ -164,18 +178,13 @@
 
   let aboveKeys = $derived(keysAt("above"));
   let belowKeys = $derived(keysAt("below"));
-  let aboveCounts = $derived(countAgentStatusesIn(rows, aboveKeys, notified));
-  let belowCounts = $derived(countAgentStatusesIn(rows, belowKeys, notified));
+  let aboveCounts = $derived(countAgentStatusesIn(shownRows, aboveKeys, notified));
+  let belowCounts = $derived(countAgentStatusesIn(shownRows, belowKeys, notified));
   let hasAbove = $derived(OVERFLOW_STATUS_BAR_STATUSES.some((s) => aboveCounts[s] > 0));
   let hasBelow = $derived(OVERFLOW_STATUS_BAR_STATUSES.some((s) => belowCounts[s] > 0));
 
   function cycleToStatus(status: OverflowStatusBarStatus, direction: "above" | "below"): void {
-    const keys = keysWithAgentStatus(
-      rows,
-      status,
-      direction === "above" ? aboveKeys : belowKeys,
-      notified,
-    );
+    const keys = keysWithAgentStatus(shownRows, status, direction === "above" ? aboveKeys : belowKeys, notified);
     // Cycle nearest-to-the-fold first: below rows are already in that order, above
     // rows need reversing so the first click lands on the row just above the fold.
     if (direction === "above") keys.reverse();
@@ -191,248 +200,177 @@
     );
     target?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
+
+  function rowTitle(wt: WorktreeInfo, attention: Attention, opening: boolean): string {
+    return [
+      wt.label ? wt.branch : null,
+      [wt.agentLabel ?? wt.agentName, wt.profile].filter(Boolean).join(" · ") || null,
+      wt.source === "oneshot" ? "Autonomous run — auto-closes when done" : null,
+      opening ? "Opening…" : attentionLabel(attention, wt),
+    ].filter((line) => line !== null).join("\n");
+  }
 </script>
 
 <div class="relative flex min-h-0 flex-1 flex-col">
-  <div bind:this={listEl} class="overflow-y-auto flex-1 min-h-0 px-2 pb-2">
-    {#if sections.length === 0}
-      <p class="px-3 py-4 text-xs text-muted text-center">{emptyMessage}</p>
+  <div bind:this={listEl} class="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">
+    {#if error !== null}
+      <div class="m-1 mb-2 flex flex-col items-start gap-2 rounded-md border border-danger/30 bg-danger/5 p-2.5 text-[11px]" data-project-error>
+        <span class="font-medium text-danger">Couldn't load worktrees</span>
+        <span class="font-mono break-all text-muted">{error}</span>
+        <Btn small type="button" onclick={onretry}>Retry</Btn>
+      </div>
     {/if}
-    {#each sections as section, index (section.prefix)}
-      {@const listId = `worktree-list-${section.prefix}`}
-      <section aria-label={section.name} data-project={section.prefix}>
-        <WorktreeProjectHeader
-          name={section.name}
-          count={section.rows.length}
-          collapsed={section.collapsed}
-          error={section.error}
-          {listId}
-          separated={index > 0}
-          statusCounts={countAgentStatusesIn(section.rows, undefined, notified)}
-          ontoggle={() => ontogglecollapsed(section.prefix)}
-        >
-          {#if projectActions}{@render projectActions(section)}{/if}
-        </WorktreeProjectHeader>
-        {#if !section.collapsed}
-          <ul id={listId} class="list-none">
-            {#if section.emptyMessage !== null}
-              <li class="px-3 py-2 text-xs text-muted">{section.emptyMessage}</li>
-            {/if}
-            {#each section.rows as row (worktreeKey(row.worktree))}
-              {@render worktreeRow(row.worktree, row.depth)}
-            {/each}
-          </ul>
+    {#if rows.active.length === 0 && error === null}
+      <div class="flex flex-col items-center gap-2 px-3 py-4 text-center text-xs text-muted">
+        {#if query}
+          <p>No {rows.archived.length > 0 ? "active " : ""}matches for "{query}".</p>
+        {:else if rows.archived.length > 0}
+          <p>No active worktrees.</p>
+        {:else}
+          <p>No worktrees yet.</p>
+          <Btn small type="button" variant="accent-outline" onclick={oncreate}>New worktree</Btn>
         {/if}
-      </section>
-    {/each}
-  </div>
-  {#if hasAbove}
-    <div
-      bind:this={topBarEl}
-      class="pointer-events-none absolute inset-x-0 top-2 flex justify-center"
-    >
-      {@render statusBar(aboveCounts, "above")}
-    </div>
-  {/if}
-  {#if hasBelow}
-    <div
-      bind:this={bottomBarEl}
-      class="pointer-events-none absolute inset-x-0 bottom-2 flex justify-center"
-    >
-      {@render statusBar(belowCounts, "below")}
-    </div>
-  {/if}
-</div>
-
-{#snippet worktreeRow(wt: WorktreeInfo, depth: number)}
-  {@const ref = { project: wt.project, branch: wt.branch }}
-  {@const key = worktreeKey(wt)}
-  {@const isActive = key === selectedKey}
-  {@const isRemoving = removing.has(key)}
-  {@const isClosed = wt.mux !== "✓"}
-  {@const isInitializing = initializing.has(key)}
-  {@const isArchiving = archiving.has(key)}
-  {@const isCreating = wt.creating}
-  {@const isArchived = wt.archived}
-  {@const isFavorite = favorites.has(key)}
-  {@const isNotified = notified.has(key)}
-  {@const isBusy = isRemoving || isInitializing}
-  {@const hasLabel = !!wt.label}
-  {@const hasBadgeRow = isArchived || isCreating || isInitializing || isClosed || wt.prs.length > 0 || !!wt.linearIssue || wt.source === "oneshot"}
-  <li
-    data-worktree-key={key}
-    class="mb-0.5 group relative {isBusy ? 'opacity-40 pointer-events-none' : ''}"
-  >
-    <button
-      type="button"
-      disabled={isBusy}
-      class="w-full py-2.5 rounded-md border cursor-pointer flex flex-col gap-1 text-left text-inherit text-sm bg-transparent hover:bg-hover {isActive
-        ? 'bg-active border-accent'
-        : 'border-transparent'} {isClosed && !isInitializing && !isCreating ? 'opacity-50' : ''} {isArchived ? 'opacity-70' : ''}"
-      style={`padding-left:${12 + depth * 18}px; padding-right:64px;`}
-      onclick={() => {
-        openMenuKey = null;
-        onselect(ref);
-      }}
-    >
-      <span class="flex min-w-0 items-start gap-2">
-        {#if depth > 0}
-          <span class="shrink-0 text-muted/60">↳</span>
-        {/if}
-        <span class="min-w-0 flex flex-1 flex-col gap-1">
-          <span class="flex min-w-0 items-center gap-1.5" data-worktree-name-row>
-            <span class="min-w-0 flex flex-1 flex-col">
-              <span class="font-medium truncate">{wt.label ?? wt.branch}</span>
-              {#if hasLabel}
-                <span class="text-[10px] leading-tight text-muted truncate">{wt.branch}</span>
-              {/if}
-            </span>
-            {#if !isCreating && !isInitializing && !isClosed && agentIconVisible(wt.agent, isNotified)}
-              <span class="shrink-0"
-                ><AgentStatusIcon
-                  status={wt.agent}
-                  size={14}
-                  unread={isNotified}
-                /></span
-              >
-            {/if}
-          </span>
-          {#if hasBadgeRow}
-            <span class="flex min-w-0 flex-wrap items-center gap-1.5" data-worktree-badge-row>
-              {#if wt.source === "oneshot"}
-                <span
-                  class="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-edge text-muted"
-                  title="Autonomous run — auto-closes when done"
-                >
-                  oneshot
-                </span>
-              {/if}
-              {#if isArchived}
-                <span class="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-edge text-muted">
-                  archived
-                </span>
-              {/if}
-              {#if isCreating}
-                <span class="shrink-0 inline-flex items-center gap-1 text-[10px] text-muted">
-                  <span class="spinner"></span>
-                  {worktreeCreationPhaseLabel(wt.creationPhase)}...
-                </span>
-              {:else if isInitializing}
-                <span class="shrink-0 text-[10px] text-muted">opening...</span>
-              {:else if isClosed}
-                <span class="shrink-0 text-[10px] text-muted">closed</span>
-              {/if}
-              {#each wt.prs as pr (pr.repo)}
-                <PrBadge {pr} />
-              {/each}
-              {#if wt.linearIssue}
-                <LinearBadge issue={wt.linearIssue} clickable={false} />
-              {/if}
-            </span>
-          {/if}
-        </span>
-      </span>
-      <span class="flex gap-2 text-[11px] text-muted items-center flex-wrap">
-        {#if wt.agentLabel ?? wt.agentName}
-          <span>{wt.agentLabel ?? wt.agentName}</span>
-        {/if}
-        {#if wt.profile}
-          <span>{wt.profile}</span>
-        {/if}
-      </span>
-      {#if wt.services.length > 0}
-        <span class="flex gap-2 text-[11px] text-muted font-mono">
-          {#each wt.services as svc}
-            {#if svc.port}
-              <span class={svc.running ? "text-success" : ""}>{svc.name}:{svc.port}</span>
-            {/if}
-          {/each}
-        </span>
-      {/if}
-    </button>
-    <button
-      type="button"
-      disabled={isBusy}
-      class="absolute top-2 right-8 w-6 h-6 rounded flex items-center justify-center hover:bg-hover cursor-pointer {isFavorite
-        ? 'text-warning'
-        : 'text-muted hover:text-warning'}"
-      title={isFavorite ? "Remove from favorites" : "Add to favorites"}
-      aria-label={`${isFavorite ? "Remove" : "Add"} ${wt.branch} ${isFavorite ? "from" : "to"} favorites`}
-      aria-pressed={isFavorite}
-      data-worktree-favorite
-      onclick={(event) => {
-        event.stopPropagation();
-        ontogglefavorite(ref);
-      }}
-    >
-      {isFavorite ? "★" : "☆"}
-    </button>
-    <div class="contents" {@attach openMenuKey === key && dismissible(() => (openMenuKey = null))}>
+      </div>
+    {/if}
+    <ul class="list-none" aria-label="Worktrees">
+      {#each rows.active as row (worktreeKey(row.worktree))}
+        {@render worktreeRow(row)}
+      {/each}
+    </ul>
+    {#if rows.archived.length > 0}
       <button
         type="button"
-        disabled={isBusy}
-        class="absolute top-2 right-2 w-6 h-6 rounded flex items-center justify-center text-muted hover:text-primary hover:bg-hover opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
-        title="Worktree actions"
-        aria-label={`Actions for ${wt.branch}`}
-        aria-expanded={openMenuKey === key}
-        onclick={() => toggleMenu(key)}
+        class="mt-2 flex h-7 w-full cursor-pointer items-center gap-1.5 rounded-md pl-1.5 text-left text-[11px] font-semibold tracking-wide text-muted uppercase hover:bg-hover"
+        aria-expanded={showArchived}
+        onclick={ontogglearchived}
       >
         <svg
-          xmlns="http://www.w3.org/2000/svg"
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
+          width="10"
+          height="10"
+          viewBox="0 0 16 16"
           fill="none"
           stroke="currentColor"
           stroke-width="2"
           stroke-linecap="round"
           stroke-linejoin="round"
+          class="shrink-0 opacity-60 transition-transform {showArchived ? '' : '-rotate-90'}"
+          aria-hidden="true"><path d="M4 6l4 4 4-4" /></svg
         >
-          <circle cx="12" cy="5" r="1" />
-          <circle cx="12" cy="12" r="1" />
-          <circle cx="12" cy="19" r="1" />
-        </svg>
+        Archived ({rows.archived.length})
       </button>
-      {#if openMenuKey === key}
-        <div
-          class="absolute top-9 right-2 z-10 min-w-32 rounded-md border border-edge bg-surface shadow-lg p-1"
-          data-popup-menu
-        >
-          <MenuItem disabled={isClosed || isCreating} onclick={() => runMenuAction(ref, onclose)}>Close</MenuItem>
-          <MenuItem disabled={isCreating || isArchiving} onclick={() => runMenuAction(ref, onarchive)}>
-            {wt.archived ? "Restore" : "Archive"}
-          </MenuItem>
-          <MenuItem disabled={isCreating} onclick={() => runMenuAction(ref, oneditprofile)}>Change profile…</MenuItem>
-          <MenuItem disabled={isCreating} onclick={() => runMenuAction(ref, oncreatesubworktree)}>Create sub-worktree</MenuItem>
-          <MenuItem danger onclick={() => runMenuAction(ref, onremove)}>Remove</MenuItem>
-          {#if onposttolinear}
-            {@const isPostingLinear = postingLinear.has(key)}
-            <div class="my-1 border-t border-edge"></div>
-            <MenuItem disabled={isPostingLinear} onclick={() => runMenuAction(ref, onposttolinear)}>
-              {#if isPostingLinear}
-                Posting to Linear…
-              {:else if wt.linearIssue}
-                Post conversation to {wt.linearIssue.identifier}
-              {:else}
-                Post conversation to Linear…
-              {/if}
-            </MenuItem>
-          {/if}
-        </div>
+      {#if showArchived}
+        <ul class="list-none" aria-label="Archived worktrees">
+          {#each rows.archived as row (worktreeKey(row.worktree))}
+            {@render worktreeRow(row)}
+          {/each}
+        </ul>
+      {/if}
+    {/if}
+  </div>
+  {#if hasAbove}
+    <div bind:this={topBarEl} class="pointer-events-none absolute inset-x-0 top-2 flex justify-center">
+      {@render statusBar(aboveCounts, "above")}
+    </div>
+  {/if}
+  {#if hasBelow}
+    <div bind:this={bottomBarEl} class="pointer-events-none absolute inset-x-0 bottom-2 flex justify-center">
+      {@render statusBar(belowCounts, "below")}
+    </div>
+  {/if}
+</div>
+
+{#if menu && menuWorktree}
+  {@const wt = menuWorktree}
+  {@const key = menu.key}
+  {@const isCreating = wt.creating}
+  {@const isFavorite = favorites.has(key)}
+  <ContextMenu x={menu.x} y={menu.y} label={wt.label ?? wt.branch} onclose={() => (menu = null)}>
+    {#if wt.mux === "✓"}
+      <MenuItem disabled={isCreating} onclick={() => runMenuAction(wt, onclose)}>Close</MenuItem>
+    {:else}
+      <MenuItem disabled={isCreating || initializing.has(key)} onclick={() => runMenuAction(wt, onopen)}>Open</MenuItem>
+    {/if}
+    <MenuItem onclick={() => runMenuAction(wt, ontogglefavorite)}>
+      {isFavorite ? "Remove from favorites" : "Add to favorites"}
+    </MenuItem>
+    <MenuItem onclick={() => runMenuAction(wt, oneditlabel)}>Edit label…</MenuItem>
+    <MenuItem disabled={isCreating} onclick={() => runMenuAction(wt, oneditprofile)}>Change profile…</MenuItem>
+    <MenuItem disabled={isCreating} onclick={() => runMenuAction(wt, oncreatesubworktree)}>Create sub-worktree</MenuItem>
+    <div class="my-1 border-t border-edge"></div>
+    {#if onposttolinear}
+      {@const isPostingLinear = postingLinear.has(key)}
+      <MenuItem disabled={isPostingLinear} onclick={() => runMenuAction(wt, onposttolinear)}>
+        {#if isPostingLinear}
+          Posting to Linear…
+        {:else if wt.linearIssue}
+          Post conversation to {wt.linearIssue.identifier}
+        {:else}
+          Post conversation to Linear…
+        {/if}
+      </MenuItem>
+    {/if}
+    <MenuItem disabled={isCreating || archiving.has(key)} onclick={() => runMenuAction(wt, onarchive)}>
+      {wt.archived ? "Restore" : "Archive"}
+    </MenuItem>
+    <MenuItem danger onclick={() => runMenuAction(wt, onremove)}>Remove</MenuItem>
+  </ContextMenu>
+{/if}
+
+{#snippet worktreeRow({ worktree: wt, depth }: WorktreeListRow)}
+  {@const key = worktreeKey(wt)}
+  {@const isActive = key === selectedKey}
+  {@const isInitializing = initializing.has(key)}
+  {@const isBusy = removing.has(key) || isInitializing}
+  {@const attention = isInitializing ? "creating" : attentionOf(wt, notified)}
+  {@const dim = attention === "closed" || attention === "creating" || wt.archived}
+  {@const pr = actionablePr(wt)}
+  <li
+    data-worktree-key={key}
+    class="group relative rounded-md {isActive ? 'bg-active shadow-[inset_2px_0_0_var(--color-accent)]' : 'hover:bg-hover'} {isBusy
+      ? 'pointer-events-none opacity-40'
+      : ''}"
+  >
+    <div class="flex min-h-7 items-center">
+      <button
+        type="button"
+        disabled={isBusy}
+        class="flex min-h-7 min-w-0 flex-1 cursor-pointer items-center gap-1.5 pr-1 text-left text-[13px] text-primary"
+        style="padding-left:{6 + depth * 14}px"
+        title={rowTitle(wt, attention, isInitializing)}
+        aria-current={isActive ? "true" : undefined}
+        onclick={() => {
+          menu = null;
+          onselect({ project: wt.project, branch: wt.branch });
+        }}
+        oncontextmenu={(event) => openMenu(event, key)}
+      >
+        <WorktreeStatusGlyph {attention} />
+        <span class="min-w-0 flex-1 truncate {dim ? 'text-muted' : ''} {attention === 'creating' ? 'italic' : ''}">{wt.label ?? wt.branch}</span>
+        {#if favorites.has(key)}<span class="shrink-0 text-[10px] text-warning/80" aria-hidden="true">★</span>{/if}
+        {#if pr}<PrMark {pr} />{/if}
+      </button>
+      {#if isActive}
+        <IconBtn
+          icon="more"
+          label="Actions for {wt.branch}"
+          title="Worktree actions"
+          class="mr-0.5"
+          disabled={isBusy}
+          aria-expanded={menu?.key === key}
+          onclick={(event) => openMenu(event, key)}
+        />
       {/if}
     </div>
   </li>
 {/snippet}
 
 {#snippet statusBar(counts: Record<OverflowStatusBarStatus, number>, direction: "above" | "below")}
-  <div
-    class="pointer-events-auto flex items-center gap-1 rounded-full border border-edge bg-surface/90 px-1.5 py-1 shadow-lg backdrop-blur"
-  >
-    {#each OVERFLOW_STATUS_BAR_STATUSES as status}
+  <div class="pointer-events-auto flex items-center gap-1 rounded-full border border-edge bg-surface/90 px-1.5 py-1 shadow-lg backdrop-blur">
+    {#each OVERFLOW_STATUS_BAR_STATUSES as status (status)}
       {#if counts[status] > 0}
         <button
           type="button"
-          class="flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] tabular-nums hover:bg-hover cursor-pointer"
+          class="flex cursor-pointer items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] tabular-nums hover:bg-hover"
           title={`Scroll to next ${OVERFLOW_STATUS_LABELS[status]} worktree ${direction}`}
           onclick={() => cycleToStatus(status, direction)}
         >

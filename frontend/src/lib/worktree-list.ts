@@ -1,18 +1,6 @@
-import type { ProjectWorktreeList, WorktreeInfo, WorktreeListRow, WorktreeListSection, WorktreeRef } from "./types";
+import type { ProjectListRows, WorktreeInfo, WorktreeListRow } from "./types";
 import { searchMatch } from "./utils";
 import { worktreeKey } from "./worktree-ref";
-
-export interface FilterWorktreesOptions {
-  query: string;
-  showArchived: boolean;
-}
-
-export interface WorktreeListSectionsOptions extends FilterWorktreesOptions {
-  /** Favorite worktree keys, listed first within their project. */
-  favorites: ReadonlySet<string>;
-  /** Prefixes of the collapsed projects. */
-  collapsed: ReadonlySet<string>;
-}
 
 function parentBranchOf(worktree: WorktreeInfo, worktreesByBranch: Map<string, WorktreeInfo>): string | null {
   if (!worktree.baseBranch || worktree.baseBranch === worktree.branch) {
@@ -35,16 +23,6 @@ export function matchesWorktreeSearch(worktree: WorktreeInfo, query: string): bo
     worktree.agentName ?? "",
     worktree.linearIssue?.identifier ?? "",
   ].some((value) => searchMatch(trimmedQuery, value));
-}
-
-export function filterWorktrees(worktrees: WorktreeInfo[], options: FilterWorktreesOptions): WorktreeInfo[] {
-  return worktrees.filter((worktree) =>
-    (options.showArchived || !worktree.archived) && matchesWorktreeSearch(worktree, options.query)
-  );
-}
-
-export function countArchivedMatches(worktrees: WorktreeInfo[], query: string): number {
-  return worktrees.filter((worktree) => worktree.archived && matchesWorktreeSearch(worktree, query)).length;
 }
 
 export const OVERFLOW_STATUS_BAR_STATUSES = ["waiting", "error", "done-unread"] as const;
@@ -107,58 +85,20 @@ export function sortFavoritesFirst(worktrees: WorktreeInfo[], favorites: Readonl
   ];
 }
 
-function emptySectionMessage(project: ProjectWorktreeList, showArchived: boolean): string | null {
-  if (project.error !== null) return null;
-  return !showArchived && project.worktrees.some((worktree) => worktree.archived)
-    ? "No active worktrees."
-    : "No worktrees found.";
-}
-
-/** The sidebar: every project in the given (server) order, each with its
- *  filtered rows. While searching, a project without a match is left out
- *  unless its fetch failed (the error stays visible). */
-export function buildWorktreeListSections(
-  projects: ProjectWorktreeList[],
-  options: WorktreeListSectionsOptions,
-): WorktreeListSection[] {
-  const searching = options.query.trim() !== "";
-  return projects.flatMap((project) => {
-    const visible = filterWorktrees(project.worktrees, options);
-    if (searching && visible.length === 0 && project.error === null) return [];
-    return [{
-      prefix: project.prefix,
-      name: project.name,
-      error: project.error,
-      collapsed: options.collapsed.has(project.prefix),
-      rows: buildWorktreeListRows(sortFavoritesFirst(visible, options.favorites)),
-      emptyMessage: visible.length === 0 ? emptySectionMessage(project, options.showArchived) : null,
-    }];
-  });
-}
-
-/** Rows on screen, top to bottom across projects (collapsed ones contribute
- *  none): the order keyboard navigation and neighbor selection follow. */
-export function displayedWorktrees(sections: WorktreeListSection[]): WorktreeInfo[] {
-  return sections.flatMap((section) => (section.collapsed ? [] : section.rows.map((row) => row.worktree)));
-}
-
-/** Keys Cmd+Up/Down and neighbor selection step through: the displayed rows,
- *  plus `selected` at its project's place when its row is hidden (collapsed
- *  project), so stepping from it reaches the visible rows around that project. */
-export function navigationKeys(sections: WorktreeListSection[], selected: WorktreeRef | null): string[] {
-  const keys = displayedWorktrees(sections).map(worktreeKey);
-  if (!selected) return keys;
-  const selectedKey = worktreeKey(selected);
-  if (keys.includes(selectedKey)) return keys;
-  let index = 0;
-  for (const section of sections) {
-    if (section.prefix === selected.project) {
-      keys.splice(index, 0, selectedKey);
-      break;
-    }
-    if (!section.collapsed) index += section.rows.length;
-  }
-  return keys;
+/** The current project's rows: those matching the search, favorites first,
+ *  split into active and archived (each nesting its own sub-worktrees). */
+export function buildProjectListRows(
+  worktrees: WorktreeInfo[],
+  options: { query: string; favorites: ReadonlySet<string> },
+): ProjectListRows {
+  const matching = sortFavoritesFirst(
+    worktrees.filter((worktree) => matchesWorktreeSearch(worktree, options.query)),
+    options.favorites,
+  );
+  return {
+    active: buildWorktreeListRows(matching.filter((worktree) => !worktree.archived)),
+    archived: buildWorktreeListRows(matching.filter((worktree) => worktree.archived)),
+  };
 }
 
 export function buildWorktreeListRows(worktrees: WorktreeInfo[]): WorktreeListRow[] {

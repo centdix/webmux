@@ -153,17 +153,26 @@ export interface WorktreeListRow {
   depth: number;
 }
 
-/** One project of the sidebar list: its header, then its rows. */
-export interface WorktreeListSection {
+/** The current project's sidebar list: active rows, then the archived ones
+ *  folded at the bottom. Both pass the search, favorites first, sub-worktrees
+ *  nested. */
+export interface ProjectListRows {
+  active: WorktreeListRow[];
+  archived: WorktreeListRow[];
+}
+
+/** A project's avatar on the sidebar rail. */
+export interface ProjectRailItem {
   prefix: string;
   name: string;
+  initials: string;
+  /** Tailwind classes tinting the avatar. */
+  tint: string;
+  /** Active worktrees waiting, in error or finished unread. */
+  needsYou: number;
+  /** An agent works or a worktree is being created. */
+  running: boolean;
   error: string | null;
-  collapsed: boolean;
-  /** Worktrees passing the filters, favorites first, sub-worktrees nested;
-   *  computed even when collapsed (the header counts them). */
-  rows: WorktreeListRow[];
-  /** Shown in place of rows when the project has none to show. */
-  emptyMessage: string | null;
 }
 
 /** A repo a project header pulls or opens in the IDE: the project's own
