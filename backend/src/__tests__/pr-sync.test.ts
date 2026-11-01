@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { writeWorktreePrs } from "../adapters/fs";
+import { readWorktreePrs, writeWorktreePrs } from "../adapters/fs";
 import type { PrEntry } from "../domain/model";
 import type { GhRunResult, GhRunner, PrSyncDeps, PrSyncState } from "../services/pr-service";
-import { backoffKey, createPrSyncState, fetchBranchPrStates, syncPrStatus } from "../services/pr-service";
+import { backoffKey, createPrSyncState, fetchBranchPrStates, linkOpenedPr, syncPrStatus } from "../services/pr-service";
 
 interface FakePr {
   number: number;
@@ -458,5 +458,55 @@ describe("syncPrStatus — partial GraphQL stale refresh", () => {
       { number: 2, state: "open", isDraft: true },
     ]);
     expect(a.state.backoff.size).toBe(0);
+  });
+});
+
+describe("linkOpenedPr", () => {
+  it("records the opened PR on the worktree without calling gh", async () => {
+    const gitDir = await makeGitDir();
+
+    expect(await linkOpenedPr(gitDir, "https://github.com/org/a/pull/42", [])).toBe(true);
+
+    expect(await readWorktreePrs(gitDir)).toEqual([{
+      repo: "",
+      number: 42,
+      state: "open",
+      isDraft: false,
+      url: "https://github.com/org/a/pull/42",
+      updatedAt: "",
+      ciStatus: "none",
+      ciChecks: [],
+      comments: [],
+    }]);
+  });
+
+  it("labels a PR in a linked repo with that repo's alias", async () => {
+    const gitDir = await makeGitDir();
+
+    await linkOpenedPr(gitDir, "https://github.com/Org/Lib/pull/3", [{ repo: "org/lib", alias: "lib" }]);
+
+    expect(await readWorktreePrs(gitDir)).toMatchObject([{ repo: "lib", number: 3 }]);
+  });
+
+  it("leaves an already recorded PR and non-PR URLs alone", async () => {
+    const gitDir = await makeGitDir();
+    const stored = storedOpenPr("org/a", "", 42);
+    await writeWorktreePrs(gitDir, [stored]);
+
+    expect(await linkOpenedPr(gitDir, stored.url, [])).toBe(false);
+    expect(await linkOpenedPr(gitDir, "https://github.com/org/a/issues/1", [])).toBe(false);
+    expect(await readWorktreePrs(gitDir)).toEqual([stored]);
+  });
+
+  it("keeps the PR linked when the next sync does not list it under the worktree branch", async () => {
+    const gh = new FakeGh();
+    const deps = makeDeps(gh);
+    const a = await makeProject(gh, "a", [{ number: 42, branch: "other-head", updatedAt: "t1" }], ["feat"]);
+    const gitDir = a.gitDirs.get("feat") ?? "";
+
+    await linkOpenedPr(gitDir, `https://github.com/${a.slug}/pull/42`, []);
+    await sync(a, deps);
+
+    expect(await readWorktreePrs(gitDir)).toMatchObject([{ number: 42, state: "open" }]);
   });
 });

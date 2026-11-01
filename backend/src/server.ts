@@ -106,6 +106,7 @@ import { buildNativeTerminalLaunch, buildNativeTerminalTmuxCommand } from "./ser
 import {
   createPrSyncState,
   fetchBranchPrStates,
+  linkOpenedPr,
   startAutoRemoveMonitor,
   startPrMonitor,
   syncPrStatus,
@@ -147,7 +148,7 @@ import type {
   AgentsUiConversationMessage,
   AgentsUiWorktreeConversationResponse,
 } from "./domain/agents-ui";
-import type { OneshotMeta, ProjectSnapshot, WorktreeSnapshot } from "./domain/model";
+import type { ManagedWorktreeRuntimeState, OneshotMeta, ProjectSnapshot, WorktreeSnapshot } from "./domain/model";
 import { isValidBranchName, isValidWorktreeName } from "./domain/policies";
 import { assembleServeRoutes } from "./domain/project-routes";
 import { createPortRegistrationService, createWebmuxRuntime, type WebmuxRuntime } from "./runtime";
@@ -1207,14 +1208,15 @@ async function apiRuntimeEvent(req: Request): Promise<Response> {
   const event = parseRuntimeEvent(raw);
   if (!event) return errorResponse("Invalid runtime event body", 400);
 
+  let worktree: ManagedWorktreeRuntimeState;
   try {
-    projectRuntime.applyEvent(event);
+    worktree = projectRuntime.applyEvent(event);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes("Unknown worktree id")) {
       await reconciliationService.reconcile(PROJECT_DIR);
       try {
-        projectRuntime.applyEvent(event);
+        worktree = projectRuntime.applyEvent(event);
       } catch (retryError) {
         const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
         if (retryMessage.includes("Unknown worktree id")) {
@@ -1224,6 +1226,15 @@ async function apiRuntimeEvent(req: Request): Promise<Response> {
       }
     } else {
       throw error;
+    }
+  }
+
+  if (event.type === "pr_opened" && event.url) {
+    const { linkedRepos } = config.integrations.github;
+    if (await linkOpenedPr(git.resolveWorktreeGitDir(worktree.path), event.url, linkedRepos)) {
+      void syncPrStatus(getWorktreeGitDirs, linkedRepos, PROJECT_DIR, prSyncState).catch((err: unknown) => {
+        log.error(`[pr] sync after pr_opened failed: ${err}`);
+      });
     }
   }
 
