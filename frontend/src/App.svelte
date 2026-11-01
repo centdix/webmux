@@ -90,13 +90,18 @@
     ide: "cursor",
   };
   const LINEAR_THROTTLE_MS = 300_000;
+  const CONFIG_MAX_AGE_MS = 60_000;
 
-  const configs = new ProjectCache<AppConfig>((p) => projectApi(p).fetchConfig(), { maxAgeMs: Infinity });
+  const configs = new ProjectCache<AppConfig>((p) => projectApi(p).fetchConfig(), { maxAgeMs: CONFIG_MAX_AGE_MS });
   const linear = new ProjectCache<LinearIssuesResponse>((p) => projectApi(p).fetchLinearIssues(), {
     maxAgeMs: LINEAR_THROTTLE_MS,
     onError: (_project, err) => console.warn("[linear]", err),
   });
-  const store = new WorktreesStore(() => linear.ensure(selection.project));
+  // Polls also pick up config edits and retry a failed config load.
+  const store = new WorktreesStore(() => {
+    linear.ensure(selection.project);
+    configs.ensure(activeProject);
+  });
   const notifications = new NotificationCenter();
   const showToast = notifications.show.bind(notifications);
   const actions = new WorktreeActions({
@@ -455,6 +460,8 @@
   });
 
   $effect(() => {
+    // Entering a project reloads its config; the cached one shows meanwhile.
+    configs.invalidate(activeProject);
     configs.ensure(activeProject);
   });
 

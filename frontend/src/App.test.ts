@@ -571,6 +571,49 @@ describe("App create selection", () => {
     await waitFor(() => expect(projectApi).toHaveBeenCalledWith("images"));
   });
 
+  it("refetches the config when switching back to a project, keeping the cached one meanwhile", async () => {
+    otherProjects.list = [{ prefix: "images", name: "images", worktrees: [], error: null }];
+    vi.mocked(fetchProjects).mockResolvedValue([
+      { prefix: PROJECT, name: PROJECT, path: "/repos/webmux", active: true },
+      { prefix: "images", name: "images", path: "/repos/images", active: false },
+    ]);
+    const edited = deferred<AppConfig>();
+    vi.mocked(api.fetchConfig)
+      .mockResolvedValueOnce(createConfig({ name: "repo" }))
+      .mockResolvedValueOnce(createConfig({ name: "images" }))
+      .mockReturnValueOnce(edited.promise);
+
+    renderApp();
+    await waitFor(() => expect(document.title).toBe("repo - Dashboard"));
+    await fireEvent.click(screen.getByTitle("Switch project"));
+    await fireEvent.click(await screen.findByRole("menuitem", { name: /^images/ }));
+    await waitFor(() => expect(document.title).toBe("images - Dashboard"));
+    await fireEvent.click(screen.getByTitle("Switch project"));
+    await fireEvent.click(await screen.findByRole("menuitem", { name: new RegExp(`^${PROJECT}`) }));
+
+    expect(document.title).toBe("repo - Dashboard");
+    expect(api.fetchConfig).toHaveBeenCalledTimes(3);
+    edited.resolve(createConfig({ name: "repo edited" }));
+    await waitFor(() => expect(document.title).toBe("repo edited - Dashboard"));
+  });
+
+  it("retries a failed config load on a later poll", async () => {
+    vi.mocked(api.fetchConfig).mockRejectedValueOnce(new Error("offline"));
+    const startedAt = Date.now();
+    const now = vi.spyOn(Date, "now");
+
+    renderApp();
+    await waitFor(() => expect(api.fetchConfig).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(fetchAllProjectWorktrees).toHaveBeenCalled());
+    expect(document.title).toBe("Dev Dashboard");
+
+    now.mockReturnValue(startedAt + 120_000);
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    await waitFor(() => expect(document.title).toBe("repo - Dashboard"));
+    now.mockRestore();
+  });
+
   it("selects a worktree of another project from its notification toast", async () => {
     let onNotification: ((notification: AppNotification) => void) | undefined;
     otherProjects.list = [{
