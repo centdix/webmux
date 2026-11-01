@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { untrack } from "svelte";
+  import { untrack, type Snippet } from "svelte";
   import type { WorktreeInfo, WorktreeListSection, WorktreeRef } from "./types";
   import PrBadge from "./PrBadge.svelte";
   import WorktreeProjectHeader from "./WorktreeProjectHeader.svelte";
@@ -15,6 +15,8 @@
     type OverflowStatusBarStatus,
   } from "./worktree-list";
   import { worktreeKey } from "./worktree-ref";
+  import { dismissible } from "./dismissible";
+  import MenuItem from "./MenuItem.svelte";
 
   type RowPosition = "above" | "visible" | "below";
 
@@ -40,6 +42,7 @@
     ontogglefavorite,
     onposttolinear,
     ontogglecollapsed,
+    projectActions,
   }: {
     sections: WorktreeListSection[];
     selected: WorktreeRef | null;
@@ -60,6 +63,8 @@
     ontogglefavorite: (ref: WorktreeRef) => void;
     onposttolinear?: (ref: WorktreeRef) => void;
     ontogglecollapsed: (project: string) => void;
+    /** Rendered in each project's header. */
+    projectActions?: Snippet<[WorktreeListSection]>;
   } = $props();
 
   let selectedKey = $derived(selected ? worktreeKey(selected) : null);
@@ -74,30 +79,6 @@
     openMenuKey = null;
     action(ref);
   }
-
-  $effect(() => {
-    if (!openMenuKey) return;
-
-    function handleDocumentClick(event: MouseEvent): void {
-      const target = event.target;
-      if (!(target instanceof HTMLElement) || !target.closest("[data-worktree-row-menu]")) {
-        openMenuKey = null;
-      }
-    }
-
-    function handleEscape(event: KeyboardEvent): void {
-      if (event.key === "Escape") {
-        openMenuKey = null;
-      }
-    }
-
-    document.addEventListener("click", handleDocumentClick);
-    document.addEventListener("keydown", handleEscape);
-    return () => {
-      document.removeEventListener("click", handleDocumentClick);
-      document.removeEventListener("keydown", handleEscape);
-    };
-  });
 
   let listEl = $state<HTMLDivElement | null>(null);
   let rowPositions = $state<Map<string, RowPosition>>(new Map());
@@ -229,7 +210,9 @@
           separated={index > 0}
           statusCounts={countAgentStatusesIn(section.rows, undefined, notified)}
           ontoggle={() => ontogglecollapsed(section.prefix)}
-        />
+        >
+          {#if projectActions}{@render projectActions(section)}{/if}
+        </WorktreeProjectHeader>
         {#if !section.collapsed}
           <ul id={listId} class="list-none">
             {#if section.emptyMessage !== null}
@@ -416,75 +399,19 @@
     {#if openMenuKey === key}
       <div
         class="absolute top-9 right-2 z-10 min-w-32 rounded-md border border-edge bg-surface shadow-lg p-1"
-        data-worktree-row-menu
+        {@attach dismissible(() => (openMenuKey = null))}
       >
-        <button
-          type="button"
-          disabled={isClosed || isCreating}
-          class="w-full px-2 py-1.5 rounded text-left text-xs text-primary hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed"
-          onclick={(event) => {
-            event.stopPropagation();
-            runMenuAction(ref, onclose);
-          }}
-        >
-          Close
-        </button>
-        <button
-          type="button"
-          disabled={isCreating || isArchiving}
-          class="w-full px-2 py-1.5 rounded text-left text-xs text-primary hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed"
-          onclick={(event) => {
-            event.stopPropagation();
-            runMenuAction(ref, onarchive);
-          }}
-        >
+        <MenuItem disabled={isClosed || isCreating} onclick={() => runMenuAction(ref, onclose)}>Close</MenuItem>
+        <MenuItem disabled={isCreating || isArchiving} onclick={() => runMenuAction(ref, onarchive)}>
           {wt.archived ? "Restore" : "Archive"}
-        </button>
-        <button
-          type="button"
-          disabled={isCreating}
-          class="w-full px-2 py-1.5 rounded text-left text-xs text-primary hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed"
-          onclick={(event) => {
-            event.stopPropagation();
-            runMenuAction(ref, oneditprofile);
-          }}
-        >
-          Change profile…
-        </button>
-        <button
-          type="button"
-          disabled={isCreating}
-          class="w-full px-2 py-1.5 rounded text-left text-xs text-primary hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed"
-          onclick={(event) => {
-            event.stopPropagation();
-            runMenuAction(ref, oncreatesubworktree);
-          }}
-        >
-          Create sub-worktree
-        </button>
-        <button
-          type="button"
-          class="w-full px-2 py-1.5 rounded text-left text-xs text-danger hover:bg-hover"
-          onclick={(event) => {
-            event.stopPropagation();
-            runMenuAction(ref, onremove);
-          }}
-        >
-          Remove
-        </button>
+        </MenuItem>
+        <MenuItem disabled={isCreating} onclick={() => runMenuAction(ref, oneditprofile)}>Change profile…</MenuItem>
+        <MenuItem disabled={isCreating} onclick={() => runMenuAction(ref, oncreatesubworktree)}>Create sub-worktree</MenuItem>
+        <MenuItem danger onclick={() => runMenuAction(ref, onremove)}>Remove</MenuItem>
         {#if onposttolinear}
           {@const isPostingLinear = postingLinear.has(key)}
           <div class="my-1 border-t border-edge"></div>
-          <button
-            type="button"
-            disabled={isPostingLinear}
-            class="w-full px-2 py-1.5 rounded text-left text-xs text-primary hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed"
-            onclick={(event) => {
-              event.stopPropagation();
-              openMenuKey = null;
-              onposttolinear(ref);
-            }}
-          >
+          <MenuItem disabled={isPostingLinear} onclick={() => runMenuAction(ref, onposttolinear)}>
             {#if isPostingLinear}
               Posting to Linear…
             {:else if wt.linearIssue}
@@ -492,7 +419,7 @@
             {:else}
               Post conversation to Linear…
             {/if}
-          </button>
+          </MenuItem>
         {/if}
       </div>
     {/if}

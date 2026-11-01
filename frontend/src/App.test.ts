@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type {
   AgentsUiWorktreeConversationResponse,
   AppConfig,
@@ -158,6 +158,8 @@ import {
   postWorktreeToLinear,
   projectApi,
   refreshWorktreeAgentTerminal,
+  removeProject,
+  setUpProject,
   setWorktreeLabel,
   setWorktreeProfile,
   subscribeNotifications,
@@ -168,17 +170,32 @@ import { WorktreeSelection } from "./lib/worktree-selection.svelte";
 const PROJECT = "webmux";
 const api = projectApi(PROJECT);
 
-/** Project a call on the shared mock client targeted: the shared client hides
- *  it, so read it from the projectApi call made just before. */
-function projectOfFirstCall(fn: (...args: never[]) => unknown): string | undefined {
-  const calledAt = vi.mocked(fn).mock.invocationCallOrder[0] ?? 0;
-  const projectCalls = vi.mocked(projectApi).mock;
-  const lastBefore = projectCalls.invocationCallOrder.findLastIndex((order) => order < calledAt);
-  return projectCalls.calls[lastBefore]?.[0];
+function renderApp(project = PROJECT): { onNoProjects: Mock<() => void> } {
+  const onNoProjects = vi.fn<() => void>();
+  render(App, { props: { selection: new WorktreeSelection(project), onNoProjects } });
+  return { onNoProjects };
 }
 
-function renderApp(): void {
-  render(App, { props: { selection: new WorktreeSelection(PROJECT), onNoProjects: vi.fn() } });
+/** Project whose client served a call of `method` (the first or the latest):
+ *  every client call is `projectApi(project).method(...)`, so it's the
+ *  `projectApi` call just before. */
+function projectOfCall<T extends (...args: never[]) => unknown>(
+  method: T,
+  which: "first" | "last",
+): string | undefined {
+  const orders = vi.mocked(method).mock.invocationCallOrder;
+  const order = (which === "first" ? orders[0] : orders.at(-1)) ?? 0;
+  const { calls, invocationCallOrder } = vi.mocked(projectApi).mock;
+  const index = invocationCallOrder.findLastIndex((callOrder) => callOrder < order);
+  return calls[index]?.[0];
+}
+
+function projectOfFirstCall<T extends (...args: never[]) => unknown>(method: T): string | undefined {
+  return projectOfCall(method, "first");
+}
+
+function projectOfLastCall<T extends (...args: never[]) => unknown>(method: T): string | undefined {
+  return projectOfCall(method, "last");
 }
 
 interface Deferred<T> {
@@ -550,43 +567,15 @@ describe("App create selection", () => {
     expect(await screen.findByTitle("feature/a")).toBeInTheDocument();
   });
 
-  it("switches the current project from the switcher without refetching, restoring its selection", async () => {
+  it("refetches the config when moving back to a project, keeping the cached one meanwhile", async () => {
     otherProjects.list = [{
       prefix: "images",
       name: "images",
-      worktrees: [createWorktree("feature/img", { project: "images" }), createWorktree("feature/saved", { project: "images" })],
+      worktrees: [createWorktree("feature/img", { project: "images" })],
       error: null,
     }];
-    localStorage.setItem("wt-last-selected-worktree:images", "feature/saved");
-    vi.mocked(fetchProjects).mockResolvedValue([
-      { prefix: PROJECT, name: PROJECT, path: "/repos/webmux", active: true },
-      { prefix: "images", name: "images", path: "/repos/images", active: false },
-    ]);
     vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("feature/web")]);
-
-    renderApp();
-    await screen.findByTitle("feature/web");
-    const pollsBefore = vi.mocked(fetchAllProjectWorktrees).mock.calls.length;
-
-    await fireEvent.click(screen.getByTitle("Switch project"));
-    await fireEvent.click(await screen.findByRole("menuitem", { name: /^images/ }));
-
-    // Straight from the polled store: no extra fetch, and the list (which shows
-    // every project) does not change.
-    expect(screen.getByRole("button", { name: /^feature\/img\b/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^feature\/web\b/i })).toBeInTheDocument();
-    expect(screen.getByTitle("feature/saved")).toBeInTheDocument();
-    expect(window.location.hash).toBe("#images/feature/saved");
-    expect(fetchAllProjectWorktrees).toHaveBeenCalledTimes(pollsBefore);
-    await waitFor(() => expect(projectApi).toHaveBeenCalledWith("images"));
-  });
-
-  it("refetches the config when switching back to a project, keeping the cached one meanwhile", async () => {
-    otherProjects.list = [{ prefix: "images", name: "images", worktrees: [], error: null }];
-    vi.mocked(fetchProjects).mockResolvedValue([
-      { prefix: PROJECT, name: PROJECT, path: "/repos/webmux", active: true },
-      { prefix: "images", name: "images", path: "/repos/images", active: false },
-    ]);
+    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "feature/web");
     const edited = deferred<AppConfig>();
     vi.mocked(api.fetchConfig)
       .mockResolvedValueOnce(createConfig({ name: "repo" }))
@@ -595,11 +584,9 @@ describe("App create selection", () => {
 
     renderApp();
     await waitFor(() => expect(document.title).toBe("repo - Dashboard"));
-    await fireEvent.click(screen.getByTitle("Switch project"));
-    await fireEvent.click(await screen.findByRole("menuitem", { name: /^images/ }));
+    await fireEvent.click(await screen.findByRole("button", { name: /^feature\/img\b/i }));
     await waitFor(() => expect(document.title).toBe("images - Dashboard"));
-    await fireEvent.click(screen.getByTitle("Switch project"));
-    await fireEvent.click(await screen.findByRole("menuitem", { name: new RegExp(`^${PROJECT}`) }));
+    await fireEvent.click(screen.getByRole("button", { name: /^feature\/web\b/i }));
 
     expect(document.title).toBe("repo - Dashboard");
     expect(api.fetchConfig).toHaveBeenCalledTimes(3);
@@ -693,7 +680,7 @@ describe("App create selection", () => {
     expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("feature/saved");
   });
 
-  it("drops the pending auto-select of a create once the user switches project", async () => {
+  it("drops the pending auto-select of a create once the user selects another project's worktree", async () => {
     otherProjects.list = [{
       prefix: "images",
       name: "images",
@@ -717,8 +704,7 @@ describe("App create selection", () => {
     await openCreateDialogAndSubmit("feature/new");
     await waitFor(() => expect(fetchWorktrees).toHaveBeenCalledTimes(2));
 
-    await fireEvent.click(screen.getByTitle("Switch project"));
-    await fireEvent.click(await screen.findByRole("menuitem", { name: /^images/ }));
+    await fireEvent.click(screen.getByRole("button", { name: /^feature\/img\b/i }));
     expect(await screen.findByTitle("feature/img")).toBeInTheDocument();
 
     createResult.resolve({ primaryBranch: "feature/new", branches: ["feature/new"] });
@@ -1071,12 +1057,161 @@ describe("App create selection", () => {
     renderApp();
 
     await screen.findByText("Select a worktree");
-    await screen.findByText("main");
-    await fireEvent.click(screen.getByRole("button", { name: "Pull" }));
+    await fireEvent.click(await screen.findByRole("button", { name: `Actions for ${PROJECT}` }));
+    await fireEvent.click(screen.getByRole("button", { name: "Pull main" }));
     await fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Pull" }));
 
     expect(api.pullMain).toHaveBeenCalledWith({ body: {} });
     expect(await screen.findByRole("alert")).toHaveTextContent('Pulled latest "main" from remote');
+  });
+
+  describe("project actions", () => {
+    function useImagesProject(worktrees: WorktreeInfo[] = [createWorktree("feature/img", { project: "images" })]): void {
+      otherProjects.list = [{ prefix: "images", name: "images", worktrees, error: null }];
+    }
+
+    async function openProjectMenu(name: string): Promise<void> {
+      await fireEvent.click(await screen.findByRole("button", { name: `Actions for ${name}` }));
+    }
+
+    async function submitCreate(branch: string): Promise<void> {
+      await screen.findByText("New Worktree");
+      await fireEvent.input(screen.getByLabelText(/Branch name/i), { target: { value: branch } });
+      await fireEvent.click(screen.getByRole("button", { name: "Create" }));
+      await waitFor(() => expect(api.createWorktree).toHaveBeenCalled());
+    }
+
+    beforeEach(() => {
+      vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("feature/web")]);
+      vi.mocked(api.createWorktree).mockResolvedValue({ primaryBranch: "feature/new", branches: ["feature/new"] });
+    });
+
+    it("creates a worktree in the header's project from its + button and its menu", async () => {
+      useImagesProject();
+      renderApp();
+
+      await fireEvent.click(await screen.findByRole("button", { name: "New worktree in images" }));
+      await submitCreate("feature/plus");
+      expect(projectOfLastCall(api.createWorktree)).toBe("images");
+
+      await openProjectMenu("images");
+      await fireEvent.click(screen.getByRole("button", { name: "New worktree" }));
+      await submitCreate("feature/menu");
+      expect(projectOfLastCall(api.createWorktree)).toBe("images");
+    });
+
+    it("pulls the header's project and opens it in the IDE", async () => {
+      useImagesProject();
+      vi.mocked(api.fetchConfig).mockResolvedValue(createConfig({
+        projectDir: "/repos/images",
+        mainBranch: "trunk",
+        linkedRepos: [{ alias: "shared", dir: "/repos/shared" }],
+      }));
+      renderApp();
+
+      await openProjectMenu("images");
+      expect(await screen.findByRole("link", { name: "Open in Cursor" })).toHaveAttribute("href", "cursor://file/repos/images");
+      expect(screen.getByRole("link", { name: "Open shared in Cursor" })).toHaveAttribute("href", "cursor://file/repos/shared");
+      await fireEvent.click(screen.getByRole("button", { name: "Pull trunk" }));
+      await fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Pull" }));
+
+      await waitFor(() => expect(api.pullMain).toHaveBeenCalledWith({ body: {} }));
+      expect(projectOfLastCall(api.pullMain)).toBe("images");
+
+      await openProjectMenu("images");
+      await fireEvent.click(screen.getByRole("button", { name: "Pull shared" }));
+      await fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Pull" }));
+
+      await waitFor(() => expect(api.pullMain).toHaveBeenCalledWith({ body: { repo: "shared" } }));
+      expect(projectOfLastCall(api.pullMain)).toBe("images");
+    });
+
+    it("creates with Cmd+K in the selected worktree's project", async () => {
+      useImagesProject();
+      renderApp();
+
+      await fireEvent.click(await screen.findByRole("button", { name: /^feature\/img\b/i }));
+      await fireEvent.keyDown(window, { key: "k", metaKey: true });
+      await submitCreate("feature/cmdk");
+
+      expect(projectOfLastCall(api.createWorktree)).toBe("images");
+    });
+
+    it("creates with Cmd+K in the first project when nothing is selected", async () => {
+      useImagesProject([]);
+      renderApp("images");
+
+      await screen.findByText("Select a worktree");
+      await screen.findByRole("region", { name: "images" });
+      await fireEvent.keyDown(window, { key: "k", metaKey: true });
+      await submitCreate("feature/cmdk");
+
+      expect(projectOfLastCall(api.createWorktree)).toBe(PROJECT);
+    });
+
+    it("adds a project, which then shows under its header", async () => {
+      vi.mocked(setUpProject).mockImplementation(async () => {
+        useImagesProject();
+        return { prefix: "images" };
+      });
+      renderApp();
+      await screen.findByRole("region", { name: PROJECT });
+
+      await fireEvent.click(screen.getByRole("button", { name: "Add project" }));
+      await fireEvent.input(screen.getByLabelText("Path to a git repo"), { target: { value: "/repos/images" } });
+      await fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Add" }));
+
+      expect(setUpProject).toHaveBeenCalledWith("/repos/images", expect.any(Function));
+      expect(await screen.findByRole("region", { name: "images" })).toBeInTheDocument();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("removes a project after confirming and moves the selection off it", async () => {
+      useImagesProject();
+      vi.mocked(removeProject).mockImplementation(async () => {
+        otherProjects.list = [];
+      });
+      vi.mocked(fetchProjects).mockResolvedValue([{ prefix: PROJECT, name: PROJECT, path: "/repo", active: true }]);
+      const { onNoProjects } = renderApp();
+      await fireEvent.click(await screen.findByRole("button", { name: /^feature\/img\b/i }));
+      expect(await screen.findByTitle("feature/img")).toBeInTheDocument();
+
+      await openProjectMenu("images");
+      await fireEvent.click(screen.getByRole("button", { name: "Remove project" }));
+      expect(removeProject).not.toHaveBeenCalled();
+      await fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Remove" }));
+
+      expect(removeProject).toHaveBeenCalledWith("images");
+      await waitFor(() => expect(screen.queryByRole("region", { name: "images" })).not.toBeInTheDocument());
+      expect(await screen.findByTitle("feature/web")).toBeInTheDocument();
+      expect(window.location.hash).toBe(`#${PROJECT}/feature/web`);
+      expect(onNoProjects).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the empty state once the last project is removed", async () => {
+      vi.mocked(removeProject).mockResolvedValue(undefined);
+      vi.mocked(fetchProjects).mockResolvedValue([]);
+      const { onNoProjects } = renderApp();
+
+      await openProjectMenu(PROJECT);
+      await fireEvent.click(screen.getByRole("button", { name: "Remove project" }));
+      await fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Remove" }));
+
+      await waitFor(() => expect(onNoProjects).toHaveBeenCalledTimes(1));
+    });
+
+    it("keeps the dialog open with the error when removing fails", async () => {
+      vi.mocked(removeProject).mockRejectedValue(new Error("registry locked"));
+      const { onNoProjects } = renderApp();
+
+      await openProjectMenu(PROJECT);
+      await fireEvent.click(screen.getByRole("button", { name: "Remove project" }));
+      await fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Remove" }));
+
+      expect(await within(screen.getByRole("dialog")).findByText("registry locked")).toBeInTheDocument();
+      expect(fetchProjects).not.toHaveBeenCalled();
+      expect(onNoProjects).not.toHaveBeenCalled();
+    });
   });
 
   it("selects the primary paired worktree when Both is created without a prior selection", async () => {

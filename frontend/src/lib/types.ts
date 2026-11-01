@@ -166,6 +166,14 @@ export interface WorktreeListSection {
   emptyMessage: string | null;
 }
 
+/** A repo a project header pulls or opens in the IDE: the project's own
+ *  (`repo: null`) or one of its linked repos (`repo` = alias). */
+export interface ProjectRepo {
+  repo: string | null;
+  label: string;
+  ideUrl: string | null;
+}
+
 export type ToastTone = "info" | "success" | "error";
 
 export interface ToastInput {

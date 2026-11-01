@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { PrEntry } from "./types";
+import type { AppConfig, PrEntry } from "./types";
 import {
   LAST_PROJECT_STORAGE_KEY,
   LAST_SELECTED_WORKTREE_STORAGE_KEY,
@@ -14,6 +14,7 @@ import {
   loadSavedSelectedWorktree,
   loadUseWebChatUi,
   makeIdeUrl,
+  projectRepos,
   resolveSelectedBranch,
   prBadgeClass,
   prStateTextClass,
@@ -184,6 +185,36 @@ describe("makeIdeUrl", () => {
     expect(makeIdeUrl("/tmp/repo", "devbox", "vscode")).toBe(
       "vscode://vscode-remote/ssh-remote+devbox/tmp/repo",
     );
+  });
+});
+
+describe("projectRepos", () => {
+  const config: AppConfig = {
+    name: "repo",
+    profiles: [],
+    agents: [],
+    defaultProfileName: "",
+    defaultAgentId: "claude",
+    autoName: false,
+    linearCreateTicketOption: false,
+    startupEnvs: {},
+    linkedRepos: [{ alias: "shared", dir: "/repos/shared" }, { alias: "remote-only" }],
+    linearAutoCreateWorktrees: false,
+    autoRemoveOnMerge: false,
+    projectDir: "/repos/app",
+    mainBranch: "trunk",
+    ide: "vscode",
+  };
+
+  it("lists the project's own repo, then its linked repos with a directory", () => {
+    expect(projectRepos(config, "")).toEqual([
+      { repo: null, label: "trunk", ideUrl: "vscode://file/repos/app" },
+      { repo: "shared", label: "shared", ideUrl: "vscode://file/repos/shared" },
+    ]);
+  });
+
+  it("only offers pulling main until the config loads", () => {
+    expect(projectRepos(undefined, "")).toEqual([{ repo: null, label: "main", ideUrl: null }]);
   });
 });
 

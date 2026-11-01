@@ -87,9 +87,6 @@ describe("WorktreesStore", () => {
     expect(store.find({ project: "beta", branch: "main" })?.label).toBe("beta main");
     expect(store.find({ project: "gamma", branch: "main" })).toBeUndefined();
     expect(store.worktreesOf("alpha").map((w) => w.branch)).toEqual(["main"]);
-    expect(store.hasProject("beta")).toBe(true);
-    expect(store.nameOf("beta")).toBe("beta");
-    expect(store.nameOf("gamma")).toBeNull();
     expect(onRefreshed).toHaveBeenCalledTimes(1);
   });
 

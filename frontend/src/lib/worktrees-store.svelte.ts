@@ -72,10 +72,6 @@ export class WorktreesStore {
     return this.#loaded.has(project);
   }
 
-  hasProject(project: string): boolean {
-    return this.projects.some((entry) => entry.prefix === project);
-  }
-
   nameOf(project: string): string | null {
     return this.projects.find((entry) => entry.prefix === project)?.name ?? null;
   }

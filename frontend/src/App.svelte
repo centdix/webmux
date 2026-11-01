@@ -16,8 +16,9 @@
   import MobileChatSurface from "./lib/MobileChatSurface.svelte";
   import WorktreeLabelDialog from "./lib/WorktreeLabelDialog.svelte";
   import WorktreeProfileDialog from "./lib/WorktreeProfileDialog.svelte";
-  import SidebarRepoRow from "./lib/SidebarRepoRow.svelte";
-  import ProjectSwitcher from "./lib/ProjectSwitcher.svelte";
+  import ProjectActionsMenu from "./lib/ProjectActionsMenu.svelte";
+  import AddProjectForm from "./lib/AddProjectForm.svelte";
+  import BaseDialog from "./lib/BaseDialog.svelte";
   import MigrationBanner from "./lib/MigrationBanner.svelte";
   import Toggle from "./lib/Toggle.svelte";
   import type {
@@ -29,6 +30,7 @@
     PrEntry,
     LinearIssue,
     LinearIssuesResponse,
+    ProjectSummary,
     WorktreeInfo,
     WorktreeRef,
   } from "./lib/types";
@@ -48,6 +50,7 @@
     saveFavoriteWorktreeKeys,
     loadCollapsedProjects,
     saveCollapsedProjects,
+    projectRepos,
   } from "./lib/utils";
   import {
     buildWorktreeListSections,
@@ -71,6 +74,7 @@
   import { WorktreeActions } from "./lib/worktree-actions.svelte";
   import { NotificationCenter } from "./lib/notifications.svelte";
   import { ProjectCache } from "./lib/project-cache.svelte";
+  import { ProjectPull, ProjectRemoval } from "./lib/project-actions.svelte";
 
   let { selection, onNoProjects }: { selection: WorktreeSelection; onNoProjects: () => void } = $props();
 
@@ -119,15 +123,18 @@
     leave: selectNeighborOf,
     onBranchesChanged: invalidateBranchCaches,
   });
+  const pull = new ProjectPull(showToast);
+  const removal = new ProjectRemoval(handleProjectRemoved);
 
   /** The current project: the selected worktree's (the last one when nothing
    *  is selected). The sidebar lists every project regardless; this only
-   *  drives the Linear panel, new worktrees, pull and the initial fallback
-   *  selection. */
+   *  drives the Linear panel and the initial fallback selection. */
   let project = $derived(selection.project);
   /** Project of the selected worktree (the current one when none): the main
    *  panel, its dialogs and the config they read all target it. */
   let activeProject = $derived(selection.selected?.project ?? project);
+  /** Where Cmd+K creates: the selected worktree's project, else the first. */
+  let defaultCreateProject = $derived(selection.selected?.project ?? store.projects[0]?.prefix ?? project);
   let config = $derived(configs.get(activeProject) ?? DEFAULT_CONFIG);
   let linearData = $derived(linear.get(project));
   let linearIssues = $derived(linearData?.issues ?? []);
@@ -162,8 +169,8 @@
   let profileLoading = $state(false);
   let profileError = $state("");
   let showCreateDialog = $state(false);
-  /** Project the create dialog targets: the current one, or the parent's for
-   *  a sub-worktree. */
+  /** Project the create dialog targets: the one it was opened for, or the
+   *  parent's for a sub-worktree. */
   let createProject = $state("");
   let createConfig = $derived(configs.get(createProject) ?? DEFAULT_CONFIG);
   /** The dialog reads the profiles and startup envs once at mount, so it
@@ -174,14 +181,7 @@
   let commentReviewPr = $state<PrEntry | null>(null);
   let showDiffDialog = $state(false);
   let DiffDialogComponent = $state<Component<DiffDialogProps> | null>(null);
-  let pullMainConfirm = $state(false);
-  let pullMainLoading = $state(false);
-  let pullMainError = $state("");
-  let pullMainForce = $state(false);
-  let pullLinkedRepoAlias = $state<string | null>(null);
-  let pullLinkedRepoLoading = $state(false);
-  let pullLinkedRepoError = $state("");
-  let pullLinkedRepoForce = $state(false);
+  let showAddProjectDialog = $state(false);
   let pendingCreateCount = $state(0);
   let latestAutoSelectCreateId = -1;
   let nextCreateRequestId = 0;
@@ -578,8 +578,8 @@
   });
   let showPaneBar = $derived(isMobile && canConnect && !showWebChat && paneBarPanes.length > 0);
 
-  function openCreateDialog(issue: LinearIssue | null = null): void {
-    createProject = project;
+  function openCreateDialog(targetProject: string, issue: LinearIssue | null = null): void {
+    createProject = targetProject;
     includeRemoteBranches = false;
     assignIssue = issue;
     lockedBaseBranch = null;
@@ -601,7 +601,7 @@
   }
 
   function handleAssignIssue(issue: LinearIssue): void {
-    openCreateDialog(issue);
+    openCreateDialog(project, issue);
   }
 
   async function handleCreate(request: CreateWorktreeRequest) {
@@ -712,15 +712,21 @@
     if (isMobile) sidebarOpen = false;
   }
 
-  function handleSwitchProject(next: string | null): void {
-    if (next === null) {
+  function handleProjectAdded(): void {
+    showAddProjectDialog = false;
+    void store.refresh();
+  }
+
+  function handleProjectRemoved(prefix: string, remaining: ProjectSummary[]): void {
+    const next = remaining[0]?.prefix;
+    if (!next) {
       onNoProjects();
       return;
     }
-    // A project the store hasn't seen yet (just added) loads in the background.
-    if (!store.hasProject(next)) void store.refresh();
-    if (next !== project) cancelCreateAutoSelect();
-    selection.switchProject(next);
+    if (pendingCreate?.project === prefix) cancelCreateAutoSelect();
+    // The selection can't stay on a removed project.
+    if (project === prefix) selection.switchProject(next);
+    void store.refresh();
   }
 
   async function handleRemove(): Promise<void> {
@@ -773,62 +779,6 @@
     }
   }
 
-  async function handlePullMain(): Promise<void> {
-    pullMainLoading = true;
-    pullMainError = "";
-    try {
-      const result = await projectApi(project).pullMain({
-        body: { ...(pullMainForce ? { force: true } : {}) },
-      });
-      if (result.status === "updated" || result.status === "already_up_to_date") {
-        pullMainConfirm = false;
-        pullMainForce = false;
-        showToast({
-          tone: result.status === "updated" ? "success" : "info",
-          message: result.status === "updated"
-            ? `Pulled latest "${config.mainBranch ?? "main"}" from remote`
-            : `"${config.mainBranch ?? "main"}" is already up to date`,
-        });
-      } else if (result.status === "merge_failed" && !pullMainForce) {
-        pullMainForce = true;
-        pullMainError = `Fast-forward failed: ${result.error ?? "unknown error"}.\nForce pull will reset main to match remote.`;
-      } else {
-        pullMainError = result.error ?? result.status;
-      }
-    } catch (err) {
-      pullMainError = errorMessage(err);
-    } finally {
-      pullMainLoading = false;
-    }
-  }
-
-  async function handlePullLinkedRepo(): Promise<void> {
-    if (!pullLinkedRepoAlias) return;
-    pullLinkedRepoLoading = true;
-    pullLinkedRepoError = "";
-    try {
-      const result = await projectApi(project).pullMain({
-        body: {
-          ...(pullLinkedRepoForce ? { force: true } : {}),
-          ...(pullLinkedRepoAlias ? { repo: pullLinkedRepoAlias } : {}),
-        },
-      });
-      if (result.status === "updated" || result.status === "already_up_to_date") {
-        pullLinkedRepoAlias = null;
-        pullLinkedRepoForce = false;
-      } else if (result.status === "merge_failed" && !pullLinkedRepoForce) {
-        pullLinkedRepoForce = true;
-        pullLinkedRepoError = `Fast-forward failed: ${result.error ?? "unknown error"}.\nForce pull will reset to match remote.`;
-      } else {
-        pullLinkedRepoError = result.error ?? result.status;
-      }
-    } catch (err) {
-      pullLinkedRepoError = errorMessage(err);
-    } finally {
-      pullLinkedRepoLoading = false;
-    }
-  }
-
   function openSelectedWorktree(): void {
     if (selectedBranch) void actions.open(refOf(selectedBranch));
   }
@@ -857,7 +807,9 @@
 
   function handleKeydown(e: KeyboardEvent) {
     // Ignore shortcuts when a dialog is open (let dialog handle its own keys)
-    if (createDialogOpen || removeRef || pullMainConfirm || pullLinkedRepoAlias || postToLinkedConfirm) return;
+    if (
+      createDialogOpen || removeRef || pull.target || removal.target || showAddProjectDialog || postToLinkedConfirm
+    ) return;
 
     const mod = e.metaKey || e.ctrlKey;
     if (!mod) return;
@@ -869,7 +821,7 @@
       if (next !== current) selection.select(next ? parseWorktreeKey(next) : null);
     } else if (e.key === "k" || e.key === "K") {
       e.preventDefault();
-      openCreateDialog();
+      openCreateDialog(defaultCreateProject);
     } else if (e.key === "d" || e.key === "D") {
       e.preventDefault();
       if (selectedBranch) removeRef = refOf(selectedBranch);
@@ -938,14 +890,11 @@
     >
       <div class="p-4 border-b border-edge">
         <div class="flex items-center justify-between">
-          <div class="flex items-center gap-1 min-w-0">
-            <h1 class="text-base font-semibold truncate">{config.name || store.nameOf(project) || "Dashboard"}</h1>
-            <ProjectSwitcher current={project} onSwitch={handleSwitchProject} />
-          </div>
+          <h1 class="text-base font-semibold truncate">webmux</h1>
           <div class="flex items-center gap-2">
             <button
               class="h-8 px-2 gap-1.5 rounded-md border border-edge bg-surface text-accent text-xs flex items-center justify-center cursor-pointer hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed"
-              onclick={() => openCreateDialog()}
+              onclick={() => openCreateDialog(defaultCreateProject)}
               title="New Worktree (Cmd+K)"
               ><span class="text-lg leading-none">+</span> New</button
             >
@@ -1020,21 +969,25 @@
         ontogglefavorite={toggleFavoriteWorktree}
         onposttolinear={handlePostToLinear}
         ontogglecollapsed={toggleProjectCollapsed}
-      />
-      {#if config.projectDir}
-        <SidebarRepoRow
-          label={config.mainBranch ?? "main"}
-          ideUrl={makeIdeUrl(config.projectDir, sshHost, config.ide) ?? ""}
-          onpull={() => { pullMainConfirm = true; pullMainForce = false; pullMainError = ""; }}
-        />
-      {/if}
-      {#each (config.linkedRepos ?? []).filter((lr) => lr.dir) as lr (lr.alias)}
-        <SidebarRepoRow
-          label={lr.alias}
-          ideUrl={makeIdeUrl(lr.dir, sshHost, config.ide) ?? ""}
-          onpull={() => { pullLinkedRepoAlias = lr.alias; pullLinkedRepoForce = false; pullLinkedRepoError = ""; }}
-        />
-      {/each}
+      >
+        {#snippet projectActions(section)}
+          <ProjectActionsMenu
+            name={section.name}
+            repos={projectRepos(configs.get(section.prefix), sshHost)}
+            onopen={() => configs.ensure(section.prefix)}
+            oncreate={() => openCreateDialog(section.prefix)}
+            onpull={(repo) => pull.start({ project: section.prefix, repo })}
+            onremove={() => removal.start({ prefix: section.prefix, name: section.name })}
+          />
+        {/snippet}
+      </WorktreeList>
+      <div class="shrink-0 border-t border-edge px-3 py-2">
+        <button
+          type="button"
+          class="w-full flex items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-xs text-muted bg-transparent cursor-pointer hover:bg-hover hover:text-primary"
+          onclick={() => (showAddProjectDialog = true)}
+        ><span class="text-base leading-none" aria-hidden="true">+</span> Add project</button>
+      </div>
       {#if showLinearPanel}
         <LinearPanel
           issues={linearIssues}
@@ -1271,32 +1224,36 @@
   />
 {/if}
 
-{#if pullMainConfirm}
+{#if pull.target}
+  {@const label = pull.target.repo.label}
   <ConfirmDialog
-    message={pullMainForce
-      ? `Force pull "${config.mainBranch ?? "main"}"? This will discard any local commits on main.`
-      : `Pull latest "${config.mainBranch ?? "main"}" from remote?`}
-    confirmLabel={pullMainForce ? "Force Pull" : "Pull"}
-    variant={pullMainForce ? "danger" : "accent"}
-    loading={pullMainLoading}
-    error={pullMainError}
-    onconfirm={handlePullMain}
-    oncancel={() => { pullMainConfirm = false; pullMainForce = false; }}
+    message={pull.force
+      ? `Force pull "${label}"? This will discard any local commits on it.`
+      : `Pull latest "${label}" from remote?`}
+    confirmLabel={pull.force ? "Force Pull" : "Pull"}
+    variant={pull.force ? "danger" : "accent"}
+    loading={pull.loading}
+    error={pull.error}
+    onconfirm={() => void pull.confirm()}
+    oncancel={() => pull.cancel()}
   />
 {/if}
 
-{#if pullLinkedRepoAlias}
+{#if removal.target}
   <ConfirmDialog
-    message={pullLinkedRepoForce
-      ? `Force pull "${pullLinkedRepoAlias}"? This will discard any local commits.`
-      : `Pull latest "${pullLinkedRepoAlias}" from remote?`}
-    confirmLabel={pullLinkedRepoForce ? "Force Pull" : "Pull"}
-    variant={pullLinkedRepoForce ? "danger" : "accent"}
-    loading={pullLinkedRepoLoading}
-    error={pullLinkedRepoError}
-    onconfirm={handlePullLinkedRepo}
-    oncancel={() => { pullLinkedRepoAlias = null; pullLinkedRepoForce = false; }}
+    message={`Remove project "${removal.target.name}" from webmux? Its repo and worktrees stay on disk.`}
+    loading={removal.loading}
+    error={removal.error}
+    onconfirm={() => void removal.confirm()}
+    oncancel={() => removal.cancel()}
   />
+{/if}
+
+{#if showAddProjectDialog}
+  <BaseDialog onclose={() => (showAddProjectDialog = false)}>
+    <h2 class="text-base mb-4">Add project</h2>
+    <AddProjectForm onadded={handleProjectAdded} />
+  </BaseDialog>
 {/if}
 
 {#if showSettingsDialog}

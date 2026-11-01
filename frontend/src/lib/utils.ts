@@ -1,4 +1,4 @@
-import type { IdeKind, PrEntry, ProjectInitPhase, WorktreeCreationPhase, WorktreeInfo } from "./types";
+import type { AppConfig, IdeKind, PrEntry, ProjectInitPhase, ProjectRepo, WorktreeCreationPhase, WorktreeInfo } from "./types";
 import { THEME_KEYS, getTheme } from "./themes";
 import { worktreeKey } from "./worktree-ref";
 import type { ThemeKey } from "./themes";
@@ -81,6 +81,18 @@ export function makeIdeUrl(
   const scheme = IDES[ide].scheme;
   if (sshHost) return `${scheme}://vscode-remote/ssh-remote+${sshHost}${dir}`;
   return `${scheme}://file${dir}`;
+}
+
+/** Repos a project header acts on: the project's own first, then each linked
+ *  repo with a directory. Until its config loads, only pulling main is known. */
+export function projectRepos(config: AppConfig | undefined, sshHost: string): ProjectRepo[] {
+  if (!config) return [{ repo: null, label: "main", ideUrl: null }];
+  return [
+    { repo: null, label: config.mainBranch || "main", ideUrl: makeIdeUrl(config.projectDir, sshHost, config.ide) },
+    ...config.linkedRepos.flatMap((linked) =>
+      linked.dir ? [{ repo: linked.alias, label: linked.alias, ideUrl: makeIdeUrl(linked.dir, sshHost, config.ide) }] : []
+    ),
+  ];
 }
 
 export function ideLabelForUrl(url: string): string {
