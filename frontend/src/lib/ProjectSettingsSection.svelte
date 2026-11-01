@@ -270,7 +270,7 @@
         <span class="block text-xs text-muted mb-2">Linear</span>
         <SettingToggle
           title="Auto-create worktrees"
-          description={'Automatically create worktrees for Todo Linear tickets with the "webmux" label.'}
+          description={'Automatically create worktrees for Todo Linear tickets with the "webmux" label. Every project with this on acts on the same tickets unless its config sets integrations.linear.watchTeams.'}
           checked={autoCreate}
           disabled={!config || autoCreateSaving}
           ontoggle={handleAutoCreateToggle}
