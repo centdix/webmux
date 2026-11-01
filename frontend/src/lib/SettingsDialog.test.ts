@@ -229,6 +229,20 @@ describe("SettingsDialog", () => {
     expect(configs.get("webmux")?.autoRemoveOnMerge).toBe(false);
   });
 
+  it("shows an error and reverts a toggle whose save fails", async () => {
+    vi.mocked(imagesApi.setAutoRemoveOnMerge).mockRejectedValue(new Error("config is read-only"));
+    const configs = renderDialog({ activeProject: "images" });
+    const images = section("Image Generator");
+    const toggle = within(images).getByRole("switch", { name: "Auto-remove worktrees on PR merge" });
+    await waitFor(() => expect(toggle).not.toBeDisabled());
+
+    await fireEvent.click(toggle);
+
+    expect(await within(images).findByText("config is read-only")).toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(configs.get("images")?.autoRemoveOnMerge).toBe(false);
+  });
+
   it("shows only custom agents in the list", async () => {
     vi.mocked(fetchAgents).mockResolvedValue([BUILTIN_CLAUDE, createAgentDetails()]);
 

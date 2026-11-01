@@ -48,6 +48,7 @@
   let pendingAutoRemove = $state<boolean | null>(null);
   let autoRemove = $derived(pendingAutoRemove ?? config?.autoRemoveOnMerge ?? false);
   let autoRemoveSaving = $state(false);
+  let toggleError = $state<string | null>(null);
 
   let agents = $state<AgentDetails[]>([]);
   let customAgents = $derived(agents.filter((agent) => agent.kind === "custom"));
@@ -89,10 +90,12 @@
   function handleAutoCreateToggle(enabled: boolean): void {
     pendingAutoCreate = enabled;
     autoCreateSaving = true;
+    toggleError = null;
     projectApi(project).setLinearAutoCreate({ body: { enabled } })
       .then((result) => {
         configs.update(project, (c) => ({ ...c, linearAutoCreateWorktrees: result.enabled }));
       })
+      .catch((err: unknown) => (toggleError = errorMessage(err)))
       .finally(() => {
         pendingAutoCreate = null;
         autoCreateSaving = false;
@@ -102,10 +105,12 @@
   function handleAutoRemoveToggle(enabled: boolean): void {
     pendingAutoRemove = enabled;
     autoRemoveSaving = true;
+    toggleError = null;
     projectApi(project).setAutoRemoveOnMerge({ body: { enabled } })
       .then((result) => {
         configs.update(project, (c) => ({ ...c, autoRemoveOnMerge: result.enabled }));
       })
+      .catch((err: unknown) => (toggleError = errorMessage(err)))
       .finally(() => {
         pendingAutoRemove = null;
         autoRemoveSaving = false;
@@ -282,6 +287,10 @@
           aria-label="Auto-remove worktrees on PR merge"
         />
       </div>
+
+      {#if toggleError}
+        <p class="text-[12px] text-danger" role="alert">{toggleError}</p>
+      {/if}
     </div>
   {/if}
 </section>
