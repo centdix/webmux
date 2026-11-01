@@ -9,6 +9,9 @@ export interface ProjectCacheOptions {
 export class ProjectCache<T> {
   #values = $state.raw<Record<string, T>>({});
   readonly #attemptedAt = new Map<string, number>();
+  /** Latest load per project; an older one resolving later is dropped. */
+  readonly #latestLoad = new Map<string, number>();
+  #nextLoad = 0;
   readonly #load: (project: string) => Promise<T>;
   readonly #options: ProjectCacheOptions;
 
@@ -28,8 +31,12 @@ export class ProjectCache<T> {
     const now = Date.now();
     if (attemptedAt !== undefined && now - attemptedAt < this.#options.maxAgeMs) return;
     this.#attemptedAt.set(project, now);
+    const token = ++this.#nextLoad;
+    this.#latestLoad.set(project, token);
     this.#load(project)
-      .then((value) => this.#set(project, value))
+      .then((value) => {
+        if (this.#latestLoad.get(project) === token) this.#set(project, value);
+      })
       .catch((err: unknown) => this.#options.onError?.(project, err));
   }
 

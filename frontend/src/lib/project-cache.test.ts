@@ -48,6 +48,23 @@ describe("ProjectCache", () => {
     expect(load).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps the newest load when an older one resolves after it", async () => {
+    let resolveStale!: (value: string) => void;
+    const load = vi.fn<(project: string) => Promise<string>>()
+      .mockReturnValueOnce(new Promise((resolve) => (resolveStale = resolve)))
+      .mockResolvedValueOnce("fresh");
+    const cache = new ProjectCache(load, { maxAgeMs: Infinity });
+
+    cache.ensure("alpha");
+    cache.invalidate("alpha");
+    cache.ensure("alpha");
+    await flush();
+    resolveStale("stale");
+    await flush();
+
+    expect(cache.get("alpha")).toBe("fresh");
+  });
+
   it("updates a loaded value in place", async () => {
     const cache = new ProjectCache(async () => ({ agents: 1 }), { maxAgeMs: Infinity });
     cache.update("alpha", (value) => ({ agents: value.agents + 1 }));
