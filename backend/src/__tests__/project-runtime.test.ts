@@ -1,5 +1,12 @@
 import { describe, expect, it } from "bun:test";
+import { parseRuntimeEvent, type RuntimeEvent } from "../domain/events";
 import { ProjectRuntime } from "../services/project-runtime";
+
+function parsedEvent(raw: unknown): RuntimeEvent {
+  const event = parseRuntimeEvent(raw);
+  if (!event) throw new Error("expected a valid runtime event");
+  return event;
+}
 
 describe("ProjectRuntime", () => {
   it("creates a default runtime state when upserting a new worktree", () => {
@@ -36,15 +43,15 @@ describe("ProjectRuntime", () => {
     });
 
     runtime.applyEvent(
-      { worktreeId: "wt_search", branch: "feature/search", type: "agent_status_changed", lifecycle: "running" },
+      { worktreeId: "wt_search", type: "agent_status_changed", lifecycle: "running" },
       () => new Date("2026-03-06T10:01:00.000Z"),
     );
     runtime.applyEvent(
-      { worktreeId: "wt_search", branch: "feature/search", type: "agent_status_changed", lifecycle: "idle" },
+      { worktreeId: "wt_search", type: "agent_status_changed", lifecycle: "idle" },
       () => new Date("2026-03-06T10:02:00.000Z"),
     );
     runtime.applyEvent(
-      { worktreeId: "wt_search", branch: "feature/search", type: "agent_status_changed", lifecycle: "running" },
+      { worktreeId: "wt_search", type: "agent_status_changed", lifecycle: "running" },
       () => new Date("2026-03-06T10:03:00.000Z"),
     );
 
@@ -52,6 +59,31 @@ describe("ProjectRuntime", () => {
     expect(state?.agent.lifecycle).toBe("running");
     expect(state?.agent.lastStartedAt).toBe("2026-03-06T10:01:00.000Z");
     expect(state?.agent.lastEventAt).toBe("2026-03-06T10:03:00.000Z");
+  });
+
+  it("does not rename a worktree from the stale branch carried by a hook event", () => {
+    const runtime = new ProjectRuntime();
+    runtime.upsertWorktree({
+      worktreeId: "wt_search",
+      branch: "feature/search",
+      path: "/repo/__worktrees/feature-search",
+      runtime: "host",
+    });
+    runtime.setGitState("wt_search", { branch: "feature/search-layer-2" });
+
+    runtime.applyEvent(parsedEvent({
+      worktreeId: "wt_search",
+      branch: "feature/search",
+      type: "agent_status_changed",
+      lifecycle: "running",
+    }));
+
+    const state = runtime.getWorktree("wt_search");
+    expect(state?.branch).toBe("feature/search-layer-2");
+    expect(state?.git.branch).toBe("feature/search-layer-2");
+    expect(state?.agent.lifecycle).toBe("running");
+    expect(runtime.getWorktreeByBranch("feature/search")).toBeNull();
+    expect(runtime.getWorktreeByBranch("feature/search-layer-2")?.worktreeId).toBe("wt_search");
   });
 
   it("tracks runtime errors and service/session updates", () => {
@@ -85,7 +117,7 @@ describe("ProjectRuntime", () => {
       },
     ]);
     runtime.applyEvent(
-      { worktreeId: "wt_search", branch: "feature/search", type: "runtime_error", message: "agent crashed" },
+      { worktreeId: "wt_search", type: "runtime_error", message: "agent crashed" },
       () => new Date("2026-03-06T10:02:00.000Z"),
     );
 

@@ -17,14 +17,14 @@ export type NotificationEvent =
 
 export type NotificationListener = (event: NotificationEvent) => void;
 
-function eventToNotificationInput(event: RuntimeEvent): { branch: string; type: RuntimeNotification["type"]; message: string; url?: string } | null {
+function eventToNotificationInput(event: RuntimeEvent, branch: string): { branch: string; type: RuntimeNotification["type"]; message: string; url?: string } | null {
   switch (event.type) {
     case "agent_stopped":
-      return { branch: event.branch, type: "agent_stopped", message: `Agent stopped on ${event.branch}` };
+      return { branch, type: "agent_stopped", message: `Agent stopped on ${branch}` };
     case "pr_opened":
-      return { branch: event.branch, type: "pr_opened", message: `PR opened on ${event.branch}`, url: event.url };
+      return { branch, type: "pr_opened", message: `PR opened on ${branch}`, url: event.url };
     case "runtime_error":
-      return { branch: event.branch, type: "runtime_error", message: `Runtime error on ${event.branch}: ${event.message}` };
+      return { branch, type: "runtime_error", message: `Runtime error on ${branch}: ${event.message}` };
     default:
       return null;
   }
@@ -77,8 +77,8 @@ export class NotificationService {
     return notification;
   }
 
-  recordEvent(event: RuntimeEvent): RuntimeNotification | null {
-    const input = eventToNotificationInput(event);
+  recordEvent(event: RuntimeEvent, branch: string): RuntimeNotification | null {
+    const input = eventToNotificationInput(event, branch);
     if (!input) return null;
     return this.notify(input);
   }

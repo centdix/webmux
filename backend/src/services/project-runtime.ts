@@ -196,9 +196,6 @@ export class ProjectRuntime {
 
   applyEvent(event: RuntimeEvent, now?: () => Date): ManagedWorktreeRuntimeState {
     const state = this.requireWorktree(event.worktreeId);
-    if (event.branch !== state.branch) {
-      this.applyBranchChange(state, event.branch);
-    }
     const timestamp = isoNow(now);
 
     switch (event.type) {

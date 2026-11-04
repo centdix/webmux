@@ -57,14 +57,12 @@ describe("buildProjectSnapshot", () => {
       },
     ]);
     runtime.applyEvent(
-      { worktreeId: "wt_search", branch: "feature/search", type: "agent_status_changed", lifecycle: "running" },
+      { worktreeId: "wt_search", type: "agent_status_changed", lifecycle: "running" },
       () => new Date("2026-03-06T10:00:00.000Z"),
     );
 
     const notifications = new NotificationService("webmux");
-    notifications.recordEvent(
-      { worktreeId: "wt_search", branch: "feature/search", type: "pr_opened", url: "https://github.com/org/repo/pull/123" },
-    );
+    notifications.recordEvent({ worktreeId: "wt_search", type: "pr_opened", url: "https://github.com/org/repo/pull/123" }, "feature/search");
 
     const snapshot = buildProjectSnapshot({
       projectName: "Project",

@@ -73,7 +73,6 @@ def build_parser():
 def build_payload(command, args, control_env):
     payload = {
         "worktreeId": control_env["WEBMUX_WORKTREE_ID"],
-        "branch": control_env["WEBMUX_BRANCH"],
     }
 
     if command == "agent-stopped":
@@ -184,7 +183,6 @@ def main():
         "WEBMUX_CONTROL_URL",
         "WEBMUX_CONTROL_TOKEN",
         "WEBMUX_WORKTREE_ID",
-        "WEBMUX_BRANCH",
     ]
     missing = [key for key in required_keys if not control_env.get(key)]
     if missing:

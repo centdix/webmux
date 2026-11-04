@@ -828,7 +828,6 @@ function setWorktreeAgentLifecycle(worktree: WorktreeSnapshot, lifecycle: "runni
   projectRuntime.applyEvent({
     type: "agent_status_changed",
     worktreeId: state.worktreeId,
-    branch: state.branch,
     lifecycle,
   });
 }
@@ -1241,7 +1240,7 @@ async function apiRuntimeEvent(req: Request): Promise<Response> {
     }
   }
 
-  const notification = runtimeNotifications.recordEvent(event);
+  const notification = runtimeNotifications.recordEvent(event, worktree.branch);
   return jsonResponse({
     ok: true,
     ...(notification ? { notification } : {}),

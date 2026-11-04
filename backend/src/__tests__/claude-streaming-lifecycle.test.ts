@@ -37,7 +37,7 @@ describe("Claude web-chat streaming lifecycle", () => {
     // The same wiring the server uses in sendClaudeStreamingMessage: drive the
     // worktree lifecycle from the owned claude -p run instead of the lossy hook.
     const setLifecycle = (lifecycle: "running" | "stopped"): void => {
-      runtime.applyEvent({ type: "agent_status_changed", worktreeId: "wt-1", branch: "feat", lifecycle });
+      runtime.applyEvent({ type: "agent_status_changed", worktreeId: "wt-1", lifecycle });
     };
     const status = (): string => runtime.getWorktree("wt-1")!.agent.lifecycle;
 
