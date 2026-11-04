@@ -165,7 +165,6 @@ describe("ensureAgentRuntimeArtifacts", () => {
       expect(capturedPayload).toEqual({
         type: "pr_opened",
         worktreeId: "worktree-1",
-        branch: "feature/test",
         url: "https://github.com/windmill-labs/webmux/pull/322",
       });
     } finally {
@@ -216,7 +215,6 @@ describe("ensureAgentRuntimeArtifacts", () => {
       expect(capturedPayload).toEqual({
         type: "pr_opened",
         worktreeId: "worktree-1",
-        branch: "feature/test",
         url: "https://github.com/windmill-labs/webmux/pull/321",
       });
     } finally {
@@ -364,7 +362,6 @@ describe("ensureAgentRuntimeArtifacts", () => {
       expect(capturedPayload).toEqual({
         type: "pr_opened",
         worktreeId: "worktree-1",
-        branch: "feature/test",
         url: "https://github.com/windmill-labs/webmux/pull/123",
       });
     } finally {

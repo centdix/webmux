@@ -3,7 +3,7 @@ import { NotificationHub, type NotificationHubEvent } from "../services/notifica
 import { NotificationService } from "../services/notification-service";
 
 function agentStopped(service: NotificationService, branch: string): void {
-  service.recordEvent({ worktreeId: `wt_${branch}`, branch, type: "agent_stopped" });
+  service.recordEvent({ worktreeId: `wt_${branch}`, type: "agent_stopped" }, branch);
 }
 
 async function readChunk(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> {

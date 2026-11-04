@@ -6,7 +6,6 @@ export type RuntimeEventType =
 
 interface RuntimeEventBase {
   worktreeId: string;
-  branch: string;
   type: RuntimeEventType;
 }
 
@@ -38,8 +37,6 @@ export type RuntimeEvent =
 function hasBaseFields(raw: Record<string, unknown>): raw is Record<string, string> & { type: RuntimeEventType } {
   return typeof raw.worktreeId === "string"
     && raw.worktreeId.length > 0
-    && typeof raw.branch === "string"
-    && raw.branch.length > 0
     && typeof raw.type === "string"
     && ["agent_stopped", "agent_status_changed", "pr_opened", "runtime_error"].includes(raw.type);
 }
@@ -50,7 +47,6 @@ export function parseRuntimeEvent(raw: unknown): RuntimeEvent | null {
 
   const event = raw as Record<string, unknown> & {
     worktreeId: string;
-    branch: string;
     type: RuntimeEventType;
   };
 
@@ -58,7 +54,6 @@ export function parseRuntimeEvent(raw: unknown): RuntimeEvent | null {
     case "agent_stopped":
       return {
         worktreeId: event.worktreeId,
-        branch: event.branch,
         type: event.type,
       };
     case "agent_status_changed":
@@ -68,7 +63,6 @@ export function parseRuntimeEvent(raw: unknown): RuntimeEvent | null {
           || event.lifecycle === "stopped"
         ? {
             worktreeId: event.worktreeId,
-            branch: event.branch,
             type: event.type,
             lifecycle: event.lifecycle,
           }
@@ -77,7 +71,6 @@ export function parseRuntimeEvent(raw: unknown): RuntimeEvent | null {
       return typeof event.url === "string" || event.url === undefined
         ? {
             worktreeId: event.worktreeId,
-            branch: event.branch,
             type: event.type,
             ...(typeof event.url === "string" ? { url: event.url } : {}),
           }
@@ -86,7 +79,6 @@ export function parseRuntimeEvent(raw: unknown): RuntimeEvent | null {
       return typeof event.message === "string" && event.message.length > 0
         ? {
             worktreeId: event.worktreeId,
-            branch: event.branch,
             type: event.type,
             message: event.message,
           }
