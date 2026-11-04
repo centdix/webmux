@@ -28,6 +28,29 @@ describe("createProjectApi", () => {
     expect(paths).toEqual(["https://example.com/api/projects/myproject/worktrees/feature%2Fsearch/send"]);
   });
 
+  it("addresses worktree ports by id under /worktree-ids, apart from the branch routes", async () => {
+    const calls: string[] = [];
+    const api = createProjectApi("myproject", {
+      origin: "https://example.com",
+      api: async ({ path, method }) => {
+        calls.push(`${method} ${path}`);
+        if (method === "GET") return success({ ports: [] });
+        if (method === "DELETE") return success({ ok: true });
+        return success({ label: "web", port: 4101, keep: false });
+      },
+    });
+
+    await api.registerWorktreePortById({ params: { id: "wt_1" }, body: { label: "web" } });
+    await api.fetchWorktreePortsById({ params: { id: "wt_1" } });
+    await api.deleteWorktreePortById({ params: { id: "wt_1", label: "web" } });
+
+    expect(calls).toEqual([
+      "POST https://example.com/api/projects/myproject/worktree-ids/wt_1/ports",
+      "GET https://example.com/api/projects/myproject/worktree-ids/wt_1/ports",
+      "DELETE https://example.com/api/projects/myproject/worktree-ids/wt_1/ports/web",
+    ]);
+  });
+
   it("preserves numeric path params for notification and CI routes", async () => {
     const paths: string[] = [];
     const api = createProjectApi("myproject", {

@@ -27,6 +27,8 @@ import {
   ToggleEnabledRequestSchema,
   UpsertCustomAgentRequestSchema,
   WorktreeNameParamsSchema,
+  WorktreeIdParamsSchema,
+  WorktreeIdPortParamsSchema,
 } from "@webmux/api-contract";
 import { log } from "./lib/log";
 import { serveUnmatchedRequest } from "./services/static-frontend-service";
@@ -151,10 +153,16 @@ import type { ManagedWorktreeRuntimeState, OneshotMeta, ProjectSnapshot, Worktre
 import { isValidBranchName, isValidWorktreeName } from "./domain/policies";
 import { assembleServeRoutes } from "./domain/project-routes";
 import { createPortRegistrationService, createWebmuxRuntime, type WebmuxRuntime } from "./runtime";
+import {
+  deleteWorktreePort,
+  listWorktreePorts,
+  registerWorktreePort,
+  type WorktreePortApiDeps,
+  type WorktreeRef,
+} from "./services/worktree-port-api";
 import { createInstanceRegistry } from "./adapters/instance-registry";
 import { createProjectsRegistry } from "./adapters/projects-registry";
 import { ProjectManager, type ManagedProject, type ProjectLoopController } from "./services/project-manager";
-import { isValidPortLabel } from "./domain/port-registrations";
 import { startSerializedInterval } from "./lib/async";
 
 const PORT = parseInt(Bun.env.PORT || "5111", 10);
@@ -1716,38 +1724,17 @@ function apiGetAutoNameConfig(): Response {
   return jsonResponse({ autoName: config.autoName, linearAvailability });
 }
 
-async function resolveWorktreeId(name: string): Promise<string | null> {
-  await reconciliationService.reconcile(PROJECT_DIR);
-  return projectRuntime.getWorktreeByBranch(name)?.worktreeId ?? null;
-}
+const worktreePortApiDeps: WorktreePortApiDeps = {
+  projectDir: PROJECT_DIR,
+  portRegistrations: portRegistrationService,
+  projectRuntime,
+  reconcile: () => reconciliationService.reconcile(PROJECT_DIR),
+};
 
-async function apiRegisterWorktreePort(name: string, req: Request): Promise<Response> {
+async function apiRegisterWorktreePort(ref: WorktreeRef, req: Request): Promise<Response> {
   const parsed = await parseJsonBody(req, RegisterWorktreePortRequestSchema);
   if (!parsed.ok) return parsed.response;
-  const { label, port, keep } = parsed.data;
-  if (!isValidPortLabel(label)) return errorResponse(`Invalid port label: ${label}`, 400);
-  const worktreeId = await resolveWorktreeId(name);
-  if (!worktreeId) return errorResponse(`Worktree not found: ${name}`, 404);
-
-  const result = portRegistrationService.register({ projectDir: PROJECT_DIR, worktreeId, label }, { port, keep });
-  if (!result.ok) return errorResponse(result.error, result.reason === "conflict" ? 409 : 503);
-  log.info(`[worktree:port] name=${name} label=${label} port=${result.data.port} keep=${result.data.keep}`);
-  return jsonResponse(result.data);
-}
-
-async function apiListWorktreePorts(name: string): Promise<Response> {
-  const worktreeId = await resolveWorktreeId(name);
-  if (!worktreeId) return errorResponse(`Worktree not found: ${name}`, 404);
-  return jsonResponse({ ports: await portRegistrationService.listWithStatus(PROJECT_DIR, worktreeId) });
-}
-
-async function apiDeleteWorktreePort(name: string, label: string): Promise<Response> {
-  const worktreeId = await resolveWorktreeId(name);
-  if (!worktreeId) return errorResponse(`Worktree not found: ${name}`, 404);
-  if (!portRegistrationService.unregister({ projectDir: PROJECT_DIR, worktreeId, label })) {
-    return errorResponse(`No port registered as "${label}" for ${name}`, 404);
-  }
-  return jsonResponse({ ok: true });
+  return registerWorktreePort(worktreePortApiDeps, ref, parsed.data);
 }
 
 const MAX_DIFF_BYTES = 200 * 1024;
@@ -2105,13 +2092,13 @@ function parseNotificationIdParam(params: Record<string, string>):
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(routeLabel("GET", projectApiPaths.worktreePorts, { name }), () => apiListWorktreePorts(name));
+        return catching(routeLabel("GET", projectApiPaths.worktreePorts, { name }), () => listWorktreePorts(worktreePortApiDeps, { kind: "branch", name }));
       },
       POST: (req) => {
         const parsed = parseWorktreeNameParam(req.params);
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
-        return catching(routeLabel("POST", projectApiPaths.worktreePorts, { name }), () => apiRegisterWorktreePort(name, req));
+        return catching(routeLabel("POST", projectApiPaths.worktreePorts, { name }), () => apiRegisterWorktreePort({ kind: "branch", name }, req));
       },
     },
 
@@ -2121,7 +2108,31 @@ function parseNotificationIdParam(params: Record<string, string>):
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
         const label = decodeURIComponent(req.params.label ?? "");
-        return catching(routeLabel("DELETE", projectApiPaths.deleteWorktreePort, { name, label }), () => apiDeleteWorktreePort(name, label));
+        return catching(routeLabel("DELETE", projectApiPaths.deleteWorktreePort, { name, label }), () => deleteWorktreePort(worktreePortApiDeps, { kind: "branch", name }, label));
+      },
+    },
+
+    [projectApiPaths.worktreePortsById]: {
+      GET: (req) => {
+        const parsed = parseParams(req.params, WorktreeIdParamsSchema);
+        if (!parsed.ok) return parsed.response;
+        const { id } = parsed.data;
+        return catching(routeLabel("GET", projectApiPaths.worktreePortsById, { id }), () => listWorktreePorts(worktreePortApiDeps, { kind: "id", id }));
+      },
+      POST: (req) => {
+        const parsed = parseParams(req.params, WorktreeIdParamsSchema);
+        if (!parsed.ok) return parsed.response;
+        const { id } = parsed.data;
+        return catching(routeLabel("POST", projectApiPaths.worktreePortsById, { id }), () => apiRegisterWorktreePort({ kind: "id", id }, req));
+      },
+    },
+
+    [projectApiPaths.deleteWorktreePortById]: {
+      DELETE: (req) => {
+        const parsed = parseParams(req.params, WorktreeIdPortParamsSchema);
+        if (!parsed.ok) return parsed.response;
+        const { id, label } = parsed.data;
+        return catching(routeLabel("DELETE", projectApiPaths.deleteWorktreePortById, { id, label }), () => deleteWorktreePort(worktreePortApiDeps, { kind: "id", id }, label));
       },
     },
 

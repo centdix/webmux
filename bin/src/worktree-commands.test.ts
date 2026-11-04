@@ -1584,33 +1584,41 @@ describe("runWorktreeCommand restore", () => {
 });
 
 describe("parsePortCommandArgs", () => {
+  const x = { kind: "branch", name: "feature/x" } as const;
+
   it("registers a label against the current worktree, optionally with a fixed port", () => {
-    expect(parsePortCommandArgs(["web"], "feature/x")).toEqual({ action: "register", branch: "feature/x", label: "web" });
-    expect(parsePortCommandArgs(["web", "--port", "5173"], "feature/x"))
-      .toEqual({ action: "register", branch: "feature/x", label: "web", port: 5173 });
+    expect(parsePortCommandArgs(["web"], x)).toEqual({ action: "register", target: x, label: "web" });
+    expect(parsePortCommandArgs(["web", "--port", "5173"], x))
+      .toEqual({ action: "register", target: x, label: "web", port: 5173 });
   });
 
   it("parses --keep, alone or with --port", () => {
-    expect(parsePortCommandArgs(["web", "--keep"], "feature/x"))
-      .toEqual({ action: "register", branch: "feature/x", label: "web", keep: true });
-    expect(parsePortCommandArgs(["--keep", "web", "--port", "5173"], "feature/x"))
-      .toEqual({ action: "register", branch: "feature/x", label: "web", port: 5173, keep: true });
+    expect(parsePortCommandArgs(["web", "--keep"], x))
+      .toEqual({ action: "register", target: x, label: "web", keep: true });
+    expect(parsePortCommandArgs(["--keep", "web", "--port", "5173"], x))
+      .toEqual({ action: "register", target: x, label: "web", port: 5173, keep: true });
   });
 
   it("parses ls and rm, and lets --worktree override the default", () => {
-    expect(parsePortCommandArgs(["ls"], "feature/x")).toEqual({ action: "list", branch: "feature/x" });
-    expect(parsePortCommandArgs(["rm", "web", "--worktree", "other"], "feature/x"))
-      .toEqual({ action: "remove", branch: "other", label: "web" });
+    expect(parsePortCommandArgs(["ls"], x)).toEqual({ action: "list", target: x });
+    expect(parsePortCommandArgs(["rm", "web", "--worktree", "other"], x))
+      .toEqual({ action: "remove", target: { kind: "branch", name: "other" }, label: "web" });
+  });
+
+  it("defaults to an id target, and lets --worktree override it with a branch", () => {
+    const id = { kind: "id", id: "wt_1" } as const;
+    expect(parsePortCommandArgs(["web"], id)).toEqual({ action: "register", target: id, label: "web" });
+    expect(parsePortCommandArgs(["ls", "--worktree", "feature/x"], id)).toEqual({ action: "list", target: x });
   });
 
   it("rejects bad input", () => {
     expect(() => parsePortCommandArgs(["web"], null)).toThrow("--worktree");
-    expect(() => parsePortCommandArgs([], "feature/x")).toThrow("<label>");
-    expect(() => parsePortCommandArgs(["Web"], "feature/x")).toThrow("Invalid label");
-    expect(() => parsePortCommandArgs(["web", "--port", "99999"], "feature/x")).toThrow("Invalid port");
-    expect(() => parsePortCommandArgs(["rm", "web", "--port", "1"], "feature/x")).toThrow("--port");
-    expect(() => parsePortCommandArgs(["rm", "web", "--keep"], "feature/x")).toThrow("--keep");
-    expect(() => parsePortCommandArgs(["ls", "--keep"], "feature/x")).toThrow("no arguments");
+    expect(() => parsePortCommandArgs([], x)).toThrow("<label>");
+    expect(() => parsePortCommandArgs(["Web"], x)).toThrow("Invalid label");
+    expect(() => parsePortCommandArgs(["web", "--port", "99999"], x)).toThrow("Invalid port");
+    expect(() => parsePortCommandArgs(["rm", "web", "--port", "1"], x)).toThrow("--port");
+    expect(() => parsePortCommandArgs(["rm", "web", "--keep"], x)).toThrow("--keep");
+    expect(() => parsePortCommandArgs(["ls", "--keep"], x)).toThrow("no arguments");
   });
 
   it("returns null for --help", () => {
@@ -1638,7 +1646,7 @@ describe("runWorktreeCommand port", () => {
       {
         createRuntime: () => { throw new Error("unexpected"); },
         resolveServedProject: async () => "myproject",
-        resolveCurrentBranch: () => "feature/search",
+        resolveDefaultPortTarget: () => ({ kind: "branch", name: "feature/search" }),
         stdout: (msg) => stdout.push(msg),
       },
     );
@@ -1663,7 +1671,7 @@ describe("runWorktreeCommand port", () => {
       {
         createRuntime: () => { throw new Error("unexpected"); },
         resolveServedProject: async () => "myproject",
-        resolveCurrentBranch: () => "feature/search",
+        resolveDefaultPortTarget: () => ({ kind: "branch", name: "feature/search" }),
         stdout: (msg) => stdout.push(msg),
       },
     );
@@ -1688,7 +1696,7 @@ describe("runWorktreeCommand port", () => {
       {
         createRuntime: () => { throw new Error("unexpected"); },
         resolveServedProject: async () => "myproject",
-        resolveCurrentBranch: () => "feature/search",
+        resolveDefaultPortTarget: () => ({ kind: "branch", name: "feature/search" }),
         stdout: (msg) => stdout.push(msg),
       },
     );
@@ -1699,5 +1707,76 @@ describe("runWorktreeCommand port", () => {
       "api          4101   idle",
       "oauth        4102   idle    kept",
     ]);
+  });
+  describe("default target", () => {
+    const originalWorktreeId = process.env.WEBMUX_WORKTREE_ID;
+    const originalBranch = process.env.WEBMUX_BRANCH;
+    let repoDir: string | null = null;
+
+    afterEach(async () => {
+      if (originalWorktreeId === undefined) delete process.env.WEBMUX_WORKTREE_ID;
+      else process.env.WEBMUX_WORKTREE_ID = originalWorktreeId;
+      if (originalBranch === undefined) delete process.env.WEBMUX_BRANCH;
+      else process.env.WEBMUX_BRANCH = originalBranch;
+      if (repoDir) await rm(repoDir, { recursive: true, force: true });
+      repoDir = null;
+    });
+
+    async function runPort(args: string[], projectDir: string): Promise<{ exitCode: number; calls: string[]; stdout: string[] }> {
+      const calls: string[] = [];
+      stubFetch(async (input: string | URL | Request, init?: RequestInit) => {
+        const method = init?.method ?? "GET";
+        calls.push(`${method} ${String(input)}`);
+        if (method === "GET") return Response.json({ ports: [] });
+        if (method === "DELETE") return Response.json({ ok: true });
+        return Response.json({ label: "web", port: 4100, keep: false });
+      });
+      const stdout: string[] = [];
+      const exitCode = await runWorktreeCommand(
+        { command: "port", args, projectDir, port: 5111 },
+        {
+          createRuntime: () => { throw new Error("unexpected"); },
+          resolveServedProject: async () => "myproject",
+          stdout: (msg) => stdout.push(msg),
+        },
+      );
+      return { exitCode, calls, stdout };
+    }
+
+    it("addresses the agent's worktree by $WEBMUX_WORKTREE_ID, ignoring a stale $WEBMUX_BRANCH", async () => {
+      process.env.WEBMUX_WORKTREE_ID = "wt_search";
+      process.env.WEBMUX_BRANCH = "feature/renamed-away";
+      const base = "http://localhost:5111/api/projects/myproject/worktree-ids/wt_search/ports";
+
+      const registered = await runPort(["web"], "/repo");
+      expect(registered.exitCode).toBe(0);
+      expect(registered.calls).toEqual([`POST ${base}`]);
+      expect(registered.stdout).toEqual(["4100"]);
+      expect((await runPort(["ls"], "/repo")).calls).toEqual([`GET ${base}`]);
+      const removed = await runPort(["rm", "web"], "/repo");
+      expect(removed.calls).toEqual([`DELETE ${base}/web`]);
+      expect(removed.stdout).toEqual(["Released web"]);
+    });
+
+    it("uses the branch routes for an explicit --worktree even inside an agent pane", async () => {
+      process.env.WEBMUX_WORKTREE_ID = "wt_search";
+      const { calls } = await runPort(["web", "--worktree", "feature/other"], "/repo");
+      expect(calls).toEqual(["POST http://localhost:5111/api/projects/myproject/worktrees/feature%2Fother/ports"]);
+    });
+
+    it("falls back to the current git branch outside an agent pane", async () => {
+      delete process.env.WEBMUX_WORKTREE_ID;
+      delete process.env.WEBMUX_BRANCH;
+      repoDir = await mkdtemp(join(tmpdir(), "webmux-port-target-"));
+      const git = (...args: string[]): void => {
+        const result = Bun.spawnSync(["git", ...args], { cwd: repoDir!, stdout: "ignore", stderr: "ignore" });
+        if (result.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed`);
+      };
+      git("init", "-q", "-b", "feature/local");
+      git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init");
+
+      const { calls } = await runPort(["ls"], repoDir);
+      expect(calls).toEqual(["GET http://localhost:5111/api/projects/myproject/worktrees/feature%2Flocal/ports"]);
+    });
   });
 });

@@ -11,6 +11,7 @@ import type { AgentId, AutoNameConfig } from "../../backend/src/domain/config";
 import type { WorktreeCreationPhase } from "../../backend/src/domain/model";
 import { compareWorktreeOrder, isValidWorktreeName } from "../../backend/src/domain/policies";
 import { isValidPortLabel } from "../../backend/src/domain/port-registrations";
+import type { WorktreeRef } from "../../backend/src/services/worktree-port-api";
 import { buildArchivedWorktreePathSet } from "../../backend/src/services/archive-service";
 import { readProjectsRegistryFile, type ProjectsRegistryReadResult } from "../../backend/src/adapters/projects-registry";
 import type { ProjectEntry } from "../../backend/src/domain/projects";
@@ -98,8 +99,8 @@ interface WorktreeCommandDependencies {
    *  tests can drive restore without touching the filesystem. */
   readOpenSessions?: (gitDir: string) => Promise<OpenSessionsState>;
   /** Worktree `port` targets when `--worktree` is omitted. Defaults to the agent's
-   *  `$WEBMUX_BRANCH`, else the current git branch of `projectDir`. */
-  resolveCurrentBranch?: (projectDir: string) => string | null;
+   *  `$WEBMUX_WORKTREE_ID`, else the current git branch of `projectDir`. */
+  resolveDefaultPortTarget?: (projectDir: string) => WorktreeRef | null;
   /** Projects listed by `list --all-projects`. Defaults to the persisted
    *  registry (`~/.webmux/projects.json`). */
   readProjects?: () => ProjectsRegistryReadResult;
@@ -405,11 +406,11 @@ export function parseTabCommandArgs(args: string[]): ParsedTabCommand | null {
 }
 
 export type ParsedPortCommand =
-  | { action: "register"; branch: string; label: string; port?: number; keep?: true }
-  | { action: "list"; branch: string }
-  | { action: "remove"; branch: string; label: string };
+  | { action: "register"; target: WorktreeRef; label: string; port?: number; keep?: true }
+  | { action: "list"; target: WorktreeRef }
+  | { action: "remove"; target: WorktreeRef; label: string };
 
-export function parsePortCommandArgs(args: string[], defaultBranch: string | null): ParsedPortCommand | null {
+export function parsePortCommandArgs(args: string[], defaultTarget: WorktreeRef | null): ParsedPortCommand | null {
   const positional: string[] = [];
   let branch: string | null = null;
   let port: number | undefined;
@@ -447,18 +448,18 @@ export function parsePortCommandArgs(args: string[], defaultBranch: string | nul
     positional.push(arg);
   }
 
-  const target = branch ?? defaultBranch;
+  const target: WorktreeRef | null = branch !== null ? { kind: "branch", name: branch } : defaultTarget;
   if (!target) {
     throw new CommandUsageError("Could not tell which worktree this is; pass --worktree <branch>");
   }
-  if (!isValidWorktreeName(target)) throw new CommandUsageError("Invalid worktree name");
+  if (target.kind === "branch" && !isValidWorktreeName(target.name)) throw new CommandUsageError("Invalid worktree name");
 
   const [first, second, ...rest] = positional;
   if (!first) throw new CommandUsageError("Missing required argument: <label>");
 
   if (first === "ls") {
     if (second || port !== undefined || keep) throw new CommandUsageError("The \"ls\" action takes no arguments");
-    return { action: "list", branch: target };
+    return { action: "list", target };
   }
 
   const isRemove = first === "rm";
@@ -471,22 +472,25 @@ export function parsePortCommandArgs(args: string[], defaultBranch: string | nul
   }
   if (isRemove) {
     if (port !== undefined || keep) throw new CommandUsageError("The \"rm\" action does not take --port or --keep");
-    return { action: "remove", branch: target, label };
+    return { action: "remove", target, label };
   }
   return {
     action: "register",
-    branch: target,
+    target,
     label,
     ...(port !== undefined ? { port } : {}),
     ...(keep ? { keep: true as const } : {}),
   };
 }
 
-function defaultResolveCurrentBranch(projectDir: string): string | null {
-  if (Bun.env.WEBMUX_BRANCH) return Bun.env.WEBMUX_BRANCH;
+/** The worktree `webmux port` targets without `--worktree`. An agent pane's
+ *  `$WEBMUX_WORKTREE_ID` wins: unlike `$WEBMUX_BRANCH` it stays valid after the
+ *  worktree checks out another branch. Elsewhere, the current git branch. */
+function defaultResolvePortTarget(projectDir: string): WorktreeRef | null {
+  if (Bun.env.WEBMUX_WORKTREE_ID) return { kind: "id", id: Bun.env.WEBMUX_WORKTREE_ID };
   const result = run("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: projectDir });
   const branch = result.success ? result.stdout.toString().trim() : "";
-  return branch && branch !== "HEAD" ? branch : null;
+  return branch && branch !== "HEAD" ? { kind: "branch", name: branch } : null;
 }
 
 export function parseBranchCommandArgs(args: string[]): string | null {
@@ -1369,8 +1373,8 @@ export async function runWorktreeCommand(
     }
 
     if (context.command === "port") {
-      const resolveCurrentBranch = deps.resolveCurrentBranch ?? defaultResolveCurrentBranch;
-      const parsed = parsePortCommandArgs(context.args, resolveCurrentBranch(context.projectDir));
+      const resolveDefaultPortTarget = deps.resolveDefaultPortTarget ?? defaultResolvePortTarget;
+      const parsed = parsePortCommandArgs(context.args, resolveDefaultPortTarget(context.projectDir));
       if (!parsed) {
         stdout(getWorktreeCommandUsage("port"));
         return 0;
@@ -1378,25 +1382,33 @@ export async function runWorktreeCommand(
 
       const api = await connectProjectApi();
       await withServerConnection(context.port, async () => {
+        const { target } = parsed;
         if (parsed.action === "register") {
-          const { port } = await api.registerWorktreePort({
-            params: { name: parsed.branch },
-            body: {
-              label: parsed.label,
-              ...(parsed.port !== undefined ? { port: parsed.port } : {}),
-              ...(parsed.keep ? { keep: true } : {}),
-            },
-          });
+          const body = {
+            label: parsed.label,
+            ...(parsed.port !== undefined ? { port: parsed.port } : {}),
+            ...(parsed.keep ? { keep: true } : {}),
+          };
+          const { port } = target.kind === "id"
+            ? await api.registerWorktreePortById({ params: { id: target.id }, body })
+            : await api.registerWorktreePort({ params: { name: target.name }, body });
           // Bare port on stdout so `PORT=$(webmux port web)` works.
           stdout(String(port));
           return;
         }
         if (parsed.action === "remove") {
-          await api.deleteWorktreePort({ params: { name: parsed.branch, label: parsed.label } });
-          stdout(`Released ${parsed.label} in ${parsed.branch}`);
+          if (target.kind === "id") {
+            await api.deleteWorktreePortById({ params: { id: target.id, label: parsed.label } });
+            stdout(`Released ${parsed.label}`);
+          } else {
+            await api.deleteWorktreePort({ params: { name: target.name, label: parsed.label } });
+            stdout(`Released ${parsed.label} in ${target.name}`);
+          }
           return;
         }
-        const { ports } = await api.fetchWorktreePorts({ params: { name: parsed.branch } });
+        const { ports } = target.kind === "id"
+          ? await api.fetchWorktreePortsById({ params: { id: target.id } })
+          : await api.fetchWorktreePorts({ params: { name: target.name } });
         for (const entry of ports) {
           const status = entry.running ? "running" : "idle";
           stdout(`${entry.label.padEnd(12)} ${String(entry.port).padEnd(6)} ${entry.keep ? `${status.padEnd(7)} kept` : status}`);
