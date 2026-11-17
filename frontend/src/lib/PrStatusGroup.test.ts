@@ -27,10 +27,10 @@ function renderPr(overrides: Partial<PrEntry> = {}): ReturnType<typeof render> {
 describe("PrStatusGroup draft indicator", () => {
   afterEach(() => cleanup());
 
-  it("tags a draft PR and labels the link as a draft", () => {
+  it("labels the link as a draft without a text tag", () => {
     renderPr({ isDraft: true });
 
-    expect(screen.getByText("draft")).toBeInTheDocument();
+    expect(screen.queryByText("draft")).not.toBeInTheDocument();
     expect(screen.getByTitle("Open draft PR")).toBeInTheDocument();
   });
 
