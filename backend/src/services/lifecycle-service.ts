@@ -870,7 +870,12 @@ export class LifecycleService {
       return null;
     }
     await onNaming();
-    return await this.deps.autoName.generateBranchName(this.deps.config.autoName, prompt);
+    try {
+      return await this.deps.autoName.generateBranchName(this.deps.config.autoName, prompt);
+    } catch (error) {
+      log.warn(`[auto-name] failed, using fallback branch name: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
   }
 
   private resolveBranchAvailability(branch: string, mode: CreateWorktreeMode): ExistingBranchResolution {

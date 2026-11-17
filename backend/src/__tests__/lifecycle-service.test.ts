@@ -2136,7 +2136,7 @@ describe("LifecycleService", () => {
     expect(phases).not.toContain("naming_branch");
   });
 
-  it("clears the naming entries when auto-naming fails", async () => {
+  it("falls back to a generated branch name when auto-naming fails", async () => {
     const repoRoot = await initRepo();
     const tracker = new WorktreeCreationTracker();
     const finishedIds: string[] = [];
@@ -2166,9 +2166,8 @@ describe("LifecycleService", () => {
       },
     );
 
-    await expect(
-      lifecycle.createWorktrees({ prompt: "Fix the login flow", agents: ["claude", "codex"] }),
-    ).rejects.toThrow("auto-name exploded");
+    const result = await lifecycle.createWorktrees({ prompt: "Fix the login flow", agents: ["claude", "codex"] });
+    expect(result.branches).toHaveLength(2);
     expect(reportedIds).toHaveLength(2);
     expect(finishedIds).toEqual(reportedIds);
     expect(tracker.listPending()).toEqual([]);
