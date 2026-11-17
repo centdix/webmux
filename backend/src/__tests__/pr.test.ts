@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { mapWithConcurrency, startSerializedInterval } from "../lib/async";
+import type { PrEntry } from "../domain/model";
 import {
   dedupeLatestChecks,
   mapChecks,
@@ -117,7 +118,7 @@ describe("parsePrResponse — review decision", () => {
     url: "https://github.com/o/r/pull/1",
     comments: [],
   };
-  it.each([
+  it.each<[string, PrEntry["reviewDecision"]]>([
     ["APPROVED", "approved"],
     ["CHANGES_REQUESTED", "changes_requested"],
     ["REVIEW_REQUIRED", "review_required"],
