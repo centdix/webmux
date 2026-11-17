@@ -40,9 +40,6 @@
     title={isDraft ? "Open draft PR" : "Open PR"}
   >
     <span class="truncate">{label}</span>
-    {#if isDraft}
-      <span class="uppercase tracking-[0.08em] text-[9px]">draft</span>
-    {/if}
     <svg
       xmlns="http://www.w3.org/2000/svg"
       width="11"
