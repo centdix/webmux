@@ -115,62 +115,21 @@ async function openRowMenu(name: string): Promise<HTMLElement> {
   return screen.getByRole("menu", { name });
 }
 
-/** A controllable `(hover: none), (pointer: coarse)` media query: jsdom has no matchMedia. */
-let touchDevice = false;
-const touchListeners = new Set<(event: Event) => void>();
-
-function setTouchDevice(value: boolean): void {
-  touchDevice = value;
-  for (const listener of touchListeners) listener(new Event("change"));
-}
-
 describe("WorktreeList", () => {
-  beforeEach(() => {
-    touchDevice = false;
-    vi.stubGlobal("matchMedia", (query: string) => ({
-      get matches(): boolean {
-        return query === "(hover: none), (pointer: coarse)" && touchDevice;
-      },
-      media: query,
-      addEventListener: (_type: string, listener: (event: Event) => void) => touchListeners.add(listener),
-      removeEventListener: (_type: string, listener: (event: Event) => void) => touchListeners.delete(listener),
-    }));
-  });
-
   afterEach(() => {
     cleanup();
-    touchListeners.clear();
-    vi.unstubAllGlobals();
   });
 
-  it("shows the ⋯ actions button on the selected row only", () => {
+  it("shows the ⋯ actions button on every row, selected or not", () => {
     renderList({
       rows: rowsOf([createWorktree("feature/a"), createWorktree("feature/b")]),
       selected: { project: "webmux", branch: "feature/b" },
     });
 
-    expect(screen.queryByRole("button", { name: "Actions for feature/a" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Actions for feature/a" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Actions for feature/b" })).toBeInTheDocument();
     expect(row("feature/b")).toHaveAttribute("aria-current", "true");
     expect(row("feature/a")).not.toHaveAttribute("aria-current");
-  });
-
-  it("shows the ⋯ actions button on every row on mobile, where there is no right-click", () => {
-    renderList({ rows: rowsOf([createWorktree("feature/a"), createWorktree("feature/b")]), isMobile: true });
-
-    expect(screen.getByRole("button", { name: "Actions for feature/a" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Actions for feature/b" })).toBeInTheDocument();
-  });
-
-  it("shows the ⋯ actions button on every row on a touch device, whatever its width", async () => {
-    renderList({ rows: rowsOf([createWorktree("feature/a"), createWorktree("feature/b")]) });
-    expect(screen.queryByRole("button", { name: "Actions for feature/a" })).not.toBeInTheDocument();
-
-    setTouchDevice(true);
-    await tick();
-
-    expect(screen.getByRole("button", { name: "Actions for feature/a" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Actions for feature/b" })).toBeInTheDocument();
   });
 
   it("removes from the ⋯ menu without selecting the row", async () => {
@@ -235,7 +194,7 @@ describe("WorktreeList", () => {
 
   it("shows a creation still naming its branch as a row that cannot be selected and has no actions", async () => {
     const onselect = vi.fn();
-    renderList({ rows: { active: [{ kind: "pending", pending: createPending("wt-new"), depth: 0 }], archived: [] }, onselect, isMobile: true });
+    renderList({ rows: { active: [{ kind: "pending", pending: createPending("wt-new"), depth: 0 }], archived: [] }, onselect });
 
     const button = screen.getByRole("button", { name: "Naming branch…" });
     expect(button).toBeDisabled();
