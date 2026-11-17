@@ -65,9 +65,9 @@ function createPr(overrides: Partial<PrEntry> = {}): PrEntry {
     updatedAt: "",
     ciStatus: "success",
     ciChecks: [],
+    comments: [],
     isDraft: false,
     reviewDecision: "none",
-    isDraft: false,
     ...overrides,
   };
 }
