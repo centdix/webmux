@@ -107,6 +107,27 @@ describe("parseReviewComments", () => {
   });
 });
 
+describe("parsePrResponse — review decision", () => {
+  const base = {
+    number: 1,
+    headRefName: "b",
+    state: "OPEN",
+    updatedAt: "",
+    statusCheckRollup: null,
+    url: "https://github.com/o/r/pull/1",
+    comments: [],
+  };
+  it.each([
+    ["APPROVED", "approved"],
+    ["CHANGES_REQUESTED", "changes_requested"],
+    ["REVIEW_REQUIRED", "review_required"],
+    ["", "none"],
+  ])("maps %s to %s", (raw, expected) => {
+    const prs = parsePrResponse(JSON.stringify([{ ...base, reviewDecision: raw }]));
+    expect(prs.get("b")?.reviewDecision).toBe(expected);
+  });
+});
+
 describe("parsePrResponse — draft state", () => {
   function ghPr(over: Record<string, unknown> = {}): unknown {
     return {

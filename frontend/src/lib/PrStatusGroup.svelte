@@ -3,6 +3,8 @@
   import {
     ciStatusDotClass,
     ciStatusTextClass,
+    isApprovedPr,
+    isChangesRequestedPr,
     isDraftPr,
     prLabel,
     prStateTextClass,
@@ -21,6 +23,8 @@
 
   let label = $derived(prLabel(pr));
   let isDraft = $derived(isDraftPr(pr));
+  let isApproved = $derived(isApprovedPr(pr));
+  let isChangesRequested = $derived(isChangesRequestedPr(pr));
   let hasCi = $derived(pr.ciChecks.length > 0);
   let hasComments = $derived(pr.comments.length > 0);
 
@@ -56,6 +60,53 @@
       <path d="M7 7h10v10" />
     </svg>
   </a>
+
+  {#if isApproved}
+    <span
+      class="{segmentClass} cursor-default border-l border-edge text-success"
+      title="PR approved"
+      aria-label={`${label} approved`}
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width="12"
+        height="12"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2.5"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M20 6 9 17l-5-5" />
+      </svg>
+    </span>
+  {/if}
+
+  {#if isChangesRequested}
+    <span
+      class="{segmentClass} cursor-default border-l border-edge text-danger"
+      title="Changes requested"
+      aria-label={`${label} has changes requested`}
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width="12"
+        height="12"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2.5"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M18 6 6 18" />
+        <path d="m6 6 12 12" />
+      </svg>
+    </span>
+  {/if}
 
   {#if hasCi}
     <button

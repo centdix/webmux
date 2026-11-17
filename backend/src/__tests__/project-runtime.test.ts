@@ -109,6 +109,7 @@ describe("ProjectRuntime", () => {
         number: 77,
         state: "open",
         isDraft: false,
+        reviewDecision: "none",
         url: "https://github.com/org/repo/pull/77",
         updatedAt: "2026-03-06T10:01:30.000Z",
         ciStatus: "success",

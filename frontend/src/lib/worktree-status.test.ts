@@ -41,6 +41,7 @@ function createPr(overrides: Partial<PrEntry> = {}): PrEntry {
     number: 7,
     state: "open",
     isDraft: false,
+    reviewDecision: "none",
     url: "https://example.com/pr/7",
     updatedAt: "",
     ciStatus: "success",

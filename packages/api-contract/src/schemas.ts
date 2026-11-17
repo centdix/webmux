@@ -267,6 +267,7 @@ export const PrEntrySchema = z.object({
   number: z.number(),
   state: z.enum(["open", "closed", "merged"]),
   isDraft: z.boolean(),
+  reviewDecision: z.enum(["none", "approved", "changes_requested", "review_required"]),
   url: z.string(),
   updatedAt: z.string(),
   ciStatus: z.enum(["none", "pending", "success", "failed"]),

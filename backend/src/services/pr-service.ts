@@ -69,6 +69,7 @@ interface GhPrEntry {
   headRefName: string;
   state: string;
   isDraft?: boolean;
+  reviewDecision?: string | null;
   updatedAt: string;
   statusCheckRollup: GhCheckEntry[] | null;
   url: string;
@@ -264,6 +265,13 @@ export function parseReviewComments(json: string): PrComment[] {
   }));
 }
 
+function parseReviewDecision(raw: string | null | undefined): PrEntry["reviewDecision"] {
+  if (raw === "APPROVED") return "approved";
+  if (raw === "CHANGES_REQUESTED") return "changes_requested";
+  if (raw === "REVIEW_REQUIRED") return "review_required";
+  return "none";
+}
+
 /** Parse raw `gh pr list --json` output into a branch → PrEntry map. Throws on invalid JSON. */
 export function parsePrResponse(
   json: string,
@@ -279,6 +287,7 @@ export function parsePrResponse(
       number: entry.number,
       state: entry.state.toLowerCase() as PrEntry["state"],
       isDraft: entry.isDraft === true,
+      reviewDecision: parseReviewDecision(entry.reviewDecision),
       url: entry.url,
       updatedAt: entry.updatedAt ?? "",
       ciStatus: summarizeChecks(entry.statusCheckRollup),
@@ -437,7 +446,7 @@ export async function fetchAllPrs(
     "--state",
     "open",
     "--json",
-    "number,headRefName,state,isDraft,updatedAt,statusCheckRollup,url,comments",
+    "number,headRefName,state,isDraft,reviewDecision,updatedAt,statusCheckRollup,url,comments",
     "--limit",
     String(PR_FETCH_LIMIT),
   ];
@@ -666,6 +675,7 @@ export async function linkOpenedPr(
     number: ref.number,
     state: "open",
     isDraft: false,
+    reviewDecision: "none",
     url,
     updatedAt: "",
     ciStatus: "none",
