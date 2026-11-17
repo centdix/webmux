@@ -955,7 +955,6 @@
           postingLinear={store.postingLinear.keys}
           notified={notifications.unreadWorktrees}
           favorites={favoriteKeys}
-          {isMobile}
           onselect={selectWorktree}
           ontogglearchived={() => (showArchivedWorktrees = !showArchivedWorktrees)}
           onretry={() => void store.refresh()}
