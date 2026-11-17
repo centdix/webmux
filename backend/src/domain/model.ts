@@ -178,6 +178,7 @@ export interface PrEntry {
   number: number;
   state: "open" | "closed" | "merged";
   isDraft: boolean;
+  reviewDecision: "none" | "approved" | "changes_requested" | "review_required";
   url: string;
   updatedAt: string;
   ciStatus: "none" | "pending" | "success" | "failed";

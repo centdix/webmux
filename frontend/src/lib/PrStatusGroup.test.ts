@@ -11,6 +11,7 @@ function renderPr(overrides: Partial<PrEntry> = {}): ReturnType<typeof render> {
         number: 42,
         state: "open",
         isDraft: false,
+        reviewDecision: "none",
         url: "https://github.com/example/repo/pull/42",
         updatedAt: "2026-03-23T12:00:00.000Z",
         ciStatus: "success",
@@ -45,5 +46,19 @@ describe("PrStatusGroup draft indicator", () => {
     renderPr({ state: "merged", isDraft: true });
 
     expect(screen.queryByText("draft")).not.toBeInTheDocument();
+  });
+});
+
+describe("PrStatusGroup approved indicator", () => {
+  afterEach(() => cleanup());
+
+  it("shows an approved marker on an approved open PR", () => {
+    renderPr({ reviewDecision: "approved" });
+    expect(screen.getByTitle("PR approved")).toBeInTheDocument();
+  });
+
+  it("shows no approved marker otherwise", () => {
+    renderPr({ reviewDecision: "review_required" });
+    expect(screen.queryByTitle("PR approved")).not.toBeInTheDocument();
   });
 });
