@@ -33,6 +33,10 @@ export function isApprovedPr(pr: Pick<PrEntry, "state" | "reviewDecision">): boo
   return pr.state === "open" && pr.reviewDecision === "approved";
 }
 
+export function isChangesRequestedPr(pr: Pick<PrEntry, "state" | "reviewDecision">): boolean {
+  return pr.state === "open" && pr.reviewDecision === "changes_requested";
+}
+
 export function prStateTextClass(pr: Pick<PrEntry, "state" | "isDraft">): string {
   if (pr.state === "merged") return "text-merged";
   if (pr.state === "closed") return "text-danger";

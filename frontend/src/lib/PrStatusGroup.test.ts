@@ -61,4 +61,10 @@ describe("PrStatusGroup approved indicator", () => {
     renderPr({ reviewDecision: "review_required" });
     expect(screen.queryByTitle("PR approved")).not.toBeInTheDocument();
   });
+
+  it("shows a changes-requested marker", () => {
+    renderPr({ reviewDecision: "changes_requested" });
+    expect(screen.getByTitle("Changes requested")).toBeInTheDocument();
+    expect(screen.queryByTitle("PR approved")).not.toBeInTheDocument();
+  });
 });
