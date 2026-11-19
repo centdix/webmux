@@ -73,9 +73,13 @@ function stubLifecycleService(calls: Array<{ method: string; value: unknown }>) 
   };
 }
 
-function stubGit(worktrees: Array<{ path: string; branch: string | null; bare: boolean }> = []) {
+function stubGit(
+  worktrees: Array<{ path: string; branch: string | null; bare: boolean }> = [],
+  liveWorktrees = worktrees,
+) {
   return {
     listWorktrees: () => worktrees,
+    listLiveWorktrees: () => liveWorktrees,
     resolveWorktreeGitDir: (cwd: string) => `${cwd}/.git`,
   };
 }
@@ -984,6 +988,31 @@ describe("runWorktreeCommand", () => {
     expect(exitCode).toBe(1);
     expect(calls).toEqual([]);
     expect(stderr).toEqual(["Error: Worktree not found: feature/missing"]);
+  });
+
+  it("does not resolve a branch whose worktree directory is gone", async () => {
+    const calls: Array<{ method: string; value: unknown }> = [];
+    const stderr: string[] = [];
+    const entries = [
+      { path: "/repo", branch: "main", bare: false },
+      { path: SEARCH_WORKTREE_PATH, branch: "feature/search", bare: false },
+    ];
+
+    const exitCode = await runWorktreeCommand(
+      { command: "close", args: ["feature/search"], projectDir: "/repo", port: 5111 },
+      {
+        createRuntime: () => stubRuntime({
+          git: stubGit(entries, entries.slice(0, 1)),
+          lifecycleService: stubLifecycleService(calls),
+        }),
+        stdout: () => {},
+        stderr: (message) => stderr.push(message),
+      },
+    );
+
+    expect(exitCode).toBe(1);
+    expect(calls).toEqual([]);
+    expect(stderr).toEqual(["Error: Worktree not found: feature/search"]);
   });
 
   it("rejects invalid branch arguments before creating a runtime", async () => {

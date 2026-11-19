@@ -22,7 +22,7 @@ import type { AutoNameConfig } from "../domain/config";
 import { ProjectRuntime } from "../services/project-runtime";
 import { ArchiveStateService } from "../services/archive-state-service";
 import type { AutoNameGenerator } from "../services/auto-name-service";
-import { makeUnmanagedWorktreeId, ReconciliationService, resolveWorktreeId } from "../services/reconciliation-service";
+import { makeUnmanagedWorktreeId, readWorktreeIdAt, ReconciliationService } from "../services/reconciliation-service";
 import {
   buildCreateWorktreeTargets,
   LifecycleError,
@@ -393,7 +393,7 @@ async function worktreeIdOf(repoRoot: string, branch: string): Promise<string> {
   const git = new BunGitGateway();
   const entry = git.listWorktrees(repoRoot).find((candidate) => candidate.branch === branch);
   if (!entry) throw new Error(`No worktree for ${branch}`);
-  return resolveWorktreeId(await readWorktreeMeta(git.resolveWorktreeGitDir(entry.path)), entry.path);
+  return await readWorktreeIdAt(git, entry.path);
 }
 
 describe("LifecycleService", () => {
@@ -1587,15 +1587,33 @@ describe("LifecycleService", () => {
     const worktreePath = join(repoRoot, "__worktrees", "feature-before-rename");
     run(["git", "branch", "-m", "feature-after-rename"], worktreePath);
 
-    await lifecycle.setWorktreeLabel(worktreeId, "Renamed");
+    expect(tmux.listWindows().map((window) => window.worktreeId)).toContain(worktreeId);
     await lifecycle.closeWorktree(worktreeId);
+    await lifecycle.setWorktreeLabel(worktreeId, "Renamed");
 
+    expect(tmux.listWindows()).toEqual([]);
     expect((await readWorktreeMeta(new BunGitGateway().resolveWorktreeGitDir(worktreePath)))?.label).toBe("Renamed");
     expect(runtime.getWorktree(worktreeId)?.branch).toBe("feature-after-rename");
+    expect(runtime.getWorktree(worktreeId)?.session.exists).toBe(false);
     await expect(lifecycle.closeWorktree("no-such-id")).rejects.toMatchObject({
       status: 404,
       message: "Worktree not found: no-such-id",
     });
+  });
+
+  it("kills a worktree's windows on remove after its branch is renamed", async () => {
+    const repoRoot = await initRepo();
+    const runtime = new ProjectRuntime();
+    const tmux = new FakeTmuxGateway();
+    const lifecycle = makeLifecycleService(repoRoot, tmux, runtime);
+    const { worktreeId } = await lifecycle.createWorktree({ branch: "feature-remove-before-rename" });
+    const worktreePath = join(repoRoot, "__worktrees", "feature-remove-before-rename");
+    run(["git", "branch", "-m", "feature-remove-after-rename"], worktreePath);
+    expect(tmux.listWindows().map((window) => window.worktreeId)).toContain(worktreeId);
+
+    await lifecycle.removeWorktree(worktreeId);
+
+    expect(tmux.listWindows()).toEqual([]);
   });
 
   it("updates and clears a worktree label in metadata and runtime state", async () => {

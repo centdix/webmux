@@ -18,7 +18,13 @@ import {
 } from "../adapters/fs";
 import { expandTemplate, getDefaultProfileName, isDockerProfile, type DockerProfileConfig } from "../adapters/config";
 import { type DockerGateway } from "../adapters/docker";
-import { buildProjectSessionName, buildWorktreeParkingWindowName, buildWorktreeWindowName, type TmuxGateway } from "../adapters/tmux";
+import {
+  buildProjectSessionName,
+  buildWorktreeParkingWindowName,
+  buildWorktreeWindowName,
+  type TmuxGateway,
+  type TmuxWindowSummary,
+} from "../adapters/tmux";
 import { captureNewSessionId, type SessionDiscoveryGateway } from "../adapters/session-discovery";
 import type { AgentId, AgentKind, ProfileConfig, ProjectConfig, RuntimeKind } from "../domain/config";
 import { ROOT_TAB_ID, type ControlEnvMap, type OneshotMeta, type WorktreeMeta, type WorktreeSource, type WorktreeTab } from "../domain/model";
@@ -46,7 +52,13 @@ import {
 } from "./agent-service";
 import { getAgentDefinition, type AgentDefinition } from "./agent-registry";
 import type { CustomAgentsStore } from "./custom-agents-store";
-import { makeUnmanagedWorktreeId, resolveWorktreeId, type ReconciliationService } from "./reconciliation-service";
+import {
+  findWindow,
+  makeUnmanagedWorktreeId,
+  readWorktreeIdAt,
+  resolveWorktreeId,
+  type ReconciliationService,
+} from "./reconciliation-service";
 import { buildTmuxPaneSystemPrompt, ensureSessionLayout, isWorktreeOpen, planSessionLayout } from "./session-service";
 import { buildPortRegistrationSystemPrompt } from "./port-prompt";
 import { ArchiveStateService } from "./archive-state-service";
@@ -120,9 +132,19 @@ export function buildCreateWorktreeTargets<T extends { agent: AgentId }>(
   }));
 }
 
+/** The project's linked worktrees whose directory still exists (the main checkout and bare entries excluded). */
+export function listLiveProjectWorktrees<T extends { path: string; bare: boolean }>(
+  git: { listLiveWorktrees(cwd: string): T[] },
+  projectRoot: string,
+): T[] {
+  const root = resolve(projectRoot);
+  return git.listLiveWorktrees(root).filter((entry) => !entry.bare && resolve(entry.path) !== root);
+}
+
 interface ResolvedLifecycleWorktree {
   entry: GitWorktreeEntry;
   branch: string;
+  worktreeId: string;
   gitDir: string;
   meta: WorktreeMeta | null;
 }
@@ -697,7 +719,7 @@ export class LifecycleService {
   async closeWorktree(worktreeId: string): Promise<void> {
     try {
       const resolved = await this.resolveExistingWorktree(worktreeId);
-      await this.closeBranchWindow(resolved.branch);
+      await this.closeWorktreeWindows(resolved);
     } catch (error) {
       throw this.wrapOperationError(error);
     }
@@ -716,11 +738,12 @@ export class LifecycleService {
     try {
       const resolvedWorktrees = await this.resolveAllWorktrees();
       const sessionName = buildProjectSessionName(this.deps.projectRoot);
+      const windows = this.listTmuxWindows();
       const removedBranches: string[] = [];
 
       for (const resolved of resolvedWorktrees) {
         const { branch } = resolved;
-        if (this.deps.tmux.hasWindow(sessionName, buildWorktreeWindowName(branch))) {
+        if (findWindow(windows, sessionName, resolved.worktreeId, branch)) {
           continue;
         }
         await this.removeResolvedWorktree(resolved);
@@ -765,7 +788,7 @@ export class LifecycleService {
     try {
       const resolved = await this.resolveExistingWorktree(worktreeId);
       if (archived) {
-        await this.closeBranchWindow(resolved.branch);
+        await this.closeWorktreeWindows(resolved);
       }
       await this.updateWorktreeArchivedState(resolved.entry.path, archived);
     } catch (error) {
@@ -991,20 +1014,15 @@ export class LifecycleService {
   }
 
   private listProjectWorktrees(): GitWorktreeEntry[] {
-    const projectRoot = resolve(this.deps.projectRoot);
-    return this.deps.git.listLiveWorktrees(projectRoot).filter((entry) =>
-      !entry.bare && resolve(entry.path) !== projectRoot
-    );
+    return listLiveProjectWorktrees(this.deps.git, this.deps.projectRoot);
   }
 
   private async resolveExistingWorktree(worktreeId: string): Promise<ResolvedLifecycleWorktree> {
     for (const entry of this.listProjectWorktrees()) {
       if (entry.branch === null) continue;
+      if (await readWorktreeIdAt(this.deps.git, entry.path) !== worktreeId) continue;
       const gitDir = this.deps.git.resolveWorktreeGitDir(entry.path);
-      const meta = await readWorktreeMeta(gitDir);
-      if (resolveWorktreeId(meta, entry.path) === worktreeId) {
-        return { entry, branch: entry.branch, gitDir, meta };
-      }
+      return { entry, branch: entry.branch, worktreeId, gitDir, meta: await readWorktreeMeta(gitDir) };
     }
     throw new LifecycleError(`Worktree not found: ${worktreeId}`, 404);
   }
@@ -1017,7 +1035,7 @@ export class LifecycleService {
     return await Promise.all(entries.map(async (entry) => {
       const gitDir = this.deps.git.resolveWorktreeGitDir(entry.path);
       const meta = await readWorktreeMeta(gitDir);
-      return { entry, branch: entry.branch ?? entry.path, gitDir, meta };
+      return { entry, branch: entry.branch ?? entry.path, worktreeId: resolveWorktreeId(meta, entry.path), gitDir, meta };
     }));
   }
 
@@ -1100,17 +1118,29 @@ export class LifecycleService {
     return nextMeta;
   }
 
-  /** Tear down a worktree's tmux windows: the main agent window and the hidden
-   *  parking window that holds its forked tab panes. killWindow tolerates a missing
-   *  window, so this is safe for root-only worktrees that never created a parking window. */
-  private killWorktreeWindows(branch: string): void {
-    const sessionName = buildProjectSessionName(this.deps.projectRoot);
-    this.deps.tmux.killWindow(sessionName, buildWorktreeWindowName(branch));
-    this.deps.tmux.killWindow(sessionName, buildWorktreeParkingWindowName(branch));
+  private listTmuxWindows(): TmuxWindowSummary[] {
+    try {
+      return this.deps.tmux.listWindows();
+    } catch {
+      return [];
+    }
   }
 
-  private async closeBranchWindow(branch: string): Promise<void> {
-    this.killWorktreeWindows(branch);
+  /** Tear down a worktree's tmux windows: the main agent window and the hidden
+   *  parking window that holds its forked tab panes. Windows are found by the worktree
+   *  id they are stamped with, so this still works after the branch (and so the name
+   *  webmux would give the window) changed; only a window not stamped yet is found by name. */
+  private killWorktreeWindows(worktreeId: string, branch: string): void {
+    const sessionName = buildProjectSessionName(this.deps.projectRoot);
+    const windows = this.listTmuxWindows();
+    for (const role of ["main", "parking"] as const) {
+      const window = findWindow(windows, sessionName, worktreeId, branch, role);
+      if (window) this.deps.tmux.killWindow(sessionName, window.windowName);
+    }
+  }
+
+  private async closeWorktreeWindows(resolved: ResolvedLifecycleWorktree): Promise<void> {
+    this.killWorktreeWindows(resolved.worktreeId, resolved.branch);
     await this.deps.reconciliation.reconcile(this.deps.projectRoot, { force: true });
   }
 
@@ -1264,6 +1294,7 @@ export class LifecycleService {
   }
 
   private async cleanupFailedCreate(
+    worktreeId: string,
     branch: string,
     worktreePath: string,
     runtime: RuntimeKind,
@@ -1280,7 +1311,7 @@ export class LifecycleService {
     }
 
     try {
-      this.killWorktreeWindows(branch);
+      this.killWorktreeWindows(worktreeId, branch);
     } catch (error) {
       cleanupErrors.push(`tmux cleanup failed: ${toErrorMessage(error)}`);
     }
@@ -1337,12 +1368,12 @@ export class LifecycleService {
       worktreePath: resolved.entry.path,
     });
 
-    const branch = resolved.entry.branch ?? resolved.entry.path;
+    const { branch } = resolved;
     if (resolved.meta?.runtime === "docker") {
       await this.deps.docker.removeContainer(branch);
     }
 
-    this.killWorktreeWindows(branch);
+    this.killWorktreeWindows(resolved.worktreeId, branch);
     removeManagedWorktree(
       {
         repoRoot: this.deps.projectRoot,
@@ -1357,7 +1388,7 @@ export class LifecycleService {
     await this.updateWorktreeArchivedState(resolved.entry.path, false);
     this.deps.portRegistrations.releaseWorktree(
       resolve(this.deps.projectRoot),
-      resolved.meta?.worktreeId ?? makeUnmanagedWorktreeId(resolved.entry.path),
+      resolved.worktreeId,
     );
 
     await this.deps.reconciliation.reconcile(this.deps.projectRoot, { force: true });
@@ -1561,6 +1592,7 @@ export class LifecycleService {
     } catch (error) {
       if (initialized) {
         const cleanupError = await this.cleanupFailedCreate(
+          initialized.meta.worktreeId,
           input.branch,
           worktreePath,
           profile.runtime,

@@ -130,6 +130,7 @@ import { classifyAgentsTerminalWorktreeError } from "./services/agents-ui-action
 import { buildProjectSnapshot } from "./services/snapshot-service";
 import { hubReconcileOptions, listAllProjectWorktrees } from "./services/all-projects-worktrees-service";
 import type { ReconcileOptions } from "./services/reconciliation-service";
+import { resolveWorktreeIdByName as resolveWorktreeIdByNameWith } from "./services/worktree-name-resolver";
 import {
   ClaudeConversationService,
   isPendingClaudeConversationId,
@@ -593,19 +594,11 @@ async function withMutatingTab<T>(branch: string, fn: () => Promise<T>): Promise
   }
 }
 
-/** Translate a route's worktree name (its branch) to the worktree id, once, at the request
- *  boundary. A name unknown to the runtime may belong to a worktree created or renamed since
- *  the last reconcile, so reconcile once before answering 404. */
 async function resolveWorktreeIdByName(name: string): Promise<string> {
-  let state = projectRuntime.getWorktreeByBranch(name);
-  if (!state) {
-    await reconciliationService.reconcile(PROJECT_DIR, { force: true });
-    state = projectRuntime.getWorktreeByBranch(name);
-  }
-  if (!state) {
-    throw new LifecycleError(`Worktree not found: ${name}`, 404);
-  }
-  return state.worktreeId;
+  return await resolveWorktreeIdByNameWith(name, {
+    runtime: projectRuntime,
+    reconcile: () => reconciliationService.reconcile(PROJECT_DIR, { force: true }),
+  });
 }
 
 async function resolveTerminalWorktree(worktreeId: string): Promise<{
@@ -2285,6 +2278,7 @@ function parseNotificationIdParam(params: Record<string, string>):
               if (msg.initialPane !== undefined) {
                 log.debug(`[ws] initialPane=${msg.initialPane} branch=${branch}`);
               }
+              ensureBranchNotBusy(branch);
               const terminalWorktree = await resolveTerminalWorktree(await resolveWorktreeIdByName(branch));
               const attachId = `${terminalWorktree.worktreeId}:${randomUUID()}`;
               data.worktreeId = terminalWorktree.worktreeId;

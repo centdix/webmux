@@ -43,6 +43,23 @@ describe("server.ts disarm-on-interaction wiring", () => {
   });
 });
 
+/** Source-level regression test: a worktree being created or removed is missing from (or about
+ *  to leave) the runtime, so the name → id translation would answer 404. The busy guard must run
+ *  first so those requests keep getting a 409. */
+describe("server.ts busy guard before name resolution", () => {
+  const serverPath = join(import.meta.dir, "..", "server.ts");
+
+  it("checks the branch is not busy before resolving a terminal attach", async () => {
+    const source = await Bun.file(serverPath).text();
+    expect(source).toMatch(/ensureBranchNotBusy\(branch\);\s*const terminalWorktree = await resolveTerminalWorktree\(await resolveWorktreeIdByName\(branch\)\)/);
+  });
+
+  it("checks the branch is not busy before resolving a sent prompt", async () => {
+    const source = await Bun.file(serverPath).text();
+    expect(source).toMatch(/async function apiSendPrompt\(name: string, req: Request\): Promise<Response> \{\s*ensureBranchNotBusy\(name\);[\s\S]*?resolveWorktreeIdByName\(name\)/);
+  });
+});
+
 /** Source-level regression test for tab-mutation serialization. open and
  *  agent-terminal refresh both rewrite the whole tabs array (via
  *  restoreWorktreeTabs), so they must hold the same per-branch lock as

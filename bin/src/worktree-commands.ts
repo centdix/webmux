@@ -13,7 +13,8 @@ import { compareWorktreeOrder, isValidWorktreeName } from "../../backend/src/dom
 import { isValidPortLabel } from "../../backend/src/domain/port-registrations";
 import type { WorktreeRef } from "../../backend/src/services/worktree-port-api";
 import { buildArchivedWorktreePathSet } from "../../backend/src/services/archive-service";
-import { resolveWorktreeId } from "../../backend/src/services/reconciliation-service";
+import { readWorktreeIdAt } from "../../backend/src/services/reconciliation-service";
+import { listLiveProjectWorktrees } from "../../backend/src/services/lifecycle-service";
 import { readProjectsRegistryFile, type ProjectsRegistryReadResult } from "../../backend/src/adapters/projects-registry";
 import type { ProjectEntry } from "../../backend/src/domain/projects";
 import { createPortRegistrationService, createWebmuxRuntime } from "../../backend/src/runtime";
@@ -57,6 +58,7 @@ export interface WorktreeRuntimeLike {
   };
   git: {
     listWorktrees(cwd: string): Array<{ path: string; branch: string | null; bare: boolean }>;
+    listLiveWorktrees(cwd: string): Array<{ path: string; branch: string | null; bare: boolean }>;
     resolveWorktreeGitDir(cwd: string): string;
   };
   tmux: {
@@ -870,8 +872,7 @@ async function readWorktreeId(
   worktreePath: string,
 ): Promise<string | null> {
   try {
-    const meta = await readWorktreeMeta(runtime.git.resolveWorktreeGitDir(worktreePath));
-    return meta?.worktreeId ?? null;
+    return await readWorktreeIdAt(runtime.git, worktreePath);
   } catch {
     return null;
   }
@@ -879,12 +880,12 @@ async function readWorktreeId(
 
 /** Translate a branch argument to the id the lifecycle service addresses its worktree by. */
 async function resolveWorktreeIdByBranch(runtime: WorktreeRuntimeLike, branch: string): Promise<string> {
-  const entry = listProjectWorktrees(runtime).find((candidate) => candidate.branch === branch);
+  const entry = listLiveProjectWorktrees(runtime.git, runtime.projectDir)
+    .find((candidate) => candidate.branch === branch);
   if (!entry) {
     throw new Error(`Worktree not found: ${branch}`);
   }
-  const meta = await readWorktreeMeta(runtime.git.resolveWorktreeGitDir(entry.path));
-  return resolveWorktreeId(meta, entry.path);
+  return await readWorktreeIdAt(runtime.git, entry.path);
 }
 
 async function defaultConfirmPrune(worktreeCount: number): Promise<boolean> {
@@ -1294,13 +1295,13 @@ export async function runWorktreeCommand(
           skipped++;
           continue;
         }
-        if (!entry) {
+        if (!entry || !worktreeId) {
           stderr(`Skipping ${branch}: worktree no longer exists`);
           skipped++;
           continue;
         }
         try {
-          await runtime.lifecycleService.openWorktree(await resolveWorktreeIdByBranch(runtime, branch));
+          await runtime.lifecycleService.openWorktree(worktreeId);
           stdout(`Restored ${branch}`);
           restored++;
           if (!firstRestored) firstRestored = branch;
