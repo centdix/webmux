@@ -40,7 +40,7 @@
     errorMessage,
     worktreeCreationPhaseLabel,
     loadSavedTheme,
-    resolveSelectedBranch,
+    resolveSelectedId,
     applyTheme,
     loadSavedSidebarWidth,
     saveSidebarWidth,
@@ -62,7 +62,7 @@
   import { setToastController } from "./lib/toast-context";
   import { projectApi, subscribeNotifications } from "./lib/api";
   import TabBar from "./lib/TabBar.svelte";
-  import { parseWorktreeKey, sameWorktree, worktreeKey } from "./lib/worktree-ref";
+  import { migrateBranchKeys, parseWorktreeKey, refOf, sameWorktree, worktreeKey } from "./lib/worktree-ref";
   import {
     ACTIVE_CREATE_POLL_INTERVAL_MS,
     DEFAULT_POLL_INTERVAL_MS,
@@ -137,7 +137,6 @@
   let linearIssues = $derived(linearData?.issues ?? []);
   let linearAvailability = $derived(linearData?.availability ?? "disabled");
   let hasLoadedWorktrees = $derived(store.hasLoaded(activeProject));
-  let selectedBranch = $derived(selection.branch);
   // The boot project inherits the unscoped legacy favorites.
   let favoriteKeys = $state(untrack(() => loadFavoriteWorktreeKeys(selection.project)));
 
@@ -147,11 +146,6 @@
 
   function worktreeSupportsTabs(worktree: WorktreeInfo | undefined): boolean {
     return supportsWorktreeTabs(config.agents, worktree);
-  }
-
-  /** A branch of the current project as a ref. */
-  function refOf(branch: string): WorktreeRef {
-    return { project: activeProject, branch };
   }
 
   let removeRef = $state<WorktreeRef | null>(null);
@@ -270,9 +264,10 @@
   function handleNotification(n: AppNotification): void {
     // Only suppress the unread dot when the user is actually looking at this
     // worktree (selected and tab visible); otherwise a finished run should still surface.
-    const selected = selection.selected;
-    const viewing = selected?.project === n.project && selected.branch === n.branch && !document.hidden;
-    notifications.receive(n, viewing);
+    // Notifications name a branch: mark the worktree on it now.
+    const worktree = store.findByBranch(n.project, n.branch);
+    const viewing = sameWorktree(worktree, selection.selected) && !document.hidden;
+    notifications.receive(n, worktree && !viewing ? refOf(worktree) : null);
   }
 
   function ensureDiffDialogLoaded(): Promise<void> {
@@ -308,7 +303,7 @@
     if (!toast || toast.source !== "notification") return;
 
     notifications.dismissToast(id);
-    selectWorktree(toast.notification);
+    selectNotification(toast.notification);
   }
 
   setToastController({
@@ -384,20 +379,21 @@
     selection.selected && !store.removing.has(selection.selected) ? store.find(selection.selected) : undefined,
   );
   let selectedVisibleWorktree = $derived(
-    selectedWorktree && visibleWorktrees.some((w) => w.branch === selectedWorktree.branch) ? selectedWorktree : undefined,
+    selectedWorktree && visibleWorktrees.some((w) => w.id === selectedWorktree.id) ? selectedWorktree : undefined,
   );
+  let removeWorktree = $derived(removeRef ? store.find(removeRef) : undefined);
   let labelWorktree = $derived(labelRef ? store.find(labelRef) : undefined);
   let profileWorktree = $derived(profileRef ? store.find(profileRef) : undefined);
-  let canConnect = $derived(!!selectedBranch && selectedWorktree?.mux === "✓" && !selectedWorktree?.creating);
+  let canConnect = $derived(selectedWorktree?.mux === "✓" && !selectedWorktree.creating);
   let showWebChat = $derived(useWebChatUi && canConnect && worktreeSupportsChat(selectedWorktree));
   // Tabs are only meaningful for the built-in terminal agents that have a forkable session.
   let showTabBar = $derived(canConnect && !showWebChat && worktreeSupportsTabs(selectedWorktree));
-  let isSelectedOpening = $derived(selectedBranch ? store.opening.has(refOf(selectedBranch)) : false);
-  let isSelectedArchiving = $derived(selectedBranch ? store.archiving.has(refOf(selectedBranch)) : false);
+  let isSelectedOpening = $derived(selection.selected ? store.opening.has(selection.selected) : false);
+  let isSelectedArchiving = $derived(selection.selected ? store.archiving.has(selection.selected) : false);
   let isSelectedAgentTerminalRefreshing = $derived(
-    selectedBranch ? store.refreshingAgentTerminal.has(refOf(selectedBranch)) : false,
+    selection.selected ? store.refreshingAgentTerminal.has(selection.selected) : false,
   );
-  let selectedTerminalKey = $derived(selectedBranch ? actions.terminalKey(refOf(selectedBranch)) : "");
+  let selectedTerminalKey = $derived(selection.selected ? actions.terminalKey(selection.selected) : "");
   let pollIntervalMs = $derived(
     pendingCreateCount > 0 || store.hasCreating ? ACTIVE_CREATE_POLL_INTERVAL_MS : DEFAULT_POLL_INTERVAL_MS,
   );
@@ -405,15 +401,29 @@
   let linearCollapsed = $state(true);
 
   $effect(() => {
-    const nextSelectedBranch = resolveSelectedBranch(
-      selectedBranch,
+    if (hasLoadedWorktrees && selection.pending) {
+      selection.resolvePending(store.worktreesOf(activeProject));
+      return;
+    }
+    const nextSelectedId = resolveSelectedId(
+      selection.id,
       trimmedWorktreeSearch ? selectedWorktree : selectedVisibleWorktree,
       selectableWorktrees,
       hasLoadedWorktrees,
     );
-    if (nextSelectedBranch !== selectedBranch) {
-      selection.selectBranch(nextSelectedBranch);
+    if (nextSelectedId !== selection.id) {
+      selection.selectId(nextSelectedId);
     }
+  });
+
+  $effect(() => {
+    const migrated = migrateBranchKeys(
+      untrack(() => favoriteKeys),
+      (project) => (store.hasLoaded(project) ? store.worktreesOf(project) : null),
+    );
+    if (!migrated) return;
+    favoriteKeys = migrated;
+    saveFavoriteWorktreeKeys(migrated);
   });
 
   $effect(() => {
@@ -550,7 +560,7 @@
 
   function openSubworktreeDialog(parent: WorktreeRef): void {
     openCreateDialog(parent.project);
-    lockedBaseBranch = parent.branch;
+    lockedBaseBranch = store.find(parent)?.branch ?? null;
   }
 
   function closeCreateDialog(): void {
@@ -614,8 +624,9 @@
         linear.invalidate(targetProject);
         linear.ensure(targetProject);
       }
-      if (shouldAutoSelectCreatedWorktree && requestId === latestAutoSelectCreateId) {
-        selectWorktree({ project: targetProject, branch: result.primaryBranch });
+      const created = store.findByBranch(targetProject, result.primaryBranch);
+      if (created && shouldAutoSelectCreatedWorktree && requestId === latestAutoSelectCreateId) {
+        selectWorktree(created);
       }
     } catch (err) {
       showToast({ tone: "error", message: `Failed to create: ${errorMessage(err)}` });
@@ -669,12 +680,19 @@
   /** Select a worktree of any project (sidebar row, toast, bell): its project
    *  becomes current, without remounting anything. */
   function selectWorktree(ref: WorktreeRef): void {
-    const target = { project: ref.project, branch: ref.branch };
+    const target = refOf(ref);
     if (pendingCreate && pendingCreate.project !== target.project) cancelCreateAutoSelect();
     revealWorktreeInFilters(target);
     selection.select(target);
     notifications.markRead(target);
     if (isMobile) sidebarOpen = false;
+  }
+
+  /** Notifications name a branch: select the worktree on it, else its project. */
+  function selectNotification(n: AppNotification): void {
+    const worktree = store.findByBranch(n.project, n.branch);
+    if (worktree) selectWorktree(worktree);
+    else switchToProject(n.project);
   }
 
   function handleProjectAdded(): void {
@@ -705,7 +723,7 @@
   }
 
   function openLabelDialog(ref: WorktreeRef): void {
-    labelRef = { project: ref.project, branch: ref.branch };
+    labelRef = refOf(ref);
     labelError = "";
   }
 
@@ -747,7 +765,7 @@
   }
 
   function openSelectedWorktree(): void {
-    if (selectedBranch) void actions.open(refOf(selectedBranch));
+    if (selection.selected) void actions.open(selection.selected);
   }
 
   function handlePostToLinear(ref: WorktreeRef): void {
@@ -799,7 +817,7 @@
       openCreateDialog(activeProject);
     } else if (e.key === "d" || e.key === "D") {
       e.preventDefault();
-      if (selectedBranch) removeRef = refOf(selectedBranch);
+      if (selection.selected) removeRef = selection.selected;
     } else if (e.key === "Enter") {
       if (selectedWorktree && selectedWorktree.mux !== "✓" && !selectedWorktree.creating && !isSelectedOpening) {
         e.preventDefault();
@@ -819,12 +837,12 @@
     const target = resolveHashTarget(
       readLocationHash(),
       (prefix) => store.projects.some((entry) => entry.prefix === prefix),
-      (ref) => store.find(ref) !== undefined,
+      (project, branch) => store.findByBranch(project, branch),
     );
     if (target?.kind === "worktree") selectWorktree(target.ref);
     else if (target?.kind === "project") switchToProject(target.project);
     // An unknown target keeps the selection; the hash goes back to naming it.
-    writeLocationHash(selection.project, selection.branch);
+    writeLocationHash(selection.project, selectedWorktree?.branch ?? null);
   }
 
   onMount(() => {
@@ -1011,13 +1029,13 @@
       unreadCount={notifications.unreadCount}
       ontogglesidebar={() => (sidebarOpen = !sidebarOpen)}
       onclose={() => {
-        if (selectedBranch) void actions.close(refOf(selectedBranch));
+        if (selection.selected) void actions.close(selection.selected);
       }}
       onarchive={() => {
-        if (selectedBranch) void actions.toggleArchived(refOf(selectedBranch));
+        if (selection.selected) void actions.toggleArchived(selection.selected);
       }}
       onremove={() => {
-        if (selectedBranch) removeRef = refOf(selectedBranch);
+        if (selection.selected) removeRef = selection.selected;
       }}
       oneditlabel={() => {
         if (selectedWorktree) openLabelDialog(selectedWorktree);
@@ -1027,7 +1045,7 @@
       onCiClick={(pr) => (ciDetailsPr = pr)}
       onReviewsClick={(pr) => (commentReviewPr = pr)}
       onbellopen={() => notifications.markAllSeen()}
-      onnotificationselect={selectWorktree}
+      onnotificationselect={selectNotification}
       archiving={isSelectedArchiving}
     />
 
@@ -1046,27 +1064,27 @@
           activeTabId={selectedWorktree.activeTabId}
           busy={actions.tabBusy}
           oncreate={() => {
-            if (selectedBranch) void actions.createTab(refOf(selectedBranch));
+            if (selection.selected) void actions.createTab(selection.selected);
           }}
           onselect={(tabId) => {
-            if (selectedBranch) void actions.selectTab(refOf(selectedBranch), tabId);
+            if (selection.selected) void actions.selectTab(selection.selected, tabId);
           }}
           ondelete={(tabId) => {
-            if (selectedBranch) void actions.deleteTab(refOf(selectedBranch), tabId);
+            if (selection.selected) void actions.deleteTab(selection.selected, tabId);
           }}
         />
       {/if}
       {#key selectedTerminalKey}
         <Terminal
           project={activeProject}
-          worktree={selectedBranch!}
+          worktree={selectedWorktree!.branch}
           {isMobile}
           initialPane={isMobile ? activePane : undefined}
           {terminalTheme}
           agentTerminalStale={selectedWorktree?.agentTerminalStale ?? false}
           refreshingAgentTerminal={isSelectedAgentTerminalRefreshing}
           onrefreshagentterminal={() => {
-            if (selectedBranch) void actions.refreshAgentTerminal(refOf(selectedBranch));
+            if (selection.selected) void actions.refreshAgentTerminal(selection.selected);
           }}
           bind:this={terminalRef}
         />
@@ -1193,7 +1211,7 @@
 
 {#if removeRef}
   <ConfirmDialog
-    message={`Remove worktree "${removeRef.branch}" from ${store.nameOf(removeRef.project) ?? removeRef.project}? This action cannot be undone.`}
+    message={`Remove worktree "${removeWorktree?.branch ?? ""}" from ${store.nameOf(removeRef.project) ?? removeRef.project}? This action cannot be undone.`}
     onconfirm={handleRemove}
     oncancel={() => (removeRef = null)}
   />
@@ -1276,10 +1294,10 @@
   />
 {/if}
 
-{#if showDiffDialog && selectedBranch && DiffDialogComponent}
+{#if showDiffDialog && selectedWorktree && DiffDialogComponent}
   <DiffDialogComponent
     project={activeProject}
-    branch={selectedBranch}
+    branch={selectedWorktree.branch}
     ideUrl={makeIdeUrl(selectedWorktree?.dir, sshHost, config.ide)}
     onclose={() => (showDiffDialog = false)}
   />
@@ -1296,7 +1314,7 @@
 {#if postToLinearRef}
   {@const ref = postToLinearRef}
   <LinearPostDialog
-    branch={ref.branch}
+    branch={store.find(ref)?.branch ?? ""}
     onsubmit={async (target) => {
       await actions.postToLinear(ref, target);
     }}

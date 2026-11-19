@@ -25,8 +25,8 @@ describe("NotificationCenter", () => {
   it("keeps two projects' notifications with the same id apart", () => {
     const center = new NotificationCenter();
 
-    center.receive(notification("alpha", 1), false);
-    center.receive(notification("beta", 1), false);
+    center.receive(notification("alpha", 1), null);
+    center.receive(notification("beta", 1), null);
 
     expect(center.toasts.map((toast) => toast.id)).toEqual(["notification:alpha:1", "notification:beta:1"]);
     center.removeDismissed({ project: "alpha", id: 1 });
@@ -48,8 +48,8 @@ describe("NotificationCenter", () => {
 
   it("dismisses a toast through its own project's notification", () => {
     const center = new NotificationCenter();
-    center.receive(notification("alpha", 7), false);
-    center.receive(notification("beta", 7), false);
+    center.receive(notification("alpha", 7), null);
+    center.receive(notification("beta", 7), null);
 
     center.dismissToast("notification:beta:7");
 
@@ -60,11 +60,11 @@ describe("NotificationCenter", () => {
   it("marks worktrees unread by worktree key unless they are being viewed", () => {
     const center = new NotificationCenter();
 
-    center.receive(notification("alpha", 1, "feat/x"), false);
-    center.receive(notification("beta", 2, "feat/x"), true);
+    center.receive(notification("alpha", 1, "feat/x"), { project: "alpha", id: "wt-x" });
+    center.receive(notification("beta", 2, "feat/x"), null);
 
-    expect([...center.unreadWorktrees]).toEqual(["alpha:feat/x"]);
-    center.markRead({ project: "alpha", branch: "feat/x" });
+    expect([...center.unreadWorktrees]).toEqual(["alpha:wt-x"]);
+    center.markRead({ project: "alpha", id: "wt-x" });
     expect(center.unreadWorktrees.size).toBe(0);
   });
 
@@ -81,7 +81,7 @@ describe("NotificationCenter", () => {
     Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
     const center = new NotificationCenter();
 
-    center.receive(notification("alpha", 3), false);
+    center.receive(notification("alpha", 3), null);
     center.show({ tone: "info", message: "hello" });
     expect(center.toasts).toHaveLength(2);
     vi.advanceTimersByTime(4000);
@@ -94,7 +94,7 @@ describe("NotificationCenter", () => {
   it("keeps an auto-dismissed toast's notification on the server and in the bell", () => {
     vi.useFakeTimers();
     const center = new NotificationCenter();
-    center.receive(notification("alpha", 4), false);
+    center.receive(notification("alpha", 4), null);
 
     vi.advanceTimersByTime(4000);
 
@@ -110,7 +110,7 @@ describe("NotificationCenter", () => {
       for (let id = 1; id <= 6; id++) center.receiveInitial(notification("beta", id));
     };
     replay();
-    center.receive(notification("alpha", 7), false);
+    center.receive(notification("alpha", 7), null);
     const historyBefore = center.history.map((n) => `${n.project}:${n.id}`);
     const unreadBefore = center.unreadCount;
 

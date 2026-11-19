@@ -130,10 +130,27 @@ describe("WorktreesStore", () => {
     await store.refresh();
 
     expect(store.hasLoaded("alpha")).toBe(true);
-    expect(store.find({ project: "beta", branch: "main" })?.label).toBe("beta main");
-    expect(store.find({ project: "gamma", branch: "main" })).toBeUndefined();
+    expect(store.find({ project: "beta", id: "wt-main" })?.label).toBe("beta main");
+    expect(store.find({ project: "gamma", id: "wt-main" })).toBeUndefined();
     expect(store.worktreesOf("alpha").map((w) => w.branch)).toEqual(["main"]);
     expect(onRefreshed).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads a worktree's current branch by id, through a rename", async () => {
+    vi.mocked(fetchAllProjectWorktrees).mockResolvedValue([project("alpha", [worktree("alpha", "main")])]);
+    const store = new WorktreesStore();
+    await store.refresh();
+    const ref = { project: "alpha", id: "wt-main" };
+    expect(store.branchOf(ref)).toBe("main");
+
+    vi.mocked(fetchAllProjectWorktrees).mockResolvedValue([
+      project("alpha", [worktree("alpha", "renamed", { id: "wt-main" })]),
+    ]);
+    await store.refresh();
+
+    expect(store.branchOf(ref)).toBe("renamed");
+    expect(store.findByBranch("alpha", "renamed")?.id).toBe("wt-main");
+    expect(() => store.branchOf({ project: "alpha", id: "gone" })).toThrow("Worktree not found");
   });
 
   it("keeps optimistic flags per project across polls", async () => {
@@ -145,17 +162,17 @@ describe("WorktreesStore", () => {
     await store.refresh();
     let finish!: () => void;
 
-    const removal = store.removing.during({ project: "alpha", branch: "main" }, async () => {
+    const removal = store.removing.during({ project: "alpha", id: "wt-main" }, async () => {
       await new Promise<void>((resolve) => (finish = resolve));
       await store.refresh();
     });
     await store.refresh();
 
-    expect(store.removing.has({ project: "alpha", branch: "main" })).toBe(true);
-    expect(store.removing.has({ project: "beta", branch: "main" })).toBe(false);
+    expect(store.removing.has({ project: "alpha", id: "wt-main" })).toBe(true);
+    expect(store.removing.has({ project: "beta", id: "wt-main" })).toBe(false);
     finish();
     await removal;
-    expect(store.removing.has({ project: "alpha", branch: "main" })).toBe(false);
+    expect(store.removing.has({ project: "alpha", id: "wt-main" })).toBe(false);
   });
 
   it("patches one project's worktree until the next poll replaces it", async () => {
@@ -166,12 +183,12 @@ describe("WorktreesStore", () => {
     const store = new WorktreesStore();
     await store.refresh();
 
-    store.patch({ project: "beta", branch: "main" }, { label: "renamed" });
+    store.patch({ project: "beta", id: "wt-main" }, { label: "renamed" });
 
-    expect(store.find({ project: "beta", branch: "main" })?.label).toBe("renamed");
-    expect(store.find({ project: "alpha", branch: "main" })?.label).toBeNull();
+    expect(store.find({ project: "beta", id: "wt-main" })?.label).toBe("renamed");
+    expect(store.find({ project: "alpha", id: "wt-main" })?.label).toBeNull();
     await store.refresh();
-    expect(store.find({ project: "beta", branch: "main" })?.label).toBeNull();
+    expect(store.find({ project: "beta", id: "wt-main" })?.label).toBeNull();
   });
 
   it("drops a removed project's list", async () => {

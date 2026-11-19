@@ -27,7 +27,7 @@ export function mergeProjectWorktrees(
 }
 
 /** An optimistic per-worktree flag (removing, opening, archiving…), keyed by
- *  `worktreeKey` so equal branch names in two projects never share it. */
+ *  `worktreeKey` so it follows the worktree through a branch rename. */
 export class WorktreeFlags {
   readonly keys = new SvelteSet<string>();
 
@@ -98,7 +98,19 @@ export class WorktreesStore {
   }
 
   find(ref: WorktreeRef): WorktreeInfo | undefined {
-    return this.worktreesOf(ref.project).find((worktree) => worktree.branch === ref.branch);
+    return this.worktreesOf(ref.project).find((worktree) => worktree.id === ref.id);
+  }
+
+  findByBranch(project: string, branch: string): WorktreeInfo | undefined {
+    return this.worktreesOf(project).find((worktree) => worktree.branch === branch);
+  }
+
+  /** The worktree's current branch, for the API routes still addressed by
+   *  branch. Throws when the worktree is gone. */
+  branchOf(ref: WorktreeRef): string {
+    const worktree = this.find(ref);
+    if (!worktree) throw new Error("Worktree not found");
+    return worktree.branch;
   }
 
   async refresh(): Promise<void> {
@@ -131,7 +143,7 @@ export class WorktreesStore {
         : {
             ...project,
             worktrees: project.worktrees.map((worktree) =>
-              worktree.branch === ref.branch ? { ...worktree, ...fields } : worktree
+              worktree.id === ref.id ? { ...worktree, ...fields } : worktree
             ),
           }
     );

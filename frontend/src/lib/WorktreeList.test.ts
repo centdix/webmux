@@ -124,7 +124,7 @@ describe("WorktreeList", () => {
   it("shows the ⋯ actions button on every row, selected or not", () => {
     renderList({
       rows: rowsOf([createWorktree("feature/a"), createWorktree("feature/b")]),
-      selected: { project: "webmux", branch: "feature/b" },
+      selected: { project: "webmux", id: "wt-feature/b" },
     });
 
     expect(screen.getByRole("button", { name: "Actions for feature/a" })).toBeInTheDocument();
@@ -138,7 +138,7 @@ describe("WorktreeList", () => {
     const onremove = vi.fn();
     renderList({
       rows: rowsOf([createWorktree("feature/list-actions")]),
-      selected: { project: "webmux", branch: "feature/list-actions" },
+      selected: { project: "webmux", id: "wt-feature/list-actions" },
       onselect,
       onremove,
     });
@@ -146,7 +146,7 @@ describe("WorktreeList", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Actions for feature/list-actions" }));
     await fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "Remove" }));
 
-    expect(onremove).toHaveBeenCalledWith({ project: "webmux", branch: "feature/list-actions" });
+    expect(onremove).toHaveBeenCalledWith({ project: "webmux", id: "wt-feature/list-actions" });
     expect(onselect).not.toHaveBeenCalled();
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
@@ -168,7 +168,7 @@ describe("WorktreeList", () => {
     ]);
 
     await fireEvent.click(within(menu).getByRole("menuitem", { name: "Archive" }));
-    expect(onarchive).toHaveBeenCalledWith({ project: "webmux", branch: "feature/menu-actions" });
+    expect(onarchive).toHaveBeenCalledWith({ project: "webmux", id: "wt-feature/menu-actions" });
   });
 
   it("drops the menu when its row leaves the list, so it does not come back with it", async () => {
@@ -224,7 +224,7 @@ describe("WorktreeList", () => {
     expect(button).toBe(pendingButton);
     expect(button.closest("li")).toBe(pendingItem);
     expect(button).not.toBeDisabled();
-    expect(pendingItem?.dataset.worktreeKey).toBe("webmux:fix-login");
+    expect(pendingItem?.dataset.worktreeKey).toBe("webmux:wt-new");
   });
 
   it("opens at the pointer on right-click and under the row from the keyboard, keeping inside the viewport", async () => {
@@ -275,7 +275,7 @@ describe("WorktreeList", () => {
   });
 
   it("closes the ⋯ menu on a second click of ⋯", async () => {
-    renderList({ rows: rowsOf([createWorktree("feature/toggle")]), selected: { project: "webmux", branch: "feature/toggle" } });
+    renderList({ rows: rowsOf([createWorktree("feature/toggle")]), selected: { project: "webmux", id: "wt-feature/toggle" } });
     const more = screen.getByRole("button", { name: "Actions for feature/toggle" });
 
     await fireEvent.click(more);
@@ -294,7 +294,7 @@ describe("WorktreeList", () => {
     expect(within(menu).queryByRole("menuitem", { name: "Close" })).not.toBeInTheDocument();
     await fireEvent.click(within(menu).getByRole("menuitem", { name: "Open" }));
 
-    expect(onopen).toHaveBeenCalledWith({ project: "webmux", branch: "feature/closed" });
+    expect(onopen).toHaveBeenCalledWith({ project: "webmux", id: "wt-feature/closed" });
   });
 
   it("acts on the row's own project from the menu", async () => {
@@ -309,7 +309,7 @@ describe("WorktreeList", () => {
       within(await openRowMenu("feature/sub-base")).getByRole("menuitem", { name: "Post conversation to ENG-42" }),
     );
 
-    const ref = { project: "images", branch: "feature/sub-base" };
+    const ref = { project: "images", id: "wt-feature/sub-base" };
     expect(oncreatesubworktree).toHaveBeenCalledWith(ref);
     expect(oneditlabel).toHaveBeenCalledWith(ref);
     expect(onposttolinear).toHaveBeenCalledWith(ref);
@@ -319,7 +319,7 @@ describe("WorktreeList", () => {
     const ontogglefavorite = vi.fn();
     renderList({
       rows: rowsOf([createWorktree("feature/fav"), createWorktree("feature/plain")]),
-      favorites: new Set<string>(["webmux:feature/fav"]),
+      favorites: new Set<string>(["webmux:wt-feature/fav"]),
       ontogglefavorite,
     });
 
@@ -327,16 +327,16 @@ describe("WorktreeList", () => {
     expect(within(row("feature/plain")).queryByText("★")).not.toBeInTheDocument();
 
     await fireEvent.click(within(await openRowMenu("feature/fav")).getByRole("menuitem", { name: "Remove from favorites" }));
-    expect(ontogglefavorite).toHaveBeenCalledWith({ project: "webmux", branch: "feature/fav" });
+    expect(ontogglefavorite).toHaveBeenCalledWith({ project: "webmux", id: "wt-feature/fav" });
     await fireEvent.click(within(await openRowMenu("feature/plain")).getByRole("menuitem", { name: "Add to favorites" }));
-    expect(ontogglefavorite).toHaveBeenCalledWith({ project: "webmux", branch: "feature/plain" });
+    expect(ontogglefavorite).toHaveBeenCalledWith({ project: "webmux", id: "wt-feature/plain" });
   });
 
   it("disables a row and its actions while it is being removed", () => {
     renderList({
       rows: rowsOf([createWorktree("feature/list-removing")]),
-      selected: { project: "webmux", branch: "feature/list-removing" },
-      removing: new Set(["webmux:feature/list-removing"]),
+      selected: { project: "webmux", id: "wt-feature/list-removing" },
+      removing: new Set(["webmux:wt-feature/list-removing"]),
     });
 
     expect(row("feature/list-removing")).toBeDisabled();
@@ -346,7 +346,7 @@ describe("WorktreeList", () => {
   it("disables the archive action while the row is archiving", async () => {
     renderList({
       rows: rowsOf([createWorktree("feature/archiving")]),
-      archiving: new Set<string>(["webmux:feature/archiving"]),
+      archiving: new Set<string>(["webmux:wt-feature/archiving"]),
     });
 
     expect(within(await openRowMenu("feature/archiving")).getByRole("menuitem", { name: "Archive" })).toBeDisabled();
@@ -376,7 +376,7 @@ describe("WorktreeList", () => {
         { ...createWorktree("feature/closed"), mux: "" },
         { ...createWorktree("feature/creating"), creating: true },
       ]),
-      notified: new Set(["webmux:feature/unread"]),
+      notified: new Set(["webmux:wt-feature/unread"]),
     });
 
     const attentions = screen.getAllByRole("button").map((button) => button.querySelector("[data-attention]")?.getAttribute("data-attention"));

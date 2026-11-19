@@ -90,7 +90,7 @@ describe("buildProjectRail", () => {
         createProject("images", [createWorktree("busy", { project: "images", agent: "working" })]),
         createProject("broken", [], "git exploded"),
       ],
-      new Set(["webmux:unread"]),
+      new Set(["webmux:wt-unread"]),
     );
 
     expect(rail.map((item) => [item.prefix, item.needsYou, item.running, item.error])).toEqual([

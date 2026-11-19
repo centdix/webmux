@@ -1,6 +1,7 @@
-import { pickInitialBranch, readLocationHash, writeLocationHash } from "./project-location";
-import type { WorktreeInfo, WorktreeRef } from "./types";
+import { pickInitialSelection, readLocationHash, writeLocationHash } from "./project-location";
+import type { PendingSelection, WorktreeInfo, WorktreeRef } from "./types";
 import { loadSavedSelectedWorktree, saveSelectedWorktree } from "./utils";
+import { findSavedWorktree, refOf } from "./worktree-ref";
 
 /** Branch Cmd+Up/Down moves to in `branches` (the displayed order): from
  *  nothing, the first or last one; at either end, stay put. */
@@ -21,48 +22,65 @@ export function neighborBranch(branches: string[], leaving: string, removing: Re
 
 /** The selected worktree and the current project (whose worktrees the sidebar
  *  lists). Selecting a worktree makes its project current; switching project
- *  reselects that project's saved worktree. Nothing remounts either way. */
+ *  reselects that project's saved worktree. Nothing remounts either way. The
+ *  selection holds the worktree's id, so it stays on the worktree when its
+ *  branch is renamed. */
 export class WorktreeSelection {
   project = $state("");
   selected = $state<WorktreeRef | null>(null);
+  /** A worktree named before its project's list loaded (boot hash, saved
+   *  selection); `resolvePending` selects it once the list is known. */
+  pending = $state<PendingSelection | null>(null);
 
   /** Boot selection: the hash worktree when it targets `project`, else the one
    *  saved for it. */
   constructor(project: string) {
     this.project = project;
-    this.selected = this.#refIn(project, pickInitialBranch(readLocationHash(), project, loadSavedSelectedWorktree(project)));
+    this.pending = pickInitialSelection(readLocationHash(), project, loadSavedSelectedWorktree(project));
   }
 
-  /** Selected branch within the current project. */
-  get branch(): string | null {
-    return this.selected?.project === this.project ? this.selected.branch : null;
+  /** Selected worktree id within the current project. */
+  get id(): string | null {
+    return this.selected?.project === this.project ? this.selected.id : null;
   }
 
   select(ref: WorktreeRef | null): void {
     if (ref) this.project = ref.project;
-    this.selected = ref;
+    this.selected = ref ? refOf(ref) : null;
+    this.pending = null;
   }
 
-  selectBranch(branch: string | null): void {
-    this.selected = this.#refIn(this.project, branch);
+  selectId(id: string | null): void {
+    this.select(id ? { project: this.project, id } : null);
   }
 
   switchProject(project: string): void {
     if (project === this.project) return;
     this.project = project;
-    this.selected = this.#refIn(project, loadSavedSelectedWorktree(project));
+    this.selected = null;
+    this.pending = pickInitialSelection(null, project, loadSavedSelectedWorktree(project));
   }
 
-  /** Mirror the selection into storage and the hash. Once the project's list
-   *  is known, a resolved worktree is saved, and an empty list clears it. */
-  persist(selectedWorktree: WorktreeInfo | undefined, loaded: boolean, hasSelectable: boolean): void {
-    writeLocationHash(this.project, this.branch);
+  /** Select the pending worktree among the current project's loaded list
+   *  (nothing when it is gone): the hash names a branch, the saved selection
+   *  an id or, saved by older versions, a branch. */
+  resolvePending(worktrees: Array<Pick<WorktreeInfo, "project" | "id" | "branch">>): void {
+    const pending = this.pending;
+    if (!pending) return;
+    const match = pending.source === "hash"
+      ? worktrees.find((worktree) => worktree.branch === pending.name)
+      : findSavedWorktree(worktrees, pending.name);
+    this.select(match ?? null);
+  }
+
+  /** Mirror the selection into storage (its id) and the hash (its current
+   *  branch). Once the project's list is known, a resolved worktree is saved,
+   *  and an empty list clears it. */
+  persist(selectedWorktree: Pick<WorktreeInfo, "id" | "branch"> | undefined, loaded: boolean, hasSelectable: boolean): void {
+    const pendingBranch = this.pending?.source === "hash" ? this.pending.name : null;
+    writeLocationHash(this.project, selectedWorktree?.branch ?? pendingBranch);
     if (!loaded) return;
-    if (selectedWorktree) saveSelectedWorktree(this.project, selectedWorktree.branch);
+    if (selectedWorktree) saveSelectedWorktree(this.project, selectedWorktree.id);
     else if (!hasSelectable) saveSelectedWorktree(this.project, null);
-  }
-
-  #refIn(project: string, branch: string | null): WorktreeRef | null {
-    return branch ? { project, branch } : null;
   }
 }

@@ -88,7 +88,7 @@ describe("sortFavoritesFirst", () => {
   it("moves favorites to the top while keeping relative order", () => {
     const sorted = sortFavoritesFirst(
       [createWorktree("a"), createWorktree("b"), createWorktree("c"), createWorktree("d")],
-      new Set(["webmux:d", "webmux:b"]),
+      new Set(["webmux:wt-d", "webmux:wt-b"]),
     );
 
     expect(sorted.map((worktree) => worktree.branch)).toEqual(["b", "d", "a", "c"]);
@@ -102,7 +102,7 @@ describe("sortFavoritesFirst", () => {
           createWorktree("fav"),
           createWorktree("fav-child", { baseBranch: "fav" }),
         ],
-        new Set(["webmux:fav"]),
+        new Set(["webmux:wt-fav"]),
       ),
     );
 
@@ -124,7 +124,7 @@ describe("countAgentStatusesIn", () => {
   ];
 
   it("counts waiting and error rows within the given key set", () => {
-    expect(countAgentStatusesIn(rows, new Set(["webmux:b", "webmux:c"]))).toEqual({
+    expect(countAgentStatusesIn(rows, new Set(["webmux:wt-b", "webmux:wt-c"]))).toEqual({
       waiting: 1,
       error: 1,
       "done-unread": 0,
@@ -140,7 +140,7 @@ describe("countAgentStatusesIn", () => {
   });
 
   it("ignores working and idle rows even when in the set", () => {
-    expect(countAgentStatusesIn(rows, new Set(["webmux:d", "webmux:e"]))).toEqual({
+    expect(countAgentStatusesIn(rows, new Set(["webmux:wt-d", "webmux:wt-e"]))).toEqual({
       waiting: 0,
       error: 0,
       "done-unread": 0,
@@ -153,7 +153,7 @@ describe("countAgentStatusesIn", () => {
       createRow("creating", { agent: "error", creating: true }),
       createRow("live", { agent: "waiting" }),
     ];
-    expect(countAgentStatusesIn(closedRows, new Set(["webmux:closed", "webmux:creating", "webmux:live"]))).toEqual({
+    expect(countAgentStatusesIn(closedRows, new Set(["webmux:wt-closed", "webmux:wt-creating", "webmux:wt-live"]))).toEqual({
       waiting: 1,
       error: 0,
       "done-unread": 0,
@@ -166,8 +166,8 @@ describe("countAgentStatusesIn", () => {
       createRow("unseen-a", { agent: "done" }),
       createRow("unseen-b", { agent: "done" }),
     ];
-    const keys = new Set(["webmux:seen", "webmux:unseen-a", "webmux:unseen-b"]);
-    const notified = new Set(["webmux:unseen-a", "webmux:unseen-b"]);
+    const keys = new Set(["webmux:wt-seen", "webmux:wt-unseen-a", "webmux:wt-unseen-b"]);
+    const notified = new Set(["webmux:wt-unseen-a", "webmux:wt-unseen-b"]);
     expect(countAgentStatusesIn(doneRows, keys, notified)).toEqual({
       waiting: 0,
       error: 0,
@@ -185,12 +185,12 @@ describe("keysWithAgentStatus", () => {
   ];
 
   it("returns matching keys in list order, skipping hidden-icon rows", () => {
-    expect(keysWithAgentStatus(rows, "waiting")).toEqual(["webmux:first", "webmux:second"]);
-    expect(keysWithAgentStatus(rows, "error")).toEqual(["webmux:err"]);
+    expect(keysWithAgentStatus(rows, "waiting")).toEqual(["webmux:wt-first", "webmux:wt-second"]);
+    expect(keysWithAgentStatus(rows, "error")).toEqual(["webmux:wt-err"]);
   });
 
   it("restricts matches to the given key set when provided", () => {
-    expect(keysWithAgentStatus(rows, "waiting", new Set(["webmux:second"]))).toEqual(["webmux:second"]);
+    expect(keysWithAgentStatus(rows, "waiting", new Set(["webmux:wt-second"]))).toEqual(["webmux:wt-second"]);
   });
 });
 
@@ -226,7 +226,7 @@ describe("buildProjectListRows", () => {
   });
 
   it("lists favorites first, keyed by project", () => {
-    const rows = buildProjectListRows(worktrees, [], { query: "", favorites: new Set(["webmux:feat/search", "other:main"]) });
+    const rows = buildProjectListRows(worktrees, [], { query: "", favorites: new Set(["webmux:wt-feat/search", "other:main"]) });
 
     expect(branchesOf(rows.active)).toEqual([["feat/search", 0], ["feat/search-child", 1], ["main", 0]]);
   });
@@ -244,7 +244,7 @@ describe("buildProjectListRows", () => {
   it("puts creations still naming their branch right after the favorites, where their worktree will land", () => {
     const rows = buildProjectListRows(worktrees, [createPending("wt-a")], {
       query: "",
-      favorites: new Set(["webmux:feat/search"]),
+      favorites: new Set(["webmux:wt-feat/search"]),
     });
 
     expect(branchesOf(rows.active)).toEqual([

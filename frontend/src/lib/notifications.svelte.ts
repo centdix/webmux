@@ -55,12 +55,12 @@ export class NotificationCenter {
    *  reconnect leaves the bell as it is. */
   readonly #seen = new Set<string>();
 
-  /** `viewing`: the user is looking at that worktree right now, so it doesn't
-   *  get an unread mark. */
-  receive(notification: AppNotification, viewing: boolean): void {
+  /** `unread`: the worktree the notification marks unread (resolved from its
+   *  branch); null when the user is looking at it right now or it is gone. */
+  receive(notification: AppNotification, unread: WorktreeRef | null): void {
     this.#seen.add(notificationKey(notification));
     this.active = [...this.active, notification];
-    if (!viewing) this.unreadWorktrees.add(worktreeKey(notification));
+    if (unread) this.unreadWorktrees.add(worktreeKey(unread));
     this.history = [notification, ...this.history].slice(0, MAX_HISTORY);
     this.unreadCount++;
     setTimeout(() => {

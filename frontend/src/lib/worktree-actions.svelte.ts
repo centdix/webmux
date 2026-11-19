@@ -51,7 +51,7 @@ export class WorktreeActions {
   async open(ref: WorktreeRef): Promise<void> {
     await this.#deps.store.opening.during(ref, async () => {
       try {
-        await projectApi(ref.project).openWorktree({ params: { name: ref.branch }, body: {} });
+        await projectApi(ref.project).openWorktree({ params: { name: this.#deps.store.branchOf(ref) }, body: {} });
         await this.#deps.store.refresh();
       } catch (err) {
         this.#deps.toast({ tone: "error", message: `Failed to open worktree: ${errorMessage(err)}` });
@@ -62,7 +62,7 @@ export class WorktreeActions {
   async close(ref: WorktreeRef): Promise<void> {
     this.#deps.leave(ref);
     try {
-      await projectApi(ref.project).closeWorktree({ params: { name: ref.branch } });
+      await projectApi(ref.project).closeWorktree({ params: { name: this.#deps.store.branchOf(ref) } });
       await this.#deps.store.refresh();
     } catch (err) {
       this.#deps.toast({ tone: "error", message: `Failed to close worktree: ${errorMessage(err)}` });
@@ -75,7 +75,7 @@ export class WorktreeActions {
     const archived = !worktree.archived;
     await this.#deps.store.archiving.during(ref, async () => {
       try {
-        await projectApi(ref.project).setWorktreeArchived({ params: { name: ref.branch }, body: { archived } });
+        await projectApi(ref.project).setWorktreeArchived({ params: { name: this.#deps.store.branchOf(ref) }, body: { archived } });
         await this.#deps.store.refresh();
       } catch (err) {
         alert(`Failed to ${archived ? "archive" : "restore"} worktree: ${errorMessage(err)}`);
@@ -87,7 +87,7 @@ export class WorktreeActions {
     this.#deps.leave(ref);
     await this.#deps.store.removing.during(ref, async () => {
       try {
-        await projectApi(ref.project).removeWorktree({ params: { name: ref.branch } });
+        await projectApi(ref.project).removeWorktree({ params: { name: this.#deps.store.branchOf(ref) } });
         this.#deps.onBranchesChanged();
         await this.#deps.store.refresh();
       } catch (err) {
@@ -98,20 +98,21 @@ export class WorktreeActions {
 
   /** Throws so the label dialog can show the error. */
   async setLabel(ref: WorktreeRef, label: string | null): Promise<void> {
-    const next = await setWorktreeLabel(ref.project, ref.branch, label);
+    const next = await setWorktreeLabel(ref.project, this.#deps.store.branchOf(ref), label);
     this.#deps.store.patch(ref, { label: next });
   }
 
   /** Throws so the profile dialog can show the error. */
   async setProfile(ref: WorktreeRef, profile: string): Promise<void> {
-    const result = await setWorktreeProfile(ref.project, ref.branch, profile);
+    const branch = this.#deps.store.branchOf(ref);
+    const result = await setWorktreeProfile(ref.project, branch, profile);
     await this.#deps.store.refresh();
     if (result.restarted) this.#bumpTerminal(ref);
     this.#deps.toast({
       tone: "success",
       message: result.restarted
-        ? `Switched ${ref.branch} to the "${result.profile}" profile`
-        : `Switched ${ref.branch} to the "${result.profile}" profile — applies on next open`,
+        ? `Switched ${branch} to the "${result.profile}" profile`
+        : `Switched ${branch} to the "${result.profile}" profile — applies on next open`,
     });
   }
 
@@ -119,7 +120,7 @@ export class WorktreeActions {
     if (this.#deps.store.refreshingAgentTerminal.has(ref)) return;
     await this.#deps.store.refreshingAgentTerminal.during(ref, async () => {
       try {
-        await refreshWorktreeAgentTerminal(ref.project, ref.branch);
+        await refreshWorktreeAgentTerminal(ref.project, this.#deps.store.branchOf(ref));
         await this.#deps.store.refresh();
         this.#bumpTerminal(ref);
         this.#deps.toast({ tone: "success", message: "Agent terminal refreshed" });
@@ -130,20 +131,20 @@ export class WorktreeActions {
   }
 
   createTab(ref: WorktreeRef): Promise<void> {
-    return this.#tabAction("create tab", () => createWorktreeTab(ref.project, ref.branch));
+    return this.#tabAction("create tab", () => createWorktreeTab(ref.project, this.#deps.store.branchOf(ref)));
   }
 
   selectTab(ref: WorktreeRef, tabId: string): Promise<void> {
-    return this.#tabAction("switch tab", () => selectWorktreeTab(ref.project, ref.branch, tabId));
+    return this.#tabAction("switch tab", () => selectWorktreeTab(ref.project, this.#deps.store.branchOf(ref), tabId));
   }
 
   deleteTab(ref: WorktreeRef, tabId: string): Promise<void> {
-    return this.#tabAction("delete tab", () => deleteWorktreeTab(ref.project, ref.branch, tabId));
+    return this.#tabAction("delete tab", () => deleteWorktreeTab(ref.project, this.#deps.store.branchOf(ref), tabId));
   }
 
   /** Throws so the Linear post dialog can show the error. */
   async postToLinear(ref: WorktreeRef, target: PostWorktreeToLinearTarget): Promise<PostWorktreeToLinearResponse> {
-    const response = await postWorktreeToLinear(ref.project, ref.branch, target);
+    const response = await postWorktreeToLinear(ref.project, this.#deps.store.branchOf(ref), target);
     this.#deps.toast({ tone: "success", message: `Posted to Linear: ${response.issueUrl}` });
     return response;
   }

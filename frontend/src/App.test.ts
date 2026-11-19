@@ -573,7 +573,7 @@ describe("App create selection", () => {
 
     await screen.findByTitle("feature/x");
     expect(window.location.hash).toBe(`#${PROJECT}/feature/x`);
-    expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("feature/x");
+    expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("wt-feature/x");
   });
 
   it("selects the hash branch over the saved selection at mount", async () => {
@@ -720,7 +720,73 @@ describe("App create selection", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Open Session" }));
 
     expect(await screen.findByTitle("main")).toBeInTheDocument();
-    expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("main");
+    expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("wt-main");
+  });
+
+  it("stays on a worktree whose branch is renamed, keeping its favorite and moving the hash to the new branch", async () => {
+    vi.mocked(fetchWorktrees).mockResolvedValue([
+      createWorktree("main"),
+      createWorktree("change-me", { id: "wt-renamed" }),
+    ]);
+    window.history.replaceState(null, "", `/#${PROJECT}/change-me`);
+
+    renderApp();
+    expect(await screen.findByTitle("change-me")).toBeInTheDocument();
+    await fireEvent.click(within(await openRowMenu("change-me")).getByRole("menuitem", { name: "Add to favorites" }));
+
+    vi.mocked(fetchWorktrees).mockResolvedValue([
+      createWorktree("main"),
+      createWorktree("feat/named", { id: "wt-renamed" }),
+    ]);
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    await waitFor(() => expect(window.location.hash).toBe(`#${PROJECT}/feat/named`));
+    expect(screen.getByTitle("feat/named")).toBeInTheDocument();
+    expect(rowButton("feat/named")).toHaveAttribute("aria-current", "true");
+    expect(rowButton("feat/named").textContent).toContain("★");
+    expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("wt-renamed");
+    expect(JSON.parse(localStorage.getItem("wt-favorite-worktree-keys") ?? "[]")).toEqual([`${PROJECT}:wt-renamed`]);
+  });
+
+  it("moves favorites and the selection saved by branch to worktree ids once the project loads", async () => {
+    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "feature/saved");
+    localStorage.setItem("wt-favorite-worktree-keys", JSON.stringify([`${PROJECT}:feature/fav`, "images:feature/img"]));
+    vi.mocked(fetchWorktrees).mockResolvedValue([
+      createWorktree("main"),
+      createWorktree("feature/saved"),
+      createWorktree("feature/fav"),
+    ]);
+    vi.mocked(fetchAllProjectWorktrees).mockResolvedValueOnce([
+      { prefix: PROJECT, name: PROJECT, worktrees: await fetchWorktrees(), pendingCreations: [], error: null },
+      { prefix: "images", name: "images", worktrees: [], pendingCreations: [], error: "git exploded" },
+    ]);
+
+    renderApp();
+
+    expect(await screen.findByTitle("feature/saved")).toBeInTheDocument();
+    await waitFor(() => expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("wt-feature/saved"));
+    expect(rowButton("feature/fav").textContent).toContain("★");
+    // The images project has not loaded yet: its favorite waits for it.
+    expect(new Set(JSON.parse(localStorage.getItem("wt-favorite-worktree-keys") ?? "[]"))).toEqual(
+      new Set([`${PROJECT}:wt-feature/fav`, "images:feature/img"]),
+    );
+  });
+
+  it("marks and selects the worktree a notification names by its branch", async () => {
+    let onNotification: ((notification: AppNotification) => void) | undefined;
+    vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("main"), createWorktree("feature/done")]);
+    vi.mocked(subscribeNotifications).mockImplementation((handleNotification) => {
+      onNotification = handleNotification;
+      return () => {};
+    });
+
+    renderApp();
+    await screen.findByTitle("main");
+    onNotification?.(createAppNotification({ id: 7, branch: "feature/done", message: "Done here" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Done here" }));
+
+    expect(await screen.findByTitle("feature/done")).toBeInTheDocument();
+    expect(rowButton("feature/done")).toHaveAttribute("aria-current", "true");
   });
 
   it("reports the rail's project with every poll", async () => {
@@ -772,8 +838,8 @@ describe("App create selection", () => {
     render(App, { props: { selection, onNoProjects: vi.fn() } });
 
     expect(await screen.findByText("git exploded")).toBeInTheDocument();
-    expect(selection.selected).toEqual({ project: PROJECT, branch: "feature/saved" });
-    expect(window.location.hash).toBe(`#${PROJECT}/feature/saved`);
+    expect(selection.pending).toEqual({ project: PROJECT, name: "feature/saved", source: "saved" });
+    expect(window.location.hash).toBe(`#${PROJECT}`);
     expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("feature/saved");
   });
 
@@ -909,7 +975,7 @@ describe("App create selection", () => {
 
     await waitFor(() => expect(window.location.hash).toBe("#images/main"));
     expect(screen.getByTitle("main")).toBeInTheDocument();
-    expect(localStorage.getItem("wt-last-selected-worktree:images")).toBe("main");
+    expect(localStorage.getItem("wt-last-selected-worktree:images")).toBe("wt-main");
   });
 
   it("shows an empty state with New worktree for a project without worktrees", async () => {
