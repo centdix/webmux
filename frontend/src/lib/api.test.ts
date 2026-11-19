@@ -246,7 +246,7 @@ describe("notifications", () => {
   }
 
   function notification(project: string, id: number): AppNotification {
-    return { id, project, branch: "main", type: "agent_stopped", message: "Agent stopped on main", timestamp: 1 };
+    return { id, project, worktreeId: "wt-main", branch: "main", type: "agent_stopped", message: "Agent stopped on main", timestamp: 1 };
   }
 
   it("subscribeNotifications opens the hub stream", async () => {

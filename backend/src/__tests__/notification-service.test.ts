@@ -21,6 +21,7 @@ describe("NotificationService", () => {
 
     expect(pr?.url).toBe("https://github.com/org/repo/pull/123");
     expect(pr?.branch).toBe("feature/search");
+    expect(pr?.worktreeId).toBe("wt_search");
     expect(pr?.message).toBe("PR opened on feature/search");
     expect(error?.message).toContain("agent crashed");
     expect(notifications.list()).toHaveLength(2);

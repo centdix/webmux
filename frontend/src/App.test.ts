@@ -382,6 +382,7 @@ function createAppNotification(
   return {
     id: 1,
     project: "webmux",
+    worktreeId: "wt-feature/toast",
     branch: "feature/toast",
     type: "runtime_error",
     message: "Notification text",
@@ -703,8 +704,8 @@ describe("App create selection", () => {
 
     renderApp();
     await screen.findByTitle("main");
-    onNotification?.(createAppNotification({ id: 1, project: "images", branch: "feature/img", message: "Images done" }));
-    onNotification?.(createAppNotification({ id: 1, project: PROJECT, branch: "main", message: "Webmux done" }));
+    onNotification?.(createAppNotification({ id: 1, project: "images", worktreeId: "wt-feature/img", branch: "feature/img", message: "Images done" }));
+    onNotification?.(createAppNotification({ id: 1, project: PROJECT, worktreeId: "wt-main", branch: "main", message: "Webmux done" }));
 
     expect(await screen.findByText("Images done")).toBeInTheDocument();
     expect(screen.getByText("Webmux done")).toBeInTheDocument();
@@ -782,9 +783,13 @@ describe("App create selection", () => {
     );
   });
 
-  it("marks and selects the worktree a notification names by its branch", async () => {
+  it("marks and selects the worktree a notification names by its id, even after a branch rename", async () => {
     let onNotification: ((notification: AppNotification) => void) | undefined;
-    vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("main"), createWorktree("feature/done")]);
+    vi.mocked(fetchWorktrees).mockResolvedValue([
+      createWorktree("main"),
+      createWorktree("feature/done", { id: "wt-done" }),
+      createWorktree("feature/decoy", { id: "wt-decoy" }),
+    ]);
     vi.mocked(subscribeNotifications).mockImplementation((handleNotification) => {
       onNotification = handleNotification;
       return () => {};
@@ -792,7 +797,8 @@ describe("App create selection", () => {
 
     renderApp();
     await screen.findByTitle("main");
-    onNotification?.(createAppNotification({ id: 7, branch: "feature/done", message: "Done here" }));
+    // Emitted while the worktree was still on its old branch, now taken by another worktree.
+    onNotification?.(createAppNotification({ id: 7, worktreeId: "wt-done", branch: "feature/decoy", message: "Done here" }));
     await fireEvent.click(await screen.findByRole("button", { name: "Done here" }));
 
     expect(await screen.findByTitle("feature/done")).toBeInTheDocument();

@@ -341,6 +341,7 @@ export const AppNotificationSchema = z.object({
   id: z.number(),
   /** Prefix of the project that emitted it; ids are only unique per project. */
   project: z.string(),
+  worktreeId: z.string(),
   branch: z.string(),
   type: z.enum(["agent_stopped", "pr_opened", "runtime_error", "worktree_auto_removed"]),
   message: z.string(),

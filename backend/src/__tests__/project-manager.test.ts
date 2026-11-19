@@ -225,7 +225,7 @@ describe("ProjectManager", () => {
       },
     });
     const project = manager.add("/repo/alpha");
-    project.runtime.runtimeNotifications.notify({ branch: "main", type: "agent_stopped", message: "stopped" });
+    project.runtime.runtimeNotifications.notify({ worktreeId: "wt-main", branch: "main", type: "agent_stopped", message: "stopped" });
     const events: NotificationHubEvent[] = [];
     hub.subscribe((event) => events.push(event));
 

@@ -62,7 +62,7 @@
   import { setToastController } from "./lib/toast-context";
   import { projectApi, subscribeNotifications } from "./lib/api";
   import TabBar from "./lib/TabBar.svelte";
-  import { migrateBranchKeys, parseWorktreeKey, refOf, sameWorktree, worktreeKey } from "./lib/worktree-ref";
+  import { migrateBranchKeys, notificationWorktree, parseWorktreeKey, refOf, sameWorktree, worktreeKey } from "./lib/worktree-ref";
   import {
     ACTIVE_CREATE_POLL_INTERVAL_MS,
     DEFAULT_POLL_INTERVAL_MS,
@@ -264,8 +264,7 @@
   function handleNotification(n: AppNotification): void {
     // Only suppress the unread dot when the user is actually looking at this
     // worktree (selected and tab visible); otherwise a finished run should still surface.
-    // Notifications name a branch: mark the worktree on it now.
-    const worktree = store.findByBranch(n.project, n.branch);
+    const worktree = store.find(notificationWorktree(n));
     const viewing = sameWorktree(worktree, selection.selected) && !document.hidden;
     notifications.receive(n, worktree && !viewing ? refOf(worktree) : null);
   }
@@ -689,9 +688,9 @@
     if (isMobile) sidebarOpen = false;
   }
 
-  /** Notifications name a branch: select the worktree on it, else its project. */
+  /** Select the worktree a notification names, else its project (the worktree is gone). */
   function selectNotification(n: AppNotification): void {
-    const worktree = store.findByBranch(n.project, n.branch);
+    const worktree = store.find(notificationWorktree(n));
     if (worktree) selectWorktree(worktree);
     else switchToProject(n.project);
   }

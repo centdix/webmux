@@ -57,6 +57,10 @@ export function migrateBranchKeys(
   return changed ? migrated : null;
 }
 
+export function notificationWorktree(notification: Pick<AppNotification, "project" | "worktreeId">): WorktreeRef {
+  return { project: notification.project, id: notification.worktreeId };
+}
+
 /** Notification ids are only unique per project. */
 export function notificationKey(notification: Pick<AppNotification, "project" | "id">): string {
   return `${notification.project}${KEY_SEPARATOR}${notification.id}`;

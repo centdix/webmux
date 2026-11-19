@@ -52,6 +52,7 @@ export async function runAutoRemove(deps: AutoRemoveDependencies): Promise<void>
       log.info(`[auto-remove] removing merged worktree: ${branch}`);
       await deps.lifecycleService.removeWorktree(worktreeId);
       deps.notifications.notify({
+        worktreeId,
         branch,
         type: "worktree_auto_removed",
         message: `Worktree auto-removed after merge: ${branch}`,

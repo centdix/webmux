@@ -7,7 +7,7 @@ import { dismissNotification } from "./api";
 import { NotificationCenter } from "./notifications.svelte";
 
 function notification(project: string, id: number, branch = "main"): AppNotification {
-  return { id, project, branch, type: "agent_stopped", message: `${project} #${id}`, timestamp: 1 };
+  return { id, project, worktreeId: `wt-${branch}`, branch, type: "agent_stopped", message: `${project} #${id}`, timestamp: 1 };
 }
 
 const originalNotification = globalThis.Notification;
