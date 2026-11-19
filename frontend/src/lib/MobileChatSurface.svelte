@@ -130,7 +130,7 @@
     }
 
     lastStreamRevision = 0;
-    const disconnect = connectWorktreeConversationStream(project, worktree.branch, {
+    const disconnect = connectWorktreeConversationStream(project, worktree.id, {
       onEvent: (event) => {
         handleConversationStreamEvent(conversationId, event);
       },
@@ -146,8 +146,8 @@
 
   function requestConversation(mode: "attach" | "history"): Promise<AgentsUiWorktreeConversationResponse> {
     return mode === "attach"
-      ? attachWorktreeConversation(project, worktree.branch)
-      : fetchWorktreeConversationHistory(project, worktree.branch);
+      ? attachWorktreeConversation(project, worktree.id)
+      : fetchWorktreeConversationHistory(project, worktree.id);
   }
 
   async function loadConversation(mode: "attach" | "history"): Promise<void> {
@@ -220,7 +220,7 @@
     conversationError = null;
     try {
       syncConversationStream(true);
-      const response = await sendWorktreeConversationMessage(project, worktree.branch, { text: trimmed });
+      const response = await sendWorktreeConversationMessage(project, worktree.id, { text: trimmed });
       if (conversation.conversationId !== response.conversationId) {
         conversation = {
           ...conversation,
@@ -254,7 +254,7 @@
     const baselineConversation = conversation;
     conversationError = null;
     try {
-      const response = await interruptWorktreeConversation(project, worktree.branch);
+      const response = await interruptWorktreeConversation(project, worktree.id);
       if (response.streaming) {
         syncConversationStream();
       } else {

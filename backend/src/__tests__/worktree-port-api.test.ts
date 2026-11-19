@@ -51,7 +51,7 @@ async function body(response: Response): Promise<unknown> {
 describe("worktree port API by id", () => {
   it("registers, lists and releases a port keyed by the worktree id", async () => {
     const { deps, entries, reconciles } = makeDeps();
-    const ref = { kind: "id", id: "wt_search" } as const;
+    const ref = "wt_search";
 
     const registered = await registerWorktreePort(deps, ref, { label: "web" });
     expect(registered.status).toBe(200);
@@ -67,21 +67,13 @@ describe("worktree port API by id", () => {
     expect(entries()).toEqual([]);
   });
 
-  it("shares registrations with the branch routes of the same worktree", async () => {
-    const { deps } = makeDeps();
-    await registerWorktreePort(deps, { kind: "id", id: "wt_search" }, { label: "web" });
-
-    const listed = await listWorktreePorts(deps, { kind: "branch", name: "feature/search" });
-    expect(await body(listed)).toEqual({ ports: [{ label: "web", port: 4100, keep: false, running: false }] });
-  });
-
   it("returns 404 for an unknown worktree id on every action", async () => {
     const { deps, entries } = makeDeps();
-    const ref = { kind: "id", id: "wt_missing" } as const;
+    const ref = "wt_missing";
 
     const registered = await registerWorktreePort(deps, ref, { label: "web" });
     expect(registered.status).toBe(404);
-    expect(await body(registered)).toEqual({ error: "Worktree not found: id wt_missing" });
+    expect(await body(registered)).toEqual({ error: "Worktree not found: wt_missing" });
     expect((await listWorktreePorts(deps, ref)).status).toBe(404);
     expect((await deleteWorktreePort(deps, ref, "web")).status).toBe(404);
     expect(entries()).toEqual([]);
@@ -89,15 +81,15 @@ describe("worktree port API by id", () => {
 
   it("does not resolve a branch name passed as an id", async () => {
     const { deps } = makeDeps();
-    expect((await listWorktreePorts(deps, { kind: "id", id: "feature/search" })).status).toBe(404);
+    expect((await listWorktreePorts(deps, "feature/search")).status).toBe(404);
   });
 
   it("rejects an invalid label and a release of an unregistered label", async () => {
     const { deps } = makeDeps();
-    const ref = { kind: "id", id: "wt_search" } as const;
+    const ref = "wt_search";
     expect((await registerWorktreePort(deps, ref, { label: "Bad Label" })).status).toBe(400);
     const removed = await deleteWorktreePort(deps, ref, "web");
     expect(removed.status).toBe(404);
-    expect(await body(removed)).toEqual({ error: "No port registered as \"web\" for id wt_search" });
+    expect(await body(removed)).toEqual({ error: "No port registered as \"web\" for wt_search" });
   });
 });

@@ -9,7 +9,7 @@
 
   let {
     project,
-    worktree,
+    worktreeId,
     isMobile = false,
     initialPane,
     terminalTheme,
@@ -18,7 +18,7 @@
     onrefreshagentterminal,
   }: {
     project: string;
-    worktree: string;
+    worktreeId: string;
     isMobile?: boolean;
     initialPane?: number;
     terminalTheme: ITheme;
@@ -234,7 +234,7 @@
 
   async function uploadAndTypeFiles(files: File[]): Promise<void> {
     try {
-      const result = await uploadFiles(project, worktree, files);
+      const result = await uploadFiles(project, worktreeId, files);
       const paths = result.files.map((f) => f.path).join(" ");
       sendInput(paths);
     } catch (err: unknown) {
@@ -273,7 +273,7 @@
 
   function connect(announceReconnect = false): void {
     if (destroyed || ws?.readyState === WebSocket.OPEN || ws?.readyState === WebSocket.CONNECTING) return;
-    const nextWs = new WebSocket(terminalSocketUrl(project, worktree));
+    const nextWs = new WebSocket(terminalSocketUrl(project, worktreeId));
     ws = nextWs;
 
     nextWs.onmessage = (event) => {

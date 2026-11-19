@@ -37,9 +37,7 @@ import {
   ToggleEnabledRequestSchema,
   WorktreeDiffResponseSchema,
   WorktreeListResponseSchema,
-  WorktreeNameParamsSchema,
   WorktreeTabParamsSchema,
-  WorktreePortParamsSchema,
   WorktreeIdParamsSchema,
   WorktreeIdPortParamsSchema,
   RegisterWorktreePortRequestSchema,
@@ -88,11 +86,11 @@ export const projectApiPaths = {
   fetchAvailableBranches: "/branches",
   fetchBaseBranches: "/base-branches",
   fetchProject: "/project",
-  attachAgentsWorktreeConversation: "/agents/worktrees/:name/attach",
-  fetchAgentsWorktreeConversationHistory: "/agents/worktrees/:name/history",
-  sendAgentsWorktreeConversationMessage: "/agents/worktrees/:name/messages",
-  interruptAgentsWorktreeConversation: "/agents/worktrees/:name/interrupt",
-  streamAgentsWorktreeConversation: "/ws/agents/worktrees/:name",
+  attachAgentsWorktreeConversation: "/agents/worktrees/:id/attach",
+  fetchAgentsWorktreeConversationHistory: "/agents/worktrees/:id/history",
+  sendAgentsWorktreeConversationMessage: "/agents/worktrees/:id/messages",
+  interruptAgentsWorktreeConversation: "/agents/worktrees/:id/interrupt",
+  streamAgentsWorktreeConversation: "/ws/agents/worktrees/:id",
   fetchWorktrees: "/worktrees",
   createWorktree: "/worktrees",
   removeWorktree: "/worktrees/:id",
@@ -105,16 +103,14 @@ export const projectApiPaths = {
   postWorktreeToLinear: "/worktrees/:id/linear/post",
   setWorktreeLabel: "/worktrees/:id/label",
   setWorktreeProfile: "/worktrees/:id/profile",
-  sendWorktreePrompt: "/worktrees/:name/send",
-  createWorktreeTab: "/worktrees/:name/tabs",
-  selectWorktreeTab: "/worktrees/:name/tabs/:tabId/select",
-  deleteWorktreeTab: "/worktrees/:name/tabs/:tabId",
-  worktreePorts: "/worktrees/:name/ports",
-  deleteWorktreePort: "/worktrees/:name/ports/:label",
-  worktreePortsById: "/worktree-ids/:id/ports",
-  deleteWorktreePortById: "/worktree-ids/:id/ports/:label",
+  sendWorktreePrompt: "/worktrees/:id/send",
+  createWorktreeTab: "/worktrees/:id/tabs",
+  selectWorktreeTab: "/worktrees/:id/tabs/:tabId/select",
+  deleteWorktreeTab: "/worktrees/:id/tabs/:tabId",
+  worktreePorts: "/worktrees/:id/ports",
+  deleteWorktreePort: "/worktrees/:id/ports/:label",
   mergeWorktree: "/worktrees/:id/merge",
-  fetchWorktreeDiff: "/worktrees/:name/diff",
+  fetchWorktreeDiff: "/worktrees/:id/diff",
   fetchLinearIssues: "/linear/issues",
   fetchAutoNameConfig: "/project/auto-name",
   setLinearAutoCreate: "/linear/auto-create",
@@ -122,8 +118,8 @@ export const projectApiPaths = {
   pullMain: "/pull-main",
   fetchCiLogs: "/ci-logs/:runId",
   dismissNotification: "/notifications/:id/dismiss",
-  streamTerminal: "/ws/:worktree",
-  uploadWorktreeFiles: "/worktrees/:name/upload",
+  streamTerminal: "/ws/:id",
+  uploadWorktreeFiles: "/worktrees/:id/upload",
   postRuntimeEvent: "/runtime/events",
 } as const;
 
@@ -174,7 +170,7 @@ export const projectContract = c.router({
   attachAgentsWorktreeConversation: {
     method: "POST",
     path: projectApiPaths.attachAgentsWorktreeConversation,
-    pathParams: WorktreeNameParamsSchema,
+    pathParams: WorktreeIdParamsSchema,
     body: c.noBody(),
     responses: {
       200: AgentsUiWorktreeConversationResponseSchema,
@@ -184,7 +180,7 @@ export const projectContract = c.router({
   fetchAgentsWorktreeConversationHistory: {
     method: "GET",
     path: projectApiPaths.fetchAgentsWorktreeConversationHistory,
-    pathParams: WorktreeNameParamsSchema,
+    pathParams: WorktreeIdParamsSchema,
     responses: {
       200: AgentsUiWorktreeConversationResponseSchema,
       ...commonErrorResponses,
@@ -193,7 +189,7 @@ export const projectContract = c.router({
   sendAgentsWorktreeConversationMessage: {
     method: "POST",
     path: projectApiPaths.sendAgentsWorktreeConversationMessage,
-    pathParams: WorktreeNameParamsSchema,
+    pathParams: WorktreeIdParamsSchema,
     body: AgentsSendMessageRequestSchema,
     responses: {
       200: AgentsUiSendMessageResponseSchema,
@@ -203,7 +199,7 @@ export const projectContract = c.router({
   interruptAgentsWorktreeConversation: {
     method: "POST",
     path: projectApiPaths.interruptAgentsWorktreeConversation,
-    pathParams: WorktreeNameParamsSchema,
+    pathParams: WorktreeIdParamsSchema,
     body: c.noBody(),
     responses: {
       200: AgentsUiInterruptResponseSchema,
@@ -320,7 +316,7 @@ export const projectContract = c.router({
   sendWorktreePrompt: {
     method: "POST",
     path: projectApiPaths.sendWorktreePrompt,
-    pathParams: WorktreeNameParamsSchema,
+    pathParams: WorktreeIdParamsSchema,
     body: SendWorktreePromptRequestSchema,
     responses: {
       200: OkResponseSchema,
@@ -330,7 +326,7 @@ export const projectContract = c.router({
   createWorktreeTab: {
     method: "POST",
     path: projectApiPaths.createWorktreeTab,
-    pathParams: WorktreeNameParamsSchema,
+    pathParams: WorktreeIdParamsSchema,
     body: c.noBody(),
     responses: {
       201: CreateTabResponseSchema,
@@ -359,7 +355,7 @@ export const projectContract = c.router({
   registerWorktreePort: {
     method: "POST",
     path: projectApiPaths.worktreePorts,
-    pathParams: WorktreeNameParamsSchema,
+    pathParams: WorktreeIdParamsSchema,
     body: RegisterWorktreePortRequestSchema,
     responses: {
       200: RegisterWorktreePortResponseSchema,
@@ -369,7 +365,7 @@ export const projectContract = c.router({
   fetchWorktreePorts: {
     method: "GET",
     path: projectApiPaths.worktreePorts,
-    pathParams: WorktreeNameParamsSchema,
+    pathParams: WorktreeIdParamsSchema,
     responses: {
       200: WorktreePortListResponseSchema,
       ...commonErrorResponses,
@@ -378,34 +374,6 @@ export const projectContract = c.router({
   deleteWorktreePort: {
     method: "DELETE",
     path: projectApiPaths.deleteWorktreePort,
-    pathParams: WorktreePortParamsSchema,
-    responses: {
-      200: OkResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  registerWorktreePortById: {
-    method: "POST",
-    path: projectApiPaths.worktreePortsById,
-    pathParams: WorktreeIdParamsSchema,
-    body: RegisterWorktreePortRequestSchema,
-    responses: {
-      200: RegisterWorktreePortResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  fetchWorktreePortsById: {
-    method: "GET",
-    path: projectApiPaths.worktreePortsById,
-    pathParams: WorktreeIdParamsSchema,
-    responses: {
-      200: WorktreePortListResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  deleteWorktreePortById: {
-    method: "DELETE",
-    path: projectApiPaths.deleteWorktreePortById,
     pathParams: WorktreeIdPortParamsSchema,
     responses: {
       200: OkResponseSchema,
@@ -425,7 +393,7 @@ export const projectContract = c.router({
   fetchWorktreeDiff: {
     method: "GET",
     path: projectApiPaths.fetchWorktreeDiff,
-    pathParams: WorktreeNameParamsSchema,
+    pathParams: WorktreeIdParamsSchema,
     responses: {
       200: WorktreeDiffResponseSchema,
       ...commonErrorResponses,

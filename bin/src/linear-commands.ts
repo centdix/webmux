@@ -1,7 +1,6 @@
 import { createProjectApi, parseLinearTarget, type PostWorktreeToLinearTarget } from "@webmux/api-contract";
-import { BunGitGateway } from "../../backend/src/adapters/git";
-import { CommandUsageError, formatServerError, resolveProjectRoot, resolveServedProjectPrefix, serverOrigin } from "./shared";
-import { resolveWorktreeIdByBranch } from "./worktree-id";
+import { CommandUsageError, formatServerError, resolveServedProjectPrefix, serverOrigin } from "./shared";
+import { resolveWorktreeIdInProject } from "./worktree-id";
 
 export interface ParsedLinearPostCommand {
   branch: string;
@@ -120,10 +119,6 @@ interface LinearCommandDependencies {
   resolveWorktreeId?: (branch: string) => Promise<string>;
 }
 
-function defaultResolveWorktreeId(branch: string): Promise<string> {
-  return resolveWorktreeIdByBranch({ git: new BunGitGateway(), projectDir: resolveProjectRoot() ?? process.cwd() }, branch);
-}
-
 export async function runLinearCommand(args: string[], port: number, deps: LinearCommandDependencies = {}): Promise<number> {
   let parsed: ParsedLinearCommand | null;
   try {
@@ -141,7 +136,7 @@ export async function runLinearCommand(args: string[], port: number, deps: Linea
   try {
     const resolveServedProject = deps.resolveServedProject ?? resolveServedProjectPrefix;
     const api = createProjectApi(await resolveServedProject(port), { origin: serverOrigin(port) });
-    const id = await (deps.resolveWorktreeId ?? defaultResolveWorktreeId)(parsed.post.branch);
+    const id = await (deps.resolveWorktreeId ?? ((branch) => resolveWorktreeIdInProject(process.cwd(), branch)))(parsed.post.branch);
     const response = await api.postWorktreeToLinear({
       params: { id },
       body: { target: parsed.post.target },

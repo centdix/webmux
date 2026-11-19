@@ -1,6 +1,7 @@
-import type { GitGateway } from "../../backend/src/adapters/git";
+import { BunGitGateway, type GitGateway } from "../../backend/src/adapters/git";
 import { listLiveProjectWorktrees } from "../../backend/src/services/lifecycle-service";
 import { readWorktreeIdAt } from "../../backend/src/services/reconciliation-service";
+import { resolveProjectRoot } from "./shared";
 
 export interface WorktreeIdSource {
   projectDir: string;
@@ -17,4 +18,9 @@ export async function resolveWorktreeIdByBranch(source: WorktreeIdSource, branch
     throw new Error(`Worktree not found: ${branch}`);
   }
   return await readWorktreeIdAt(source.git, entry.path);
+}
+
+/** {@link resolveWorktreeIdByBranch} for a CLI run from anywhere in the project (main checkout or a worktree). */
+export function resolveWorktreeIdInProject(cwd: string, branch: string): Promise<string> {
+  return resolveWorktreeIdByBranch({ git: new BunGitGateway(), projectDir: resolveProjectRoot(cwd) ?? cwd }, branch);
 }

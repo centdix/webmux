@@ -172,6 +172,7 @@ import {
   setWorktreeLabel,
   setWorktreeProfile,
   subscribeNotifications,
+  terminalSocketUrl,
 } from "./lib/api";
 import { WEB_CHAT_UI_STORAGE_KEY } from "./lib/utils";
 import { WorktreeSelection } from "./lib/worktree-selection.svelte";
@@ -733,7 +734,7 @@ describe("App create selection", () => {
   it("stays on a worktree whose branch is renamed, keeping its favorite and moving the hash to the new branch", async () => {
     vi.mocked(fetchWorktrees).mockResolvedValue([
       createWorktree("main"),
-      createWorktree("change-me", { id: "wt-renamed" }),
+      createWorktree("change-me", { id: "wt-renamed", mux: "✓" }),
     ]);
     window.history.replaceState(null, "", `/#${PROJECT}/change-me`);
 
@@ -743,7 +744,7 @@ describe("App create selection", () => {
 
     vi.mocked(fetchWorktrees).mockResolvedValue([
       createWorktree("main"),
-      createWorktree("feat/named", { id: "wt-renamed" }),
+      createWorktree("feat/named", { id: "wt-renamed", mux: "✓" }),
     ]);
     document.dispatchEvent(new Event("visibilitychange"));
 
@@ -751,6 +752,8 @@ describe("App create selection", () => {
     expect(screen.getByTitle("feat/named")).toBeInTheDocument();
     expect(rowButton("feat/named")).toHaveAttribute("aria-current", "true");
     expect(rowButton("feat/named").textContent).toContain("★");
+    // The terminal is addressed by id, so the rename neither remounts it nor points it elsewhere.
+    expect(vi.mocked(terminalSocketUrl).mock.calls.filter(([, id]) => id === "wt-renamed")).toHaveLength(1);
     expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("wt-renamed");
     expect(JSON.parse(localStorage.getItem("wt-favorite-worktree-keys") ?? "[]")).toEqual([`${PROJECT}:wt-renamed`]);
   });
@@ -1977,7 +1980,7 @@ describe("App create selection", () => {
     renderApp();
 
     expect(await screen.findByRole("textbox", { name: "Message" })).toBeInTheDocument();
-    expect(attachWorktreeConversation).toHaveBeenCalledWith(PROJECT, "feature/chat");
+    expect(attachWorktreeConversation).toHaveBeenCalledWith(PROJECT, worktree.id);
   });
 
   it("does not show the stale terminal banner in the web chat UI", async () => {

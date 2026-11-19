@@ -102,17 +102,17 @@ function mapWorktree(snapshot: ProjectWorktreeSnapshot, project: string): Worktr
   };
 }
 
-export async function createWorktreeTab(project: string, branch: string): Promise<WorktreeTab> {
-  const response = await projectApi(project).createWorktreeTab({ params: { name: branch } });
+export async function createWorktreeTab(project: string, worktreeId: string): Promise<WorktreeTab> {
+  const response = await projectApi(project).createWorktreeTab({ params: { id: worktreeId } });
   return response.tab;
 }
 
-export function selectWorktreeTab(project: string, branch: string, tabId: string): Promise<void> {
-  return projectApi(project).selectWorktreeTab({ params: { name: branch, tabId } }).then(() => undefined);
+export function selectWorktreeTab(project: string, worktreeId: string, tabId: string): Promise<void> {
+  return projectApi(project).selectWorktreeTab({ params: { id: worktreeId, tabId } }).then(() => undefined);
 }
 
-export function deleteWorktreeTab(project: string, branch: string, tabId: string): Promise<void> {
-  return projectApi(project).deleteWorktreeTab({ params: { name: branch, tabId } }).then(() => undefined);
+export function deleteWorktreeTab(project: string, worktreeId: string, tabId: string): Promise<void> {
+  return projectApi(project).deleteWorktreeTab({ params: { id: worktreeId, tabId } }).then(() => undefined);
 }
 
 export function postWorktreeToLinear(
@@ -160,32 +160,32 @@ export async function setWorktreeProfile(
   return { profile: response.profile, restarted: response.restarted };
 }
 
-export function attachWorktreeConversation(project: string, branch: string): Promise<AgentsUiWorktreeConversationResponse> {
+export function attachWorktreeConversation(project: string, worktreeId: string): Promise<AgentsUiWorktreeConversationResponse> {
   return projectApi(project).attachAgentsWorktreeConversation({
-    params: { name: branch },
+    params: { id: worktreeId },
   });
 }
 
-export function fetchWorktreeConversationHistory(project: string, branch: string): Promise<AgentsUiWorktreeConversationResponse> {
+export function fetchWorktreeConversationHistory(project: string, worktreeId: string): Promise<AgentsUiWorktreeConversationResponse> {
   return projectApi(project).fetchAgentsWorktreeConversationHistory({
-    params: { name: branch },
+    params: { id: worktreeId },
   });
 }
 
 export function sendWorktreeConversationMessage(
   project: string,
-  branch: string,
+  worktreeId: string,
   body: AgentsUiSendMessageRequest,
 ): Promise<AgentsUiSendMessageResponse> {
   return projectApi(project).sendAgentsWorktreeConversationMessage({
-    params: { name: branch },
+    params: { id: worktreeId },
     body,
   });
 }
 
-export function interruptWorktreeConversation(project: string, branch: string): Promise<AgentsUiInterruptResponse> {
+export function interruptWorktreeConversation(project: string, worktreeId: string): Promise<AgentsUiInterruptResponse> {
   return projectApi(project).interruptAgentsWorktreeConversation({
-    params: { name: branch },
+    params: { id: worktreeId },
   });
 }
 
@@ -195,8 +195,8 @@ export function refreshWorktreeAgentTerminal(project: string, worktreeId: string
   }).then(() => undefined);
 }
 
-function withWorktreeName(path: string, branch: string): string {
-  return path.replace(":name", encodeURIComponent(branch));
+function withWorktreeId(path: string, worktreeId: string): string {
+  return path.replace(":id", encodeURIComponent(worktreeId));
 }
 
 function projectSocketUrl(project: string, path: string): string {
@@ -204,13 +204,13 @@ function projectSocketUrl(project: string, path: string): string {
   return `${protocol}://${window.location.host}${projectApiBasePath(project)}${path}`;
 }
 
-export function terminalSocketUrl(project: string, worktree: string): string {
-  return projectSocketUrl(project, projectApiPaths.streamTerminal.replace(":worktree", encodeURIComponent(worktree)));
+export function terminalSocketUrl(project: string, worktreeId: string): string {
+  return projectSocketUrl(project, withWorktreeId(projectApiPaths.streamTerminal, worktreeId));
 }
 
 export function connectWorktreeConversationStream(
   project: string,
-  branch: string,
+  worktreeId: string,
   callbacks: {
     onEvent: (event: AgentsUiConversationEvent) => void;
     onError: (message: string) => void;
@@ -218,7 +218,7 @@ export function connectWorktreeConversationStream(
   },
 ): () => void {
   const socket = new WebSocket(
-    projectSocketUrl(project, withWorktreeName(projectApiPaths.streamAgentsWorktreeConversation, branch)),
+    projectSocketUrl(project, withWorktreeId(projectApiPaths.streamAgentsWorktreeConversation, worktreeId)),
   );
   let closedByClient = false;
 
@@ -369,12 +369,12 @@ export async function dismissNotification(notification: AppNotification): Promis
   await projectApi(notification.project).dismissNotification({ params: { id: notification.id } });
 }
 
-export async function uploadFiles(project: string, worktree: string, files: File[]): Promise<FileUploadResult> {
+export async function uploadFiles(project: string, worktreeId: string, files: File[]): Promise<FileUploadResult> {
   const form = new FormData();
   for (const file of files) {
     form.append("files", file);
   }
-  const res = await fetch(`${projectApiBasePath(project)}${withWorktreeName(projectApiPaths.uploadWorktreeFiles, worktree)}`, {
+  const res = await fetch(`${projectApiBasePath(project)}${withWorktreeId(projectApiPaths.uploadWorktreeFiles, worktreeId)}`, {
     method: "POST",
     body: form,
   });

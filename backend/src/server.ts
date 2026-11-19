@@ -26,9 +26,9 @@ import {
   SetWorktreeProfileRequestSchema,
   ToggleEnabledRequestSchema,
   UpsertCustomAgentRequestSchema,
-  WorktreeNameParamsSchema,
   WorktreeIdParamsSchema,
   WorktreeIdPortParamsSchema,
+  WorktreeTabParamsSchema,
 } from "@webmux/api-contract";
 import { log } from "./lib/log";
 import { serveUnmatchedRequest } from "./services/static-frontend-service";
@@ -130,7 +130,6 @@ import { classifyAgentsTerminalWorktreeError } from "./services/agents-ui-action
 import { buildProjectSnapshot } from "./services/snapshot-service";
 import { hubReconcileOptions, listAllProjectWorktrees } from "./services/all-projects-worktrees-service";
 import type { ReconcileOptions } from "./services/reconciliation-service";
-import { resolveWorktreeIdByName as resolveWorktreeIdByNameWith } from "./services/worktree-name-resolver";
 import { resolveRouteWorktree as resolveRouteWorktreeWith } from "./services/worktree-id-resolver";
 import {
   ClaudeConversationService,
@@ -152,7 +151,7 @@ import type {
   AgentsUiWorktreeConversationResponse,
 } from "./domain/agents-ui";
 import type { ManagedWorktreeRuntimeState, OneshotMeta, ProjectSnapshot, WorktreeSnapshot } from "./domain/model";
-import { isValidBranchName, isValidWorktreeName } from "./domain/policies";
+import { isValidBranchName } from "./domain/policies";
 import { assembleServeRoutes } from "./domain/project-routes";
 import { createPortRegistrationService, createWebmuxRuntime, type WebmuxRuntime } from "./runtime";
 import {
@@ -160,7 +159,6 @@ import {
   listWorktreePorts,
   registerWorktreePort,
   type WorktreePortApiDeps,
-  type WorktreeRef,
 } from "./services/worktree-port-api";
 import { createInstanceRegistry } from "./adapters/instance-registry";
 import { createProjectsRegistry } from "./adapters/projects-registry";
@@ -196,8 +194,7 @@ function isGitRepo(dir: string): boolean {
 interface TerminalWsData {
   kind: "terminal";
   prefix: string;
-  branch: string;
-  worktreeId: string | null;
+  worktreeId: string;
   attachId: string | null;
   attached: boolean;
 }
@@ -205,7 +202,7 @@ interface TerminalWsData {
 interface AgentsWsData {
   kind: "agents";
   prefix: string;
-  branch: string;
+  worktreeId: string;
   conversationId: string | null;
   unsubscribe: (() => void) | null;
 }
@@ -595,13 +592,6 @@ async function withMutatingTab<T>(branch: string, fn: () => Promise<T>): Promise
   }
 }
 
-async function resolveWorktreeIdByName(name: string): Promise<string> {
-  return await resolveWorktreeIdByNameWith(name, {
-    runtime: projectRuntime,
-    reconcile: () => reconciliationService.reconcile(PROJECT_DIR, { force: true }),
-  });
-}
-
 /** A route's worktree id, checked against the runtime, with the branch its busy guards key on. */
 async function resolveRouteWorktree(worktreeId: string): Promise<{ worktreeId: string; branch: string }> {
   return await resolveRouteWorktreeWith(worktreeId, {
@@ -946,8 +936,9 @@ async function sendClaudeStreamingMessage(input: {
   });
 }
 
-async function apiAttachAgentsWorktree(branch: string): Promise<Response> {
-  const resolved = await resolveAgentsWorktree(await resolveWorktreeIdByName(branch));
+async function apiAttachAgentsWorktree(id: string): Promise<Response> {
+  const { worktreeId } = await resolveRouteWorktree(id);
+  const resolved = await resolveAgentsWorktree(worktreeId);
   if (!resolved.ok) return resolved.response;
 
   const chatSupport = resolveWorktreeAgentChatSupport(resolved.worktree, "chat");
@@ -963,8 +954,9 @@ async function apiAttachAgentsWorktree(branch: string): Promise<Response> {
     : errorResponse(result.error, result.status);
 }
 
-async function apiGetAgentsWorktreeHistory(branch: string): Promise<Response> {
-  const resolved = await resolveAgentsWorktree(await resolveWorktreeIdByName(branch));
+async function apiGetAgentsWorktreeHistory(id: string): Promise<Response> {
+  const { worktreeId } = await resolveRouteWorktree(id);
+  const resolved = await resolveAgentsWorktree(worktreeId);
   if (!resolved.ok) return resolved.response;
 
   const chatSupport = resolveWorktreeAgentChatSupport(resolved.worktree, "chat");
@@ -980,8 +972,8 @@ async function apiGetAgentsWorktreeHistory(branch: string): Promise<Response> {
     : errorResponse(result.error, result.status);
 }
 
-async function apiSendAgentsWorktreeMessage(branch: string, req: Request): Promise<Response> {
-  const worktreeId = await resolveWorktreeIdByName(branch);
+async function apiSendAgentsWorktreeMessage(id: string, req: Request): Promise<Response> {
+  const { worktreeId } = await resolveRouteWorktree(id);
   await disarmOneshotIfArmed(worktreeId, "agents-send-message");
   const parsed = await parseJsonBody(req, AgentsSendMessageRequestSchema);
   if (!parsed.ok) return parsed.response;
@@ -1044,8 +1036,8 @@ async function apiSendAgentsWorktreeMessage(branch: string, req: Request): Promi
   });
 }
 
-async function apiInterruptAgentsWorktree(branch: string): Promise<Response> {
-  const worktreeId = await resolveWorktreeIdByName(branch);
+async function apiInterruptAgentsWorktree(id: string): Promise<Response> {
+  const { worktreeId } = await resolveRouteWorktree(id);
   await disarmOneshotIfArmed(worktreeId, "agents-interrupt");
   const resolved = await resolveAgentsWorktree(worktreeId);
   if (!resolved.ok) return resolved.response;
@@ -1106,7 +1098,7 @@ async function apiRefreshWorktreeAgentTerminal(id: string): Promise<Response> {
 }
 
 async function loadAgentsConversationInitialState(
-  branch: string,
+  id: string,
 ): Promise<{
   ok: true;
   data: AgentsUiWorktreeConversationResponse;
@@ -1116,7 +1108,7 @@ async function loadAgentsConversationInitialState(
 }> {
   let worktreeId: string;
   try {
-    worktreeId = await resolveWorktreeIdByName(branch);
+    ({ worktreeId } = await resolveRouteWorktree(id));
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : String(error) };
   }
@@ -1192,7 +1184,7 @@ async function openAgentsSocket(
     unsubscribeClaudeStream?.();
   };
 
-  const initialState = await loadAgentsConversationInitialState(data.branch);
+  const initialState = await loadAgentsConversationInitialState(data.worktreeId);
   if (socketClosed) return;
   if (!initialState.ok) {
     unsubscribeNotifications();
@@ -1508,26 +1500,29 @@ async function apiSetWorktreeArchived(id: string, req: Request): Promise<Respons
   return jsonResponse({ ok: true, archived: body.archived });
 }
 
-async function apiCreateWorktreeTab(name: string): Promise<Response> {
-  return withMutatingTab(name, async () => {
-    log.info(`[worktree:tab:create] name=${name}`);
-    const result = await lifecycleService.createWorktreeTab(await resolveWorktreeIdByName(name));
+async function apiCreateWorktreeTab(id: string): Promise<Response> {
+  const { worktreeId, branch } = await resolveRouteWorktree(id);
+  return withMutatingTab(branch, async () => {
+    log.info(`[worktree:tab:create] branch=${branch}`);
+    const result = await lifecycleService.createWorktreeTab(worktreeId);
     return jsonResponse({ tab: result.tab }, 201);
   });
 }
 
-async function apiSelectWorktreeTab(name: string, tabId: string): Promise<Response> {
-  return withMutatingTab(name, async () => {
-    log.info(`[worktree:tab:select] name=${name} tab=${tabId}`);
-    await lifecycleService.selectWorktreeTab(await resolveWorktreeIdByName(name), tabId);
+async function apiSelectWorktreeTab(id: string, tabId: string): Promise<Response> {
+  const { worktreeId, branch } = await resolveRouteWorktree(id);
+  return withMutatingTab(branch, async () => {
+    log.info(`[worktree:tab:select] branch=${branch} tab=${tabId}`);
+    await lifecycleService.selectWorktreeTab(worktreeId, tabId);
     return jsonResponse({ ok: true });
   });
 }
 
-async function apiDeleteWorktreeTab(name: string, tabId: string): Promise<Response> {
-  return withMutatingTab(name, async () => {
-    log.info(`[worktree:tab:delete] name=${name} tab=${tabId}`);
-    await lifecycleService.deleteWorktreeTab(await resolveWorktreeIdByName(name), tabId);
+async function apiDeleteWorktreeTab(id: string, tabId: string): Promise<Response> {
+  const { worktreeId, branch } = await resolveRouteWorktree(id);
+  return withMutatingTab(branch, async () => {
+    log.info(`[worktree:tab:delete] branch=${branch} tab=${tabId}`);
+    await lifecycleService.deleteWorktreeTab(worktreeId, tabId);
     return jsonResponse({ ok: true });
   });
 }
@@ -1558,15 +1553,15 @@ async function apiSetWorktreeProfile(id: string, req: Request): Promise<Response
   return jsonResponse({ ok: true, profile: result.profile, restarted: result.restarted });
 }
 
-async function apiSendPrompt(name: string, req: Request): Promise<Response> {
-  ensureBranchNotBusy(name);
+async function apiSendPrompt(id: string, req: Request): Promise<Response> {
+  const { worktreeId, branch } = await resolveRouteWorktree(id);
+  ensureBranchNotBusy(branch);
   const parsed = await parseJsonBody(req, SendWorktreePromptRequestSchema);
   if (!parsed.ok) return parsed.response;
   const body = parsed.data;
   const text = body.text;
   const preamble = body.preamble;
-  log.info(`[worktree:send] name=${name} text="${text.slice(0, 80)}"`);
-  const worktreeId = await resolveWorktreeIdByName(name);
+  log.info(`[worktree:send] branch=${branch} text="${text.slice(0, 80)}"`);
   await disarmOneshotIfArmed(worktreeId, "send-prompt");
   const terminalWorktree = await resolveTerminalWorktree(worktreeId);
   const submitDelayMs = resolveWorktreeTerminalSubmitDelayMs(terminalWorktree.agentName);
@@ -1768,19 +1763,19 @@ const worktreePortApiDeps: WorktreePortApiDeps = {
   reconcile: () => reconciliationService.reconcile(PROJECT_DIR),
 };
 
-async function apiRegisterWorktreePort(ref: WorktreeRef, req: Request): Promise<Response> {
+async function apiRegisterWorktreePort(worktreeId: string, req: Request): Promise<Response> {
   const parsed = await parseJsonBody(req, RegisterWorktreePortRequestSchema);
   if (!parsed.ok) return parsed.response;
-  return registerWorktreePort(worktreePortApiDeps, ref, parsed.data);
+  return registerWorktreePort(worktreePortApiDeps, worktreeId, parsed.data);
 }
 
 const MAX_DIFF_BYTES = 200 * 1024;
 
-async function apiGetWorktreeDiff(name: string): Promise<Response> {
-  const worktreeId = await resolveWorktreeIdByName(name);
+async function apiGetWorktreeDiff(id: string): Promise<Response> {
+  const { worktreeId } = await resolveRouteWorktree(id);
   await reconciliationService.reconcile(PROJECT_DIR);
   const state = projectRuntime.getWorktree(worktreeId);
-  if (!state) return errorResponse(`Worktree not found: ${name}`, 404);
+  if (!state) return errorResponse(`Worktree not found: ${worktreeId}`, 404);
 
   const uncommitted = git.readDiff(state.path);
   const gitStatus = git.readStatus(state.path);
@@ -1823,8 +1818,8 @@ function sanitizeFilename(name: string): string {
   return base.replace(/[^a-zA-Z0-9._-]/g, "_") || "upload";
 }
 
-async function apiUploadFiles(name: string, req: Request): Promise<Response> {
-  const worktreeId = await resolveWorktreeIdByName(name);
+async function apiUploadFiles(id: string, req: Request): Promise<Response> {
+  const { worktreeId, branch } = await resolveRouteWorktree(id);
   await disarmOneshotIfArmed(worktreeId, "upload-files");
 
   let formData: FormData;
@@ -1837,7 +1832,7 @@ async function apiUploadFiles(name: string, req: Request): Promise<Response> {
   const entries = formData.getAll("files");
   if (entries.length === 0) return errorResponse("No files provided", 400);
 
-  const uploadDir = `/tmp/webmux-uploads/${sanitizeFilename(name)}`;
+  const uploadDir = `/tmp/webmux-uploads/${sanitizeFilename(branch)}`;
   mkdirSync(uploadDir, { recursive: true });
 
   const results: Array<{ path: string }> = [];
@@ -1858,25 +1853,8 @@ async function apiUploadFiles(name: string, req: Request): Promise<Response> {
     results.push({ path: destPath });
   }
 
-  log.info(`[upload] branch=${name} files=${results.length}`);
+  log.info(`[upload] branch=${branch} files=${results.length}`);
   return jsonResponse({ files: results });
-}
-
-function parseWorktreeNameParam(params: Record<string, string>):
-  | { ok: true; data: string }
-  | { ok: false; response: Response } {
-  const parsed = parseParams(params, WorktreeNameParamsSchema);
-  if (!parsed.ok) return parsed;
-  if (!isValidWorktreeName(parsed.data.name)) {
-    return {
-      ok: false,
-      response: errorResponse("Invalid worktree name", 400),
-    };
-  }
-  return {
-    ok: true,
-    data: parsed.data.name,
-  };
 }
 
 function parseRunIdParam(params: Record<string, string>):
@@ -1905,16 +1883,20 @@ function parseNotificationIdParam(params: Record<string, string>):
 
   const routes: ProjectRoutes = {
     [projectApiPaths.streamAgentsWorktreeConversation]: (req, server) => {
-      const branch = decodeURIComponent(req.params.name);
-      return server.upgrade(req, { data: { kind: "agents", prefix: instancePrefix, branch, conversationId: null, unsubscribe: null } })
+      const parsed = parseParams(req.params, WorktreeIdParamsSchema);
+      if (!parsed.ok) return parsed.response;
+      const worktreeId = parsed.data.id;
+      return server.upgrade(req, { data: { kind: "agents", prefix: instancePrefix, worktreeId, conversationId: null, unsubscribe: null } })
         ? undefined
         : new Response("WebSocket upgrade failed", { status: 400 });
     },
 
     [projectApiPaths.streamTerminal]: (req, server) => {
-      const branch = decodeURIComponent(req.params.worktree);
+      const parsed = parseParams(req.params, WorktreeIdParamsSchema);
+      if (!parsed.ok) return parsed.response;
+      const worktreeId = parsed.data.id;
       return server.upgrade(req, {
-        data: { kind: "terminal", prefix: instancePrefix, branch, worktreeId: null, attachId: null, attached: false },
+        data: { kind: "terminal", prefix: instancePrefix, worktreeId, attachId: null, attached: false },
       })
         ? undefined
         : new Response("WebSocket upgrade failed", { status: 400 });
@@ -1938,42 +1920,42 @@ function parseNotificationIdParam(params: Record<string, string>):
 
     [projectApiPaths.attachAgentsWorktreeConversation]: {
       POST: (req) => {
-        const parsed = parseWorktreeNameParam(req.params);
+        const parsed = parseParams(req.params, WorktreeIdParamsSchema);
         if (!parsed.ok) return parsed.response;
-        const name = parsed.data;
-        return catching(routeLabel("POST", projectApiPaths.attachAgentsWorktreeConversation, { name }), () => apiAttachAgentsWorktree(name));
+        const { id } = parsed.data;
+        return catching(routeLabel("POST", projectApiPaths.attachAgentsWorktreeConversation, { id }), () => apiAttachAgentsWorktree(id));
       },
     },
 
     [projectApiPaths.fetchAgentsWorktreeConversationHistory]: {
       GET: (req) => {
-        const parsed = parseWorktreeNameParam(req.params);
+        const parsed = parseParams(req.params, WorktreeIdParamsSchema);
         if (!parsed.ok) return parsed.response;
-        const name = parsed.data;
-        return catching(routeLabel("GET", projectApiPaths.fetchAgentsWorktreeConversationHistory, { name }), () => apiGetAgentsWorktreeHistory(name));
+        const { id } = parsed.data;
+        return catching(routeLabel("GET", projectApiPaths.fetchAgentsWorktreeConversationHistory, { id }), () => apiGetAgentsWorktreeHistory(id));
       },
     },
 
     [projectApiPaths.sendAgentsWorktreeConversationMessage]: {
       POST: (req) => {
-        const parsed = parseWorktreeNameParam(req.params);
+        const parsed = parseParams(req.params, WorktreeIdParamsSchema);
         if (!parsed.ok) return parsed.response;
-        const name = parsed.data;
+        const { id } = parsed.data;
         return catching(
-          routeLabel("POST", projectApiPaths.sendAgentsWorktreeConversationMessage, { name }),
-          () => apiSendAgentsWorktreeMessage(name, req),
+          routeLabel("POST", projectApiPaths.sendAgentsWorktreeConversationMessage, { id }),
+          () => apiSendAgentsWorktreeMessage(id, req),
         );
       },
     },
 
     [projectApiPaths.interruptAgentsWorktreeConversation]: {
       POST: (req) => {
-        const parsed = parseWorktreeNameParam(req.params);
+        const parsed = parseParams(req.params, WorktreeIdParamsSchema);
         if (!parsed.ok) return parsed.response;
-        const name = parsed.data;
+        const { id } = parsed.data;
         return catching(
-          routeLabel("POST", projectApiPaths.interruptAgentsWorktreeConversation, { name }),
-          () => apiInterruptAgentsWorktree(name),
+          routeLabel("POST", projectApiPaths.interruptAgentsWorktreeConversation, { id }),
+          () => apiInterruptAgentsWorktree(id),
         );
       },
     },
@@ -2079,97 +2061,70 @@ function parseNotificationIdParam(params: Record<string, string>):
 
     [projectApiPaths.sendWorktreePrompt]: {
       POST: (req) => {
-        const parsed = parseWorktreeNameParam(req.params);
+        const parsed = parseParams(req.params, WorktreeIdParamsSchema);
         if (!parsed.ok) return parsed.response;
-        const name = parsed.data;
-        return catching(routeLabel("POST", projectApiPaths.sendWorktreePrompt, { name }), () => apiSendPrompt(name, req));
+        const { id } = parsed.data;
+        return catching(routeLabel("POST", projectApiPaths.sendWorktreePrompt, { id }), () => apiSendPrompt(id, req));
       },
     },
 
     [projectApiPaths.uploadWorktreeFiles]: {
       POST: (req) => {
-        const parsed = parseWorktreeNameParam(req.params);
+        const parsed = parseParams(req.params, WorktreeIdParamsSchema);
         if (!parsed.ok) return parsed.response;
-        const name = parsed.data;
-        return catching(routeLabel("POST", projectApiPaths.uploadWorktreeFiles, { name }), () => apiUploadFiles(name, req));
+        const { id } = parsed.data;
+        return catching(routeLabel("POST", projectApiPaths.uploadWorktreeFiles, { id }), () => apiUploadFiles(id, req));
       },
     },
 
     [projectApiPaths.createWorktreeTab]: {
       POST: (req) => {
-        const parsed = parseWorktreeNameParam(req.params);
+        const parsed = parseParams(req.params, WorktreeIdParamsSchema);
         if (!parsed.ok) return parsed.response;
-        const name = parsed.data;
-        return catching(routeLabel("POST", projectApiPaths.createWorktreeTab, { name }), () => apiCreateWorktreeTab(name));
+        const { id } = parsed.data;
+        return catching(routeLabel("POST", projectApiPaths.createWorktreeTab, { id }), () => apiCreateWorktreeTab(id));
       },
     },
 
     [projectApiPaths.selectWorktreeTab]: {
       POST: (req) => {
-        const parsed = parseWorktreeNameParam(req.params);
+        const parsed = parseParams(req.params, WorktreeTabParamsSchema);
         if (!parsed.ok) return parsed.response;
-        const name = parsed.data;
-        const tabId = decodeURIComponent(req.params.tabId ?? "");
-        return catching(routeLabel("POST", projectApiPaths.selectWorktreeTab, { name, tabId }), () => apiSelectWorktreeTab(name, tabId));
+        const { id, tabId } = parsed.data;
+        return catching(routeLabel("POST", projectApiPaths.selectWorktreeTab, { id, tabId }), () => apiSelectWorktreeTab(id, tabId));
       },
     },
 
     [projectApiPaths.deleteWorktreeTab]: {
       DELETE: (req) => {
-        const parsed = parseWorktreeNameParam(req.params);
+        const parsed = parseParams(req.params, WorktreeTabParamsSchema);
         if (!parsed.ok) return parsed.response;
-        const name = parsed.data;
-        const tabId = decodeURIComponent(req.params.tabId ?? "");
-        return catching(routeLabel("DELETE", projectApiPaths.deleteWorktreeTab, { name, tabId }), () => apiDeleteWorktreeTab(name, tabId));
+        const { id, tabId } = parsed.data;
+        return catching(routeLabel("DELETE", projectApiPaths.deleteWorktreeTab, { id, tabId }), () => apiDeleteWorktreeTab(id, tabId));
       },
     },
 
     [projectApiPaths.worktreePorts]: {
       GET: (req) => {
-        const parsed = parseWorktreeNameParam(req.params);
+        const parsed = parseParams(req.params, WorktreeIdParamsSchema);
         if (!parsed.ok) return parsed.response;
-        const name = parsed.data;
-        return catching(routeLabel("GET", projectApiPaths.worktreePorts, { name }), () => listWorktreePorts(worktreePortApiDeps, { kind: "branch", name }));
+        const { id } = parsed.data;
+        return catching(routeLabel("GET", projectApiPaths.worktreePorts, { id }), () => listWorktreePorts(worktreePortApiDeps, id));
       },
       POST: (req) => {
-        const parsed = parseWorktreeNameParam(req.params);
+        const parsed = parseParams(req.params, WorktreeIdParamsSchema);
         if (!parsed.ok) return parsed.response;
-        const name = parsed.data;
-        return catching(routeLabel("POST", projectApiPaths.worktreePorts, { name }), () => apiRegisterWorktreePort({ kind: "branch", name }, req));
+        const { id } = parsed.data;
+        return catching(routeLabel("POST", projectApiPaths.worktreePorts, { id }), () => apiRegisterWorktreePort(id, req));
       },
     },
 
     [projectApiPaths.deleteWorktreePort]: {
       DELETE: (req) => {
-        const parsed = parseWorktreeNameParam(req.params);
-        if (!parsed.ok) return parsed.response;
-        const name = parsed.data;
-        const label = decodeURIComponent(req.params.label ?? "");
-        return catching(routeLabel("DELETE", projectApiPaths.deleteWorktreePort, { name, label }), () => deleteWorktreePort(worktreePortApiDeps, { kind: "branch", name }, label));
-      },
-    },
-
-    [projectApiPaths.worktreePortsById]: {
-      GET: (req) => {
-        const parsed = parseParams(req.params, WorktreeIdParamsSchema);
-        if (!parsed.ok) return parsed.response;
-        const { id } = parsed.data;
-        return catching(routeLabel("GET", projectApiPaths.worktreePortsById, { id }), () => listWorktreePorts(worktreePortApiDeps, { kind: "id", id }));
-      },
-      POST: (req) => {
-        const parsed = parseParams(req.params, WorktreeIdParamsSchema);
-        if (!parsed.ok) return parsed.response;
-        const { id } = parsed.data;
-        return catching(routeLabel("POST", projectApiPaths.worktreePortsById, { id }), () => apiRegisterWorktreePort({ kind: "id", id }, req));
-      },
-    },
-
-    [projectApiPaths.deleteWorktreePortById]: {
-      DELETE: (req) => {
         const parsed = parseParams(req.params, WorktreeIdPortParamsSchema);
         if (!parsed.ok) return parsed.response;
         const { id, label } = parsed.data;
-        return catching(routeLabel("DELETE", projectApiPaths.deleteWorktreePortById, { id, label }), () => deleteWorktreePort(worktreePortApiDeps, { kind: "id", id }, label));
+        return catching(routeLabel("DELETE", projectApiPaths.deleteWorktreePort, { id, label }), () => deleteWorktreePort(worktreePortApiDeps, id, label));
       },
     },
 
@@ -2184,10 +2139,10 @@ function parseNotificationIdParam(params: Record<string, string>):
 
     [projectApiPaths.fetchWorktreeDiff]: {
       GET: (req) => {
-        const parsed = parseWorktreeNameParam(req.params);
+        const parsed = parseParams(req.params, WorktreeIdParamsSchema);
         if (!parsed.ok) return parsed.response;
-        const name = parsed.data;
-        return catching(routeLabel("GET", projectApiPaths.fetchWorktreeDiff, { name }), () => apiGetWorktreeDiff(name));
+        const { id } = parsed.data;
+        return catching(routeLabel("GET", projectApiPaths.fetchWorktreeDiff, { id }), () => apiGetWorktreeDiff(id));
       },
     },
 
@@ -2235,18 +2190,18 @@ function parseNotificationIdParam(params: Record<string, string>):
     open(ws) {
       const data = ws.data;
       if (data.kind === "terminal") {
-        log.debug(`[ws] open branch=${data.branch}`);
+        log.debug(`[ws] open worktreeId=${data.worktreeId}`);
         return;
       }
 
-      log.debug(`[ws:agents] open branch=${data.branch}`);
+      log.debug(`[ws:agents] open worktreeId=${data.worktreeId}`);
       void openAgentsSocket(ws, data);
     },
 
     async message(ws, message) {
       const data = ws.data;
       if (data.kind === "agents") {
-        log.debug(`[ws:agents] ignoring inbound message branch=${data.branch}`);
+        log.debug(`[ws:agents] ignoring inbound message worktreeId=${data.worktreeId}`);
         return;
       }
 
@@ -2255,7 +2210,7 @@ function parseNotificationIdParam(params: Record<string, string>):
         sendWs(ws, { type: "error", message: "malformed message" });
         return;
       }
-      const { branch } = data;
+      const { worktreeId } = data;
 
       switch (msg.type) {
         case "input": {
@@ -2263,8 +2218,8 @@ function parseNotificationIdParam(params: Record<string, string>):
           if (!attachId) return;
           // Cheap path: in-memory check first — disk read + write only when
           // actually armed. Survives a re-arm on the same WS (no stale cache).
-          if (data.worktreeId && projectRuntime.getWorktree(data.worktreeId)?.oneshot) {
-            void disarmOneshotIfArmed(data.worktreeId, "terminal-ws-input");
+          if (projectRuntime.getWorktree(worktreeId)?.oneshot) {
+            void disarmOneshotIfArmed(worktreeId, "terminal-ws-input");
           }
           write(attachId, msg.data);
           break;
@@ -2272,8 +2227,8 @@ function parseNotificationIdParam(params: Record<string, string>):
         case "sendKeys": {
           const attachId = getAttachedSessionId(data, ws);
           if (!attachId) return;
-          if (data.worktreeId && projectRuntime.getWorktree(data.worktreeId)?.oneshot) {
-            void disarmOneshotIfArmed(data.worktreeId, "terminal-ws-send-keys");
+          if (projectRuntime.getWorktree(worktreeId)?.oneshot) {
+            void disarmOneshotIfArmed(worktreeId, "terminal-ws-send-keys");
           }
           await sendKeys(attachId, msg.hexBytes);
           break;
@@ -2282,7 +2237,7 @@ function parseNotificationIdParam(params: Record<string, string>):
           {
             const attachId = getAttachedSessionId(data, ws);
             if (!attachId) return;
-            log.debug(`[ws] selectPane pane=${msg.pane} branch=${branch} attachId=${attachId}`);
+            log.debug(`[ws] selectPane pane=${msg.pane} worktreeId=${worktreeId} attachId=${attachId}`);
             await selectPane(attachId, msg.pane);
           }
           break;
@@ -2290,15 +2245,13 @@ function parseNotificationIdParam(params: Record<string, string>):
           if (!data.attached) {
             // First resize = client reporting actual dimensions. Attach now.
             data.attached = true;
-            log.debug(`[ws] first resize (attaching) branch=${branch} cols=${msg.cols} rows=${msg.rows}`);
+            log.debug(`[ws] first resize (attaching) worktreeId=${worktreeId} cols=${msg.cols} rows=${msg.rows}`);
             try {
               if (msg.initialPane !== undefined) {
-                log.debug(`[ws] initialPane=${msg.initialPane} branch=${branch}`);
+                log.debug(`[ws] initialPane=${msg.initialPane} worktreeId=${worktreeId}`);
               }
-              ensureBranchNotBusy(branch);
-              const terminalWorktree = await resolveTerminalWorktree(await resolveWorktreeIdByName(branch));
+              const terminalWorktree = await resolveTerminalWorktree((await resolveRouteWorktree(worktreeId)).worktreeId);
               const attachId = `${terminalWorktree.worktreeId}:${randomUUID()}`;
-              data.worktreeId = terminalWorktree.worktreeId;
               data.attachId = attachId;
               await attach(
                 attachId,
@@ -2312,7 +2265,7 @@ function parseNotificationIdParam(params: Record<string, string>):
               sendWs(ws, { type: "attached" });
               const scrollback = getScrollback(attachId);
               log.debug(
-                `[ws] attached branch=${branch} worktreeId=${terminalWorktree.worktreeId} attachId=${attachId} scrollback=${scrollback.length} bytes`,
+                `[ws] attached branch=${projectRuntime.getWorktree(worktreeId)?.branch} worktreeId=${worktreeId} attachId=${attachId} scrollback=${scrollback.length} bytes`,
               );
               if (scrollback.length > 0) {
                 sendWs(ws, { type: "scrollback", data: scrollback });
@@ -2320,9 +2273,8 @@ function parseNotificationIdParam(params: Record<string, string>):
             } catch (err: unknown) {
               const errMsg = err instanceof Error ? err.message : String(err);
               data.attached = false;
-              data.worktreeId = null;
               data.attachId = null;
-              log.error(`[ws] attach failed branch=${branch}: ${errMsg}`);
+              log.error(`[ws] attach failed worktreeId=${worktreeId}: ${errMsg}`);
               sendWs(ws, { type: "error", message: errMsg });
               ws.close(1011, errMsg.slice(0, 123)); // 1011 = Internal Error
             }
@@ -2338,14 +2290,14 @@ function parseNotificationIdParam(params: Record<string, string>):
     async close(ws, code, reason) {
       const data = ws.data;
       if (data.kind === "agents") {
-        log.debug(`[ws:agents] close branch=${data.branch} code=${code} reason=${reason}`);
+        log.debug(`[ws:agents] close worktreeId=${data.worktreeId} code=${code} reason=${reason}`);
         data.unsubscribe?.();
         data.unsubscribe = null;
         return;
       }
 
       log.debug(
-        `[ws] close branch=${data.branch} code=${code} reason=${reason} attached=${data.attached} worktreeId=${data.worktreeId} attachId=${data.attachId}`,
+        `[ws] close code=${code} reason=${reason} attached=${data.attached} worktreeId=${data.worktreeId} attachId=${data.attachId}`,
       );
       if (data.attachId) {
         clearCallbacks(data.attachId);

@@ -42,6 +42,7 @@ describe("DiffDialog", () => {
     render(DiffDialog, {
       props: {
         project: "myproject",
+        worktreeId: "wt-1",
         branch: "feature/status",
         ideUrl: "cursor://file/tmp/feature/status",
         onclose: vi.fn(),
@@ -53,6 +54,7 @@ describe("DiffDialog", () => {
     );
 
     expect(projectApi).toHaveBeenCalledWith("myproject");
+    expect(api.fetchWorktreeDiff).toHaveBeenCalledWith({ params: { id: "wt-1" } });
     expect(screen.getByRole("button", { name: "Git status (2)" })).toHaveClass("active");
     expect(statusOutput.textContent).toContain("A  src/new-file.ts");
     expect(statusOutput.textContent).toContain("D  src/old-file.ts");
@@ -73,6 +75,7 @@ describe("DiffDialog", () => {
     render(DiffDialog, {
       props: {
         project: "myproject",
+        worktreeId: "wt-1",
         branch: "feature/status",
         ideUrl: "vscode://file/tmp/feature/status",
         onclose: vi.fn(),
@@ -99,6 +102,7 @@ describe("DiffDialog", () => {
     const { container } = render(DiffDialog, {
       props: {
         project: "myproject",
+        worktreeId: "wt-1",
         branch: "feature/diff-colors",
         onclose: vi.fn(),
       },

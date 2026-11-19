@@ -141,16 +141,16 @@ describe("WorktreesStore", () => {
     const store = new WorktreesStore();
     await store.refresh();
     const ref = { project: "alpha", id: "wt-main" };
-    expect(store.branchOf(ref)).toBe("main");
+    expect(store.find(ref)?.branch).toBe("main");
 
     vi.mocked(fetchAllProjectWorktrees).mockResolvedValue([
       project("alpha", [worktree("alpha", "renamed", { id: "wt-main" })]),
     ]);
     await store.refresh();
 
-    expect(store.branchOf(ref)).toBe("renamed");
+    expect(store.find(ref)?.branch).toBe("renamed");
     expect(store.findByBranch("alpha", "renamed")?.id).toBe("wt-main");
-    expect(() => store.branchOf({ project: "alpha", id: "gone" })).toThrow("Worktree not found");
+    expect(store.find({ project: "alpha", id: "gone" })).toBeUndefined();
   });
 
   it("keeps optimistic flags per project across polls", async () => {

@@ -1380,7 +1380,8 @@ describe("runWorktreeCommand", () => {
       globalThis.fetch = originalFetch;
     });
 
-    it("sends the correct HTTP request to the server", async () => {
+    it("sends the correct HTTP request to the server, addressing the worktree by id", async () => {
+      const resolved: string[] = [];
       const fetchCalls: Array<{ url: string; init: RequestInit }> = [];
       stubFetch(async (input: string | URL | Request, init?: RequestInit) => {
         fetchCalls.push({ url: String(input), init: init! });
@@ -1398,14 +1399,19 @@ describe("runWorktreeCommand", () => {
         {
           createRuntime: () => { throw new Error("unexpected"); },
           resolveServedProject: async () => "myproject",
+          resolveWorktreeId: async (projectDir, branch) => {
+            resolved.push(`${projectDir} ${branch}`);
+            return "wt_search";
+          },
           stdout: (msg) => stdout.push(msg),
         },
       );
 
       expect(exitCode).toBe(0);
       expect(stdout).toEqual(["Sent prompt to feature/search"]);
+      expect(resolved).toEqual(["/repo feature/search"]);
       expect(fetchCalls).toHaveLength(1);
-      expect(fetchCalls[0].url).toBe("http://localhost:5111/api/projects/myproject/worktrees/feature%2Fsearch/send");
+      expect(fetchCalls[0].url).toBe("http://localhost:5111/api/projects/myproject/worktrees/wt_search/send");
       expect(fetchCalls[0].init.method).toBe("POST");
       expect(JSON.parse(fetchCalls[0].init.body as string)).toEqual({
         text: "Fix the bug",
@@ -1415,8 +1421,8 @@ describe("runWorktreeCommand", () => {
 
     it("reports server errors with the error message", async () => {
       stubFetch(async () => {
-        return new Response(JSON.stringify({ error: "Worktree not found: no-such" }), {
-          status: 404,
+        return new Response(JSON.stringify({ error: "Worktree is being created: wt_new" }), {
+          status: 409,
           headers: { "Content-Type": "application/json" },
         });
       });
@@ -1425,18 +1431,42 @@ describe("runWorktreeCommand", () => {
       const exitCode = await runWorktreeCommand(
         {
           command: "send",
-          args: ["no-such", "Fix it"],
+          args: ["feature/new", "Fix it"],
           projectDir: "/repo",
           port: 5111,
         },
         {
           createRuntime: () => { throw new Error("unexpected"); },
           resolveServedProject: async () => "myproject",
+          resolveWorktreeId: async () => "wt_new",
           stderr: (msg) => stderr.push(msg),
         },
       );
 
       expect(exitCode).toBe(1);
+      expect(stderr).toEqual(["Error: Worktree is being created: wt_new"]);
+    });
+
+    it("reports an unknown branch without calling the server", async () => {
+      let fetchCalled = false;
+      stubFetch(async () => {
+        fetchCalled = true;
+        return new Response("", { status: 200 });
+      });
+
+      const stderr: string[] = [];
+      const exitCode = await runWorktreeCommand(
+        { command: "send", args: ["no-such", "Fix it"], projectDir: "/repo", port: 5111 },
+        {
+          createRuntime: () => { throw new Error("unexpected"); },
+          resolveServedProject: async () => "myproject",
+          resolveWorktreeId: async (_projectDir, branch) => { throw new Error(`Worktree not found: ${branch}`); },
+          stderr: (msg) => stderr.push(msg),
+        },
+      );
+
+      expect(exitCode).toBe(1);
+      expect(fetchCalled).toBe(false);
       expect(stderr).toEqual(["Error: Worktree not found: no-such"]);
     });
 
@@ -1456,6 +1486,7 @@ describe("runWorktreeCommand", () => {
         {
           createRuntime: () => { throw new Error("unexpected"); },
           resolveServedProject: async () => "myproject",
+          resolveWorktreeId: async () => "wt_search",
           stderr: (msg) => stderr.push(msg),
         },
       );
@@ -1684,6 +1715,63 @@ describe("parsePortCommandArgs", () => {
   });
 });
 
+describe("runWorktreeCommand tab", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("resolves the branch once and addresses every tab action by worktree id", async () => {
+    const calls: string[] = [];
+    stubFetch(async (input: string | URL | Request, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      calls.push(`${method} ${String(input)}`);
+      if (String(input).endsWith("/tabs")) {
+        return Response.json({ tab: { tabId: "fork-1", kind: "fork", label: "Fork 1", seq: 1, sessionId: null, createdAt: "" } }, { status: 201 });
+      }
+      if (method === "GET") {
+        return Response.json({ worktrees: [{ id: "wt_search", branch: "feature/renamed", tabs: [{ tabId: "root", label: "Main" }], activeTabId: "root" }] });
+      }
+      return Response.json({ ok: true });
+    });
+    const resolved: string[] = [];
+    const stdout: string[] = [];
+    const runTab = (args: string[]): Promise<number> => runWorktreeCommand(
+      { command: "tab", args: ["feature/search", ...args], projectDir: "/repo", port: 5111 },
+      {
+        createRuntime: () => { throw new Error("unexpected"); },
+        resolveServedProject: async () => "myproject",
+        resolveWorktreeId: async (_projectDir, branch) => {
+          resolved.push(branch);
+          return "wt_search";
+        },
+        stdout: (msg) => stdout.push(msg),
+      },
+    );
+
+    expect(await runTab(["new"])).toBe(0);
+    expect(await runTab(["switch", "fork-1"])).toBe(0);
+    expect(await runTab(["close", "fork-1"])).toBe(0);
+    expect(await runTab([])).toBe(0);
+
+    const base = "http://localhost:5111/api/projects/myproject/worktrees/wt_search";
+    expect(calls).toEqual([
+      `POST ${base}/tabs`,
+      `POST ${base}/tabs/fork-1/select`,
+      `DELETE ${base}/tabs/fork-1`,
+      "GET http://localhost:5111/api/projects/myproject/worktrees",
+    ]);
+    expect(resolved).toEqual(["feature/search", "feature/search", "feature/search", "feature/search"]);
+    expect(stdout).toEqual([
+      "Created Fork 1 (fork-1) in feature/search",
+      "Switched feature/search to tab fork-1",
+      "Closed tab fork-1 in feature/search",
+      `★ ${"Main".padEnd(10)} root`,
+    ]);
+  });
+});
+
 describe("runWorktreeCommand port", () => {
   const originalFetch = globalThis.fetch;
 
@@ -1705,13 +1793,14 @@ describe("runWorktreeCommand port", () => {
         createRuntime: () => { throw new Error("unexpected"); },
         resolveServedProject: async () => "myproject",
         resolveDefaultPortTarget: () => ({ kind: "branch", name: "feature/search" }),
+        resolveWorktreeId: async (_projectDir, branch) => (branch === "feature/search" ? "wt_search" : "wt_unknown"),
         stdout: (msg) => stdout.push(msg),
       },
     );
 
     expect(exitCode).toBe(0);
     expect(stdout).toEqual(["4100"]);
-    expect(fetchCalls[0].url).toBe("http://localhost:5111/api/projects/myproject/worktrees/feature%2Fsearch/ports");
+    expect(fetchCalls[0].url).toBe("http://localhost:5111/api/projects/myproject/worktrees/wt_search/ports");
     expect(fetchCalls[0].init.method).toBe("POST");
     expect(JSON.parse(fetchCalls[0].init.body as string)).toEqual({ label: "web" });
   });
@@ -1730,6 +1819,7 @@ describe("runWorktreeCommand port", () => {
         createRuntime: () => { throw new Error("unexpected"); },
         resolveServedProject: async () => "myproject",
         resolveDefaultPortTarget: () => ({ kind: "branch", name: "feature/search" }),
+        resolveWorktreeId: async (_projectDir, branch) => (branch === "feature/search" ? "wt_search" : "wt_unknown"),
         stdout: (msg) => stdout.push(msg),
       },
     );
@@ -1755,6 +1845,7 @@ describe("runWorktreeCommand port", () => {
         createRuntime: () => { throw new Error("unexpected"); },
         resolveServedProject: async () => "myproject",
         resolveDefaultPortTarget: () => ({ kind: "branch", name: "feature/search" }),
+        resolveWorktreeId: async (_projectDir, branch) => (branch === "feature/search" ? "wt_search" : "wt_unknown"),
         stdout: (msg) => stdout.push(msg),
       },
     );
@@ -1780,7 +1871,9 @@ describe("runWorktreeCommand port", () => {
       repoDir = null;
     });
 
+    let resolved: string[] = [];
     async function runPort(args: string[], projectDir: string): Promise<{ exitCode: number; calls: string[]; stdout: string[] }> {
+      resolved = [];
       const calls: string[] = [];
       stubFetch(async (input: string | URL | Request, init?: RequestInit) => {
         const method = init?.method ?? "GET";
@@ -1795,6 +1888,10 @@ describe("runWorktreeCommand port", () => {
         {
           createRuntime: () => { throw new Error("unexpected"); },
           resolveServedProject: async () => "myproject",
+          resolveWorktreeId: async (dir, branch) => {
+            resolved.push(`${dir} ${branch}`);
+            return `wt_${branch.replace("/", "_")}`;
+          },
           stdout: (msg) => stdout.push(msg),
         },
       );
@@ -1804,7 +1901,7 @@ describe("runWorktreeCommand port", () => {
     it("addresses the agent's worktree by $WEBMUX_WORKTREE_ID, ignoring a stale $WEBMUX_BRANCH", async () => {
       process.env.WEBMUX_WORKTREE_ID = "wt_search";
       process.env.WEBMUX_BRANCH = "feature/renamed-away";
-      const base = "http://localhost:5111/api/projects/myproject/worktree-ids/wt_search/ports";
+      const base = "http://localhost:5111/api/projects/myproject/worktrees/wt_search/ports";
 
       const registered = await runPort(["web"], "/repo");
       expect(registered.exitCode).toBe(0);
@@ -1814,12 +1911,16 @@ describe("runWorktreeCommand port", () => {
       const removed = await runPort(["rm", "web"], "/repo");
       expect(removed.calls).toEqual([`DELETE ${base}/web`]);
       expect(removed.stdout).toEqual(["Released web"]);
+      expect(resolved).toEqual([]);
     });
 
-    it("uses the branch routes for an explicit --worktree even inside an agent pane", async () => {
+    it("resolves an explicit --worktree branch to its id, even inside an agent pane", async () => {
       process.env.WEBMUX_WORKTREE_ID = "wt_search";
       const { calls } = await runPort(["web", "--worktree", "feature/other"], "/repo");
-      expect(calls).toEqual(["POST http://localhost:5111/api/projects/myproject/worktrees/feature%2Fother/ports"]);
+      expect(resolved).toEqual(["/repo feature/other"]);
+      expect(calls).toEqual(["POST http://localhost:5111/api/projects/myproject/worktrees/wt_feature_other/ports"]);
+      const removed = await runPort(["rm", "web", "--worktree", "feature/other"], "/repo");
+      expect(removed.stdout).toEqual(["Released web in feature/other"]);
     });
 
     it("falls back to the current git branch outside an agent pane", async () => {
@@ -1834,7 +1935,8 @@ describe("runWorktreeCommand port", () => {
       git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init");
 
       const { calls } = await runPort(["ls"], repoDir);
-      expect(calls).toEqual(["GET http://localhost:5111/api/projects/myproject/worktrees/feature%2Flocal/ports"]);
+      expect(resolved).toEqual([`${repoDir} feature/local`]);
+      expect(calls).toEqual(["GET http://localhost:5111/api/projects/myproject/worktrees/wt_feature_local/ports"]);
     });
   });
 });

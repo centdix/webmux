@@ -602,17 +602,12 @@ export const WorktreeNameParamsSchema = z.object({
 });
 
 export const WorktreeTabParamsSchema = z.object({
-  name: z.string(),
+  id: z.string().min(1),
   tabId: z.string(),
 });
 
 export const CreateTabResponseSchema = z.object({
   tab: WorktreeTabSchema,
-});
-
-export const WorktreePortParamsSchema = z.object({
-  name: z.string(),
-  label: z.string(),
 });
 
 export const WorktreeIdParamsSchema = z.object({
@@ -798,7 +793,6 @@ export type ProjectWorktreeSnapshot = z.infer<typeof ProjectWorktreeSnapshotSche
 export type WorktreeTab = z.infer<typeof WorktreeTabSchema>;
 export type WorktreeTabParams = z.infer<typeof WorktreeTabParamsSchema>;
 export type CreateTabResponse = z.infer<typeof CreateTabResponseSchema>;
-export type WorktreePortParams = z.infer<typeof WorktreePortParamsSchema>;
 export type WorktreeIdParams = z.infer<typeof WorktreeIdParamsSchema>;
 export type WorktreeIdPortParams = z.infer<typeof WorktreeIdPortParamsSchema>;
 export type RegisterWorktreePortRequest = z.infer<typeof RegisterWorktreePortRequestSchema>;

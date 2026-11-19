@@ -105,14 +105,6 @@ export class WorktreesStore {
     return this.worktreesOf(project).find((worktree) => worktree.branch === branch);
   }
 
-  /** The worktree's current branch, for the API routes still addressed by
-   *  branch. Throws when the worktree is gone. */
-  branchOf(ref: WorktreeRef): string {
-    const worktree = this.find(ref);
-    if (!worktree) throw new Error("Worktree not found");
-    return worktree.branch;
-  }
-
   async refresh(): Promise<void> {
     const request = ++this.#lastRequest;
     try {

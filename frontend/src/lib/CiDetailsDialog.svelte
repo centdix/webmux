@@ -11,13 +11,13 @@
   let {
     project,
     pr,
-    branch,
+    worktreeId,
     onclose,
     onfixsuccess,
   }: {
     project: string;
     pr: PrEntry;
-    branch: string;
+    worktreeId: string;
     onclose: () => void;
     onfixsuccess: () => void;
   } = $props();
@@ -81,7 +81,7 @@
   }
 
   async function handleFix(checkName: string, filteredLogs: string): Promise<void> {
-    if (!branch) return;
+    if (!worktreeId) return;
     fixError = "";
     fixLoading = true;
     const preamble =
@@ -95,7 +95,7 @@
     const sanitizedLogs = normalizeTextForPrompt(filteredLogs);
     try {
       await projectApi(project).sendWorktreePrompt({
-        params: { name: branch },
+        params: { id: worktreeId },
         body: { text: sanitizedLogs, preamble },
       });
       toast.success(`Asked agent to fix ${checkName}`);
@@ -182,7 +182,7 @@
               <Btn
                 variant="cta"
                 small
-                disabled={!branch || fixLoading}
+                disabled={!worktreeId || fixLoading}
                 onclick={() => handleFix(check.name, filtered)}
                 >{fixLoading ? "Asking agent..." : "Ask agent to fix"}</Btn
               >
