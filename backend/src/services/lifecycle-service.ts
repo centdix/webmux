@@ -659,8 +659,11 @@ export class LifecycleService {
     if (!listTabs(meta).some((tab) => tab.kind === "fork")) return;
 
     const sessionName = buildProjectSessionName(this.deps.projectRoot);
-    const windowName = buildWorktreeWindowName(input.branch);
-    const parkingWindow = buildWorktreeParkingWindowName(input.branch);
+    const windows = this.listTmuxWindows();
+    const windowName = findWindow(windows, sessionName, meta.worktreeId, input.branch)?.windowName
+      ?? buildWorktreeWindowName(input.branch);
+    const parkingWindow = findWindow(windows, sessionName, meta.worktreeId, input.branch, "parking")?.windowName
+      ?? buildWorktreeParkingWindowName(input.branch);
     // A parking window may still exist (e.g. the agent terminal was refreshed without a
     // full close/reopen): tear it down so we rebuild parked panes from a clean slate
     // instead of duplicating them. killWindow tolerates an absent window.

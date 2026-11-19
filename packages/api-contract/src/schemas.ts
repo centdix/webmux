@@ -598,10 +598,6 @@ export const CiLogsResponseSchema = z.object({
   logs: z.string(),
 });
 
-export const WorktreeNameParamsSchema = z.object({
-  name: z.string(),
-});
-
 export const WorktreeTabParamsSchema = z.object({
   id: z.string().min(1),
   tabId: z.string(),
