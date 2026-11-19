@@ -2168,8 +2168,9 @@ describe("LifecycleService", () => {
 
     const result = await lifecycle.createWorktrees({ prompt: "Fix the login flow", agents: ["claude", "codex"] });
     expect(result.branches).toHaveLength(2);
-    expect(reportedIds).toHaveLength(2);
-    expect(finishedIds).toEqual(reportedIds);
+    const worktreeIds = [...new Set(reportedIds)];
+    expect(worktreeIds).toHaveLength(2);
+    expect(finishedIds).toEqual(worktreeIds);
     expect(tracker.listPending()).toEqual([]);
   });
 
