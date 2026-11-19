@@ -18,8 +18,10 @@ import { mapWithConcurrency } from "../lib/async";
 import type { RegisteredPort } from "./port-registration-service";
 import { ProjectRuntime } from "./project-runtime";
 
+/** URL-safe id for a worktree without webmux metadata, derived from its path so it stays the
+ *  same across reconciles and when webmux adopts the worktree. */
 export function makeUnmanagedWorktreeId(path: string): string {
-  return `unmanaged:${resolve(path)}`;
+  return `u-${new Bun.CryptoHasher("sha256").update(resolve(path)).digest("hex").slice(0, 16)}`;
 }
 
 async function buildServiceStates(

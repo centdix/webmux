@@ -1020,6 +1020,7 @@ export class LifecycleService {
     const dotenvValues = await loadDotenvLocal(resolved.entry.path);
     return initializeManagedWorktree({
       gitDir: resolved.gitDir,
+      worktreeId: makeUnmanagedWorktreeId(resolved.entry.path),
       branch: resolved.entry.branch ?? resolved.entry.path,
       profile: profileName,
       agent: this.deps.config.workspace.defaultAgent,

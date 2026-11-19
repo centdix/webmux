@@ -149,7 +149,7 @@ describe("ProjectRuntime", () => {
   it("preserves a replacement branch index when removing the previous worktree id", () => {
     const runtime = new ProjectRuntime();
     runtime.upsertWorktree({
-      worktreeId: "unmanaged:/repo/__worktrees/feature-search",
+      worktreeId: "u-0123456789abcdef",
       branch: "feature/search",
       path: "/repo/__worktrees/feature-search",
       runtime: "host",
@@ -161,7 +161,7 @@ describe("ProjectRuntime", () => {
       runtime: "host",
     });
 
-    runtime.removeWorktree("unmanaged:/repo/__worktrees/feature-search");
+    runtime.removeWorktree("u-0123456789abcdef");
 
     expect(runtime.getWorktreeByBranch("feature/search")?.worktreeId).toBe("wt_search");
   });

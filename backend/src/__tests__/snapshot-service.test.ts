@@ -358,7 +358,7 @@ describe("buildProjectSnapshot", () => {
   it("merges by path while the new worktree is still listed under its unmanaged id", () => {
     const runtime = new ProjectRuntime();
     runtime.upsertWorktree({
-      worktreeId: "unmanaged:/repo/__worktrees/feature-pending",
+      worktreeId: "u-0123456789abcdef",
       branch: "feature/pending",
       path: "/repo/__worktrees/feature-pending",
       runtime: "host",
@@ -388,7 +388,7 @@ describe("buildProjectSnapshot", () => {
   it("does not merge a creation into another creation's row of the same branch", () => {
     const runtime = new ProjectRuntime();
     runtime.upsertWorktree({
-      worktreeId: "unmanaged:/repo/__worktrees/feature-pending-a",
+      worktreeId: "u-fedcba9876543210",
       branch: "feature/pending",
       path: "/repo/__worktrees/feature-pending-a",
       runtime: "host",

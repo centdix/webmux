@@ -22,7 +22,7 @@ import type { AutoNameConfig } from "../domain/config";
 import { ProjectRuntime } from "../services/project-runtime";
 import { ArchiveStateService } from "../services/archive-state-service";
 import type { AutoNameGenerator } from "../services/auto-name-service";
-import { ReconciliationService } from "../services/reconciliation-service";
+import { makeUnmanagedWorktreeId, ReconciliationService } from "../services/reconciliation-service";
 import {
   buildCreateWorktreeTargets,
   LifecycleError,
@@ -1148,6 +1148,39 @@ describe("LifecycleService", () => {
     expect(tmux.commands[0]?.command).toContain("claude");
     expect(tmux.commands[0]?.command).not.toContain("--continue");
     expect(runtime.getWorktreeByBranch("feature-open")?.worktreeId).toBe(opened.worktreeId);
+  });
+
+  it("keeps the unmanaged worktree id when opening adopts the worktree", async () => {
+    const repoRoot = await initRepo();
+    const runtime = new ProjectRuntime();
+    const tmux = new FakeTmuxGateway();
+    const git = new BunGitGateway();
+    const lifecycle = makeLifecycleService(repoRoot, tmux, runtime);
+    const worktreePath = join(repoRoot, "__worktrees", "feature-adopt");
+
+    git.createWorktree({
+      repoRoot,
+      worktreePath,
+      branch: "feature-adopt",
+      mode: "new",
+      baseBranch: "main",
+    });
+    await new ReconciliationService({
+      git,
+      tmux,
+      portProbe: new FakePortProbe(),
+      runtime,
+      portRegistrations: { list: () => [] },
+    }).reconcile(repoRoot);
+    const unmanagedId = makeUnmanagedWorktreeId(worktreePath);
+    expect(runtime.getWorktreeByBranch("feature-adopt")?.worktreeId).toBe(unmanagedId);
+
+    const opened = await lifecycle.openWorktree("feature-adopt");
+    const meta = await readWorktreeMeta(git.resolveWorktreeGitDir(worktreePath));
+
+    expect(opened.worktreeId).toBe(unmanagedId);
+    expect(meta?.worktreeId).toBe(unmanagedId);
+    expect(runtime.getWorktreeByBranch("feature-adopt")?.worktreeId).toBe(unmanagedId);
   });
 
   it("creates a managed worktree from an explicit base branch", async () => {

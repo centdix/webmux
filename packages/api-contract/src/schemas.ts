@@ -362,7 +362,8 @@ export const WorktreeTabSchema = z.object({
 });
 
 export const ProjectWorktreeSnapshotSchema = z.object({
-  /** Runtime worktree id: a UUID for managed worktrees, `unmanaged:<path>` otherwise. */
+  /** Runtime worktree id: a UUID for worktrees created by webmux, `u-<hash of path>` for
+   *  worktrees created outside webmux (kept when webmux adopts them). */
   id: z.string(),
   branch: z.string(),
   label: z.string().nullable(),
