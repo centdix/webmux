@@ -4,6 +4,7 @@ import { createLinearIssue, fetchTeamByKey, type LinearIssue } from "../../backe
 import { buildSeedFromLinear, defaultSeedFromLinearDeps } from "../../backend/src/services/conversation-export-service";
 import { findDuplicateLinearIssue, polishLinearIssueTitle } from "../../backend/src/services/linear-title-service";
 import { CommandUsageError, formatServerError, resolveServedProjectPrefix, serverOrigin } from "./shared";
+import { findWorktreeIdInProject } from "./worktree-id";
 
 // The server mounts each project under `/api/projects/<prefix>`. `runOneshot`
 // resolves the served project once and stashes it here so every helper (api
@@ -532,7 +533,6 @@ function recordPrEvents(
 }
 
 function pollProjectState(
-  branch: string,
   worktreeId: string,
   port: number,
   state: PollState,
@@ -567,7 +567,7 @@ function pollProjectState(
     if (stopped) return;
     try {
       const response = await api.fetchWorktrees();
-      const worktree = response.worktrees.find((w: ProjectWorktreeSnapshot) => w.branch === branch);
+      const worktree = response.worktrees.find((w: ProjectWorktreeSnapshot) => w.id === worktreeId);
       if (!worktree) {
         if (state.hadOpenSession) {
           callbacks.onWorktreeRemoved();
@@ -640,6 +640,7 @@ function pollProjectState(
 }
 
 async function ensureWorktreeReady(
+  worktreeId: string,
   branch: string,
   port: number,
   stderr: (line: string) => void,
@@ -649,7 +650,7 @@ async function ensureWorktreeReady(
   while (Date.now() < deadline) {
     try {
       const response = await api.fetchWorktrees();
-      const worktree = response.worktrees.find((w: ProjectWorktreeSnapshot) => w.branch === branch);
+      const worktree = response.worktrees.find((w: ProjectWorktreeSnapshot) => w.id === worktreeId);
       // `closed` is the default lifecycle for a freshly upserted worktree before
       // the agent's first event arrives — don't return ready in that window or
       // the watcher (also driven by `closed`) and our own poller could race on
@@ -771,7 +772,13 @@ async function promptDuplicateChoice(
   return choice;
 }
 
-export async function runOneshot(parsed: ParsedOneshotCommand, port: number): Promise<number> {
+export interface OneshotDependencies {
+  resolveServedProject?: (port: number) => Promise<string>;
+  /** The id of the worktree on a branch, null when none (see `findWorktreeIdByBranch`). */
+  findWorktreeId?: (branch: string) => Promise<string | null>;
+}
+
+export async function runOneshot(parsed: ParsedOneshotCommand, port: number, deps: OneshotDependencies = {}): Promise<number> {
   const stdout = (line: string): void => {
     process.stdout.write(`${line}\n`);
   };
@@ -780,7 +787,7 @@ export async function runOneshot(parsed: ParsedOneshotCommand, port: number): Pr
   };
 
   try {
-    oneshotProject = await resolveServedProjectPrefix(port);
+    oneshotProject = await (deps.resolveServedProject ?? resolveServedProjectPrefix)(port);
   } catch (error) {
     stderr(`[${timestamp()}] [error] ${formatServerError(error, port)}`);
     return 1;
@@ -920,9 +927,8 @@ export async function runOneshot(parsed: ParsedOneshotCommand, port: number): Pr
     // --continue keeps the existing JSONL session, so we deliberately skip
     // the Linear conversation seed — the agent already has that history in
     // its own session and re-injecting it would just duplicate content.
-    const existingWorktree = branch
-      ? (await api.fetchWorktrees()).worktrees.find((w) => w.branch === branch)
-      : undefined;
+    const findWorktreeId = deps.findWorktreeId ?? ((name: string) => findWorktreeIdInProject(process.cwd(), name));
+    const existingWorktreeId = branch ? await findWorktreeId(branch) : null;
 
     // Hand the server the close+post responsibilities so the run can finish
     // safely even if this CLI is killed. The watcher disarms itself the moment
@@ -932,10 +938,10 @@ export async function runOneshot(parsed: ParsedOneshotCommand, port: number): Pr
       ...(postToLinearTarget ? { postToLinearOnDone: postToLinearTarget } : {}),
     };
 
-    if (parsed.resume || existingWorktree) {
+    if (parsed.resume || existingWorktreeId) {
       if (!branch) throw new Error("resume requires a branch name");
-      if (!existingWorktree) throw new Error(`Worktree not found: ${branch}`);
-      worktreeId = existingWorktree.id;
+      if (!existingWorktreeId) throw new Error(`Worktree not found: ${branch}`);
+      worktreeId = existingWorktreeId;
       const reason = parsed.resume ? "resuming" : `worktree exists, resuming ${branch}`;
       stdout(`[${timestamp()}] [event] ${reason}`);
       if (fromLinearIssueId) {
@@ -972,7 +978,7 @@ export async function runOneshot(parsed: ParsedOneshotCommand, port: number): Pr
     return 1;
   }
 
-  const ready = await ensureWorktreeReady(branch, port, stderr);
+  const ready = await ensureWorktreeReady(worktreeId, branch, port, stderr);
   if (!ready.ready) return 1;
 
   const conversationState: ConversationPrintState = {
@@ -1042,7 +1048,7 @@ export async function runOneshot(parsed: ParsedOneshotCommand, port: number): Pr
     watcherWasArmed: false,
   };
 
-  poller = pollProjectState(branch, worktreeId, port, pollState, {
+  poller = pollProjectState(worktreeId, port, pollState, {
     onSessionClosed: () => {
       stdout(`[${timestamp()}] [event] session closed — exiting`);
       finalize(0);

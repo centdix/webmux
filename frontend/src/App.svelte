@@ -181,7 +181,8 @@
   let currentTheme = $state<ThemeKey>(loadSavedTheme());
   let useWebChatUi = $state(loadUseWebChatUi());
   let terminalTheme = $derived(getTheme(currentTheme).terminal);
-  let pendingCreate = $state<{ project: string; branchHint: string | null } | null>(null);
+  /** Auto-select target of a create in flight: its id once the server answered, else the requested branch. */
+  let pendingCreate = $state<{ project: string; worktreeId: string | null; branchHint: string | null } | null>(null);
   let availableBranches = $state<AvailableBranch[]>([]);
   let availableBranchesLoading = $state(false);
   let availableBranchesError = $state<string | null>(null);
@@ -433,14 +434,16 @@
 
   $effect(() => {
     if (pendingCreateCount === 0 || latestAutoSelectCreateId === -1 || !pendingCreate) return;
-    const { project: createProject, branchHint } = pendingCreate;
+    const { project: createProject, worktreeId, branchHint } = pendingCreate;
     const candidates = store.worktreesOf(createProject);
     const creating = candidates.filter((w) => w.creating);
-    const target = branchHint
-      ? candidates.find((w) => w.branch === branchHint)
-      : creating.length === 1
-        ? creating[0]
-        : undefined;
+    const target = worktreeId
+      ? candidates.find((w) => w.id === worktreeId)
+      : branchHint
+        ? candidates.find((w) => w.branch === branchHint)
+        : creating.length === 1
+          ? creating[0]
+          : undefined;
     if (!target) return;
     selectWorktree(target);
   });
@@ -598,6 +601,7 @@
     if (shouldAutoSelectCreatedWorktree) {
       pendingCreate = {
         project: targetProject,
+        worktreeId: null,
         branchHint: expectedCreatedCount > 1 ? null : request.branch ?? null,
       };
     }
@@ -616,7 +620,7 @@
       void store.refresh();
       const result = await createPromise;
       if (shouldAutoSelectCreatedWorktree && requestId === latestAutoSelectCreateId) {
-        pendingCreate = { project: targetProject, branchHint: result.primaryBranch };
+        pendingCreate = { project: targetProject, worktreeId: result.primaryWorktreeId, branchHint: null };
       }
       invalidateBranchCaches();
       await store.refresh();
