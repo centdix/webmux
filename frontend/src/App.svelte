@@ -69,7 +69,7 @@
     WorktreesStore,
   } from "./lib/worktrees-store.svelte";
   import { neighborBranch, stepBranch, type WorktreeSelection } from "./lib/worktree-selection.svelte";
-  import { readLocationHash, resolveHashTarget, writeLocationHash } from "./lib/project-location";
+  import { readLocationHash, resolveHashTarget } from "./lib/project-location";
   import { WorktreeActions } from "./lib/worktree-actions.svelte";
   import { NotificationCenter } from "./lib/notifications.svelte";
   import { ProjectCache } from "./lib/project-cache.svelte";
@@ -384,6 +384,7 @@
   let removeWorktree = $derived(removeRef ? store.find(removeRef) : undefined);
   let labelWorktree = $derived(labelRef ? store.find(labelRef) : undefined);
   let profileWorktree = $derived(profileRef ? store.find(profileRef) : undefined);
+  let postToLinearWorktree = $derived(postToLinearRef ? store.find(postToLinearRef) : undefined);
   let canConnect = $derived(selectedWorktree?.mux === "✓" && !selectedWorktree.creating);
   let showWebChat = $derived(useWebChatUi && canConnect && worktreeSupportsChat(selectedWorktree));
   // Tabs are only meaningful for the built-in terminal agents that have a forkable session.
@@ -793,7 +794,7 @@
   function handleKeydown(e: KeyboardEvent) {
     // Ignore shortcuts when a dialog is open (let dialog handle its own keys)
     if (
-      createDialogOpen || removeRef || pull.target || removal.target || showAddProjectDialog || postToLinkedConfirm
+      createDialogOpen || removeWorktree || pull.target || removal.target || showAddProjectDialog || postToLinkedConfirm
       || detailIssue || showSettingsDialog
     ) return;
 
@@ -842,7 +843,7 @@
     if (target?.kind === "worktree") selectWorktree(target.ref);
     else if (target?.kind === "project") switchToProject(target.project);
     // An unknown target keeps the selection; the hash goes back to naming it.
-    writeLocationHash(selection.project, selectedWorktree?.branch ?? null);
+    selection.writeHash(selectedWorktree);
   }
 
   onMount(() => {
@@ -1209,9 +1210,9 @@
   />
 {/if}
 
-{#if removeRef}
+{#if removeRef && removeWorktree}
   <ConfirmDialog
-    message={`Remove worktree "${removeWorktree?.branch ?? ""}" from ${store.nameOf(removeRef.project) ?? removeRef.project}? This action cannot be undone.`}
+    message={`Remove worktree "${removeWorktree.branch}" from ${store.nameOf(removeRef.project) ?? removeRef.project}? This action cannot be undone.`}
     onconfirm={handleRemove}
     oncancel={() => (removeRef = null)}
   />
@@ -1311,10 +1312,10 @@
   />
 {/if}
 
-{#if postToLinearRef}
+{#if postToLinearRef && postToLinearWorktree}
   {@const ref = postToLinearRef}
   <LinearPostDialog
-    branch={store.find(ref)?.branch ?? ""}
+    branch={postToLinearWorktree.branch}
     onsubmit={async (target) => {
       await actions.postToLinear(ref, target);
     }}

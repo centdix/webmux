@@ -72,6 +72,15 @@ describe("migrateBranchKeys", () => {
     expect(migrateBranchKeys(keys, worktreesOf)).toEqual(new Set(["alpha:wt-1", "alpha:wt-2"]));
   });
 
+  it("moves the same branch of two loaded projects to each project's worktree", () => {
+    const twoProjects: Record<string, Named[]> = {
+      alpha: [worktree("alpha", "wt-a", "main")],
+      beta: [worktree("beta", "wt-b", "main")],
+    };
+    const keys = new Set([legacyBranchKey("alpha", "main"), legacyBranchKey("beta", "main")]);
+    expect(migrateBranchKeys(keys, (project) => twoProjects[project] ?? null)).toEqual(new Set(["alpha:wt-a", "beta:wt-b"]));
+  });
+
   it("keeps keys of projects not loaded yet, and keys naming no worktree", () => {
     const keys = new Set([legacyBranchKey("beta", "feat/x"), legacyBranchKey("alpha", "gone"), "alpha:wt-1"]);
     expect(migrateBranchKeys(keys, worktreesOf)).toBeNull();

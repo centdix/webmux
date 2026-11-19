@@ -843,6 +843,43 @@ describe("App create selection", () => {
     expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("feature/saved");
   });
 
+  it("keeps a hash worktree pending, even through a hashchange, while its project fails to load, and selects it once loaded", async () => {
+    window.history.replaceState(null, "", `/#${PROJECT}/feature/hash`);
+    vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("main"), createWorktree("feature/hash", { id: "wt-hashed" })]);
+    vi.mocked(fetchAllProjectWorktrees).mockResolvedValueOnce([
+      { prefix: PROJECT, name: PROJECT, worktrees: [], pendingCreations: [], error: "git exploded" },
+    ]);
+    const selection = new WorktreeSelection(PROJECT);
+
+    render(App, { props: { selection, onNoProjects: vi.fn() } });
+
+    expect(await screen.findByText("git exploded")).toBeInTheDocument();
+    expect(selection.pending).toEqual({ project: PROJECT, name: "feature/hash", source: "hash" });
+    expect(window.location.hash).toBe(`#${PROJECT}/feature/hash`);
+
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    expect(window.location.hash).toBe(`#${PROJECT}/feature/hash`);
+
+    await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => expect(selection.selected).toEqual({ project: PROJECT, id: "wt-hashed" }));
+    expect(window.location.hash).toBe(`#${PROJECT}/feature/hash`);
+  });
+
+  it("selects by id the worktree a changed hash names by branch", async () => {
+    vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("main"), createWorktree("feature/x", { id: "wt-x" })]);
+    const selection = new WorktreeSelection(PROJECT);
+
+    render(App, { props: { selection, onNoProjects: vi.fn() } });
+    await screen.findByTitle("main");
+    window.history.replaceState(null, "", `/#${PROJECT}/feature/x`);
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+
+    expect(await screen.findByTitle("feature/x")).toBeInTheDocument();
+    expect(selection.selected).toEqual({ project: PROJECT, id: "wt-x" });
+    expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("wt-x");
+  });
+
   it("drops the pending auto-select of a create once the user selects another project's worktree", async () => {
     otherProjects.list = [{
       prefix: "images",

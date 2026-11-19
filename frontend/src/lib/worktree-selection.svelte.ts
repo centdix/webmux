@@ -73,12 +73,18 @@ export class WorktreeSelection {
     this.select(match ?? null);
   }
 
+  /** Mirror the selection into the hash: its current branch, else the hash
+   *  branch still pending. */
+  writeHash(selectedWorktree: Pick<WorktreeInfo, "branch"> | undefined): void {
+    const pendingBranch = this.pending?.source === "hash" ? this.pending.name : null;
+    writeLocationHash(this.project, selectedWorktree?.branch ?? pendingBranch);
+  }
+
   /** Mirror the selection into storage (its id) and the hash (its current
    *  branch). Once the project's list is known, a resolved worktree is saved,
    *  and an empty list clears it. */
   persist(selectedWorktree: Pick<WorktreeInfo, "id" | "branch"> | undefined, loaded: boolean, hasSelectable: boolean): void {
-    const pendingBranch = this.pending?.source === "hash" ? this.pending.name : null;
-    writeLocationHash(this.project, selectedWorktree?.branch ?? pendingBranch);
+    this.writeHash(selectedWorktree);
     if (!loaded) return;
     if (selectedWorktree) saveSelectedWorktree(this.project, selectedWorktree.id);
     else if (!hasSelectable) saveSelectedWorktree(this.project, null);
