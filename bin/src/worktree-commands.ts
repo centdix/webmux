@@ -13,6 +13,7 @@ import { compareWorktreeOrder, isValidWorktreeName } from "../../backend/src/dom
 import { isValidPortLabel } from "../../backend/src/domain/port-registrations";
 import type { WorktreeRef } from "../../backend/src/services/worktree-port-api";
 import { buildArchivedWorktreePathSet } from "../../backend/src/services/archive-service";
+import { resolveWorktreeId } from "../../backend/src/services/reconciliation-service";
 import { readProjectsRegistryFile, type ProjectsRegistryReadResult } from "../../backend/src/adapters/projects-registry";
 import type { ProjectEntry } from "../../backend/src/domain/projects";
 import { createPortRegistrationService, createWebmuxRuntime } from "../../backend/src/runtime";
@@ -35,14 +36,14 @@ type WorktreeListMode = "active" | "all" | "archived";
 interface LifecycleServiceLike {
   createWorktree(input: CreateLifecycleWorktreeInput): Promise<{ branch: string; worktreeId: string }>;
   createWorktrees(input: CreateLifecycleWorktreesInput): Promise<CreateLifecycleWorktreesResult>;
-  openWorktree(branch: string): Promise<{ branch: string; worktreeId: string }>;
-  closeWorktree(branch: string): Promise<void>;
-  refreshAgentTerminal(branch: string): Promise<{ branch: string; worktreeId: string }>;
-  setWorktreeArchived(branch: string, archived: boolean): Promise<void>;
-  setWorktreeLabel(branch: string, label: string | null): Promise<{ label: string | null }>;
-  setWorktreeProfile(branch: string, profile: string): Promise<{ profile: string; restarted: boolean }>;
-  removeWorktree(branch: string): Promise<void>;
-  mergeWorktree(branch: string): Promise<void>;
+  openWorktree(worktreeId: string): Promise<{ branch: string; worktreeId: string }>;
+  closeWorktree(worktreeId: string): Promise<void>;
+  refreshAgentTerminal(worktreeId: string): Promise<{ branch: string; worktreeId: string }>;
+  setWorktreeArchived(worktreeId: string, archived: boolean): Promise<void>;
+  setWorktreeLabel(worktreeId: string, label: string | null): Promise<{ label: string | null }>;
+  setWorktreeProfile(worktreeId: string, profile: string): Promise<{ profile: string; restarted: boolean }>;
+  removeWorktree(worktreeId: string): Promise<void>;
+  mergeWorktree(worktreeId: string): Promise<void>;
   pruneWorktrees(): Promise<PruneWorktreesResult>;
 }
 
@@ -876,6 +877,16 @@ async function readWorktreeId(
   }
 }
 
+/** Translate a branch argument to the id the lifecycle service addresses its worktree by. */
+async function resolveWorktreeIdByBranch(runtime: WorktreeRuntimeLike, branch: string): Promise<string> {
+  const entry = listProjectWorktrees(runtime).find((candidate) => candidate.branch === branch);
+  if (!entry) {
+    throw new Error(`Worktree not found: ${branch}`);
+  }
+  const meta = await readWorktreeMeta(runtime.git.resolveWorktreeGitDir(entry.path));
+  return resolveWorktreeId(meta, entry.path);
+}
+
 async function defaultConfirmPrune(worktreeCount: number): Promise<boolean> {
   const response = await p.confirm({
     message: `Prune ${worktreeCount} closed worktree${worktreeCount === 1 ? "" : "s"}? This action cannot be undone.`,
@@ -1289,7 +1300,7 @@ export async function runWorktreeCommand(
           continue;
         }
         try {
-          await runtime.lifecycleService.openWorktree(branch);
+          await runtime.lifecycleService.openWorktree(await resolveWorktreeIdByBranch(runtime, branch));
           stdout(`Restored ${branch}`);
           restored++;
           if (!firstRestored) firstRestored = branch;
@@ -1428,7 +1439,10 @@ export async function runWorktreeCommand(
         projectDir: context.projectDir,
         port: context.port,
       });
-      const result = await runtime.lifecycleService.setWorktreeLabel(parsed.branch, parsed.label);
+      const result = await runtime.lifecycleService.setWorktreeLabel(
+        await resolveWorktreeIdByBranch(runtime, parsed.branch),
+        parsed.label,
+      );
       stdout(result.label
         ? `Labeled worktree ${parsed.branch} as "${result.label}"`
         : `Cleared label for ${parsed.branch}`);
@@ -1449,7 +1463,10 @@ export async function runWorktreeCommand(
         port: context.port,
         prefix: await resolvePrefix(),
       });
-      const result = await runtime.lifecycleService.setWorktreeProfile(parsed.branch, parsed.profile);
+      const result = await runtime.lifecycleService.setWorktreeProfile(
+        await resolveWorktreeIdByBranch(runtime, parsed.branch),
+        parsed.profile,
+      );
       stdout(result.restarted
         ? `Switched ${parsed.branch} to profile "${result.profile}" and restarted the session`
         : `Switched ${parsed.branch} to profile "${result.profile}" — applies on next open`);
@@ -1471,35 +1488,36 @@ export async function runWorktreeCommand(
       port: context.port,
       prefix: needsPrefix ? await resolvePrefix() : undefined,
     });
+    const worktreeId = await resolveWorktreeIdByBranch(runtime, branch);
 
     switch (command) {
       case "open":
-        await runtime.lifecycleService.openWorktree(branch);
+        await runtime.lifecycleService.openWorktree(worktreeId);
         stdout(`Opened worktree ${branch}`);
         switchToTmuxWindow(runtime.projectDir, branch);
         return 0;
       case "close":
-        await runtime.lifecycleService.closeWorktree(branch);
+        await runtime.lifecycleService.closeWorktree(worktreeId);
         stdout(`Closed worktree ${branch}`);
         return 0;
       case "refresh":
-        await runtime.lifecycleService.refreshAgentTerminal(branch);
+        await runtime.lifecycleService.refreshAgentTerminal(worktreeId);
         stdout(`Refreshed agent terminal for ${branch}`);
         return 0;
       case "archive":
-        await runtime.lifecycleService.setWorktreeArchived(branch, true);
+        await runtime.lifecycleService.setWorktreeArchived(worktreeId, true);
         stdout(`Archived worktree ${branch}`);
         return 0;
       case "unarchive":
-        await runtime.lifecycleService.setWorktreeArchived(branch, false);
+        await runtime.lifecycleService.setWorktreeArchived(worktreeId, false);
         stdout(`Restored worktree ${branch}`);
         return 0;
       case "remove":
-        await runtime.lifecycleService.removeWorktree(branch);
+        await runtime.lifecycleService.removeWorktree(worktreeId);
         stdout(`Removed worktree ${branch}`);
         return 0;
       case "merge":
-        await runtime.lifecycleService.mergeWorktree(branch);
+        await runtime.lifecycleService.mergeWorktree(worktreeId);
         stdout(`Merged ${branch} into ${runtime.config.workspace.mainBranch}`);
         return 0;
     }

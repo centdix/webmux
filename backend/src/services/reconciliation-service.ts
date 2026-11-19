@@ -24,6 +24,11 @@ export function makeUnmanagedWorktreeId(path: string): string {
   return `u-${new Bun.CryptoHasher("sha256").update(resolve(path)).digest("hex").slice(0, 16)}`;
 }
 
+/** The id of the worktree at `path`: its meta's id, else the unmanaged id derived from the path. */
+export function resolveWorktreeId(meta: { worktreeId: string } | null, path: string): string {
+  return meta?.worktreeId ?? makeUnmanagedWorktreeId(path);
+}
+
 async function buildServiceStates(
   deps: Pick<ReconciliationServiceDependencies, "portProbe" | "portRegistrations">,
   repoRoot: string,
@@ -181,7 +186,7 @@ export class ReconciliationService {
       const gitDir = this.deps.git.resolveWorktreeGitDir(entry.path);
       const meta = await readWorktreeMeta(gitDir);
       const branch = resolveBranch(entry, meta?.branch ?? null);
-      const worktreeId = meta?.worktreeId ?? makeUnmanagedWorktreeId(entry.path);
+      const worktreeId = resolveWorktreeId(meta, entry.path);
       const gitStatus = this.deps.git.readWorktreeStatus(entry.path);
       const window = findWindow(windows, sessionName, worktreeId, branch);
       const parkingWindow = findWindow(windows, sessionName, worktreeId, branch, "parking");

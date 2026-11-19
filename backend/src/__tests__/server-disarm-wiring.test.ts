@@ -38,7 +38,7 @@ describe("server.ts disarm-on-interaction wiring", () => {
     const source = await Bun.file(serverPath).text();
     // The busy-guard is now provided by withMutatingTab (which calls
     // ensureBranchNotBusy internally) — see the serialization wiring test below.
-    const pattern = /async function apiRefreshWorktreeAgentTerminal\(branch: string\): Promise<Response> \{[\s\S]*?withMutatingTab\(branch[\s\S]*?lifecycleService\.refreshAgentTerminal\(branch\)/;
+    const pattern = /async function apiRefreshWorktreeAgentTerminal\(branch: string\): Promise<Response> \{[\s\S]*?withMutatingTab\(branch[\s\S]*?lifecycleService\.refreshAgentTerminal\(await resolveWorktreeIdByName\(branch\)\)/;
     expect(source).toMatch(pattern);
   });
 });

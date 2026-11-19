@@ -46,7 +46,7 @@ import {
 } from "./agent-service";
 import { getAgentDefinition, type AgentDefinition } from "./agent-registry";
 import type { CustomAgentsStore } from "./custom-agents-store";
-import { makeUnmanagedWorktreeId, type ReconciliationService } from "./reconciliation-service";
+import { makeUnmanagedWorktreeId, resolveWorktreeId, type ReconciliationService } from "./reconciliation-service";
 import { buildTmuxPaneSystemPrompt, ensureSessionLayout, isWorktreeOpen, planSessionLayout } from "./session-service";
 import { buildPortRegistrationSystemPrompt } from "./port-prompt";
 import { ArchiveStateService } from "./archive-state-service";
@@ -122,6 +122,7 @@ export function buildCreateWorktreeTargets<T extends { agent: AgentId }>(
 
 interface ResolvedLifecycleWorktree {
   entry: GitWorktreeEntry;
+  branch: string;
   gitDir: string;
   meta: WorktreeMeta | null;
 }
@@ -228,7 +229,7 @@ export class LifecycleService {
         agent: target.agent,
         worktreeId: target.worktreeId,
       }));
-      const createdBranches: string[] = [];
+      const created: Array<{ branch: string; worktreeId: string }> = [];
 
       try {
         // Every target shows as a creating row with its branch as soon as the
@@ -238,18 +239,18 @@ export class LifecycleService {
           await this.reportCreateProgress({ ...this.createProgressBase(target), phase: "creating_worktree" });
         }
         for (const target of targets) {
-          const created = await this.createResolvedWorktree(target);
+          created.push(await this.createResolvedWorktree(target));
           reported.delete(target.worktreeId);
-          createdBranches.push(created.branch);
         }
       } catch (error) {
-        const rollbackError = await this.rollbackCreatedWorktrees(createdBranches);
+        const rollbackError = await this.rollbackCreatedWorktrees(created);
         if (rollbackError) {
           throw this.wrapOperationError(new Error(`${toErrorMessage(error)}; ${rollbackError}`));
         }
         throw this.wrapOperationError(error);
       }
 
+      const createdBranches = created.map((worktree) => worktree.branch);
       return {
         primaryBranch: createdBranches[0],
         branches: createdBranches,
@@ -289,14 +290,15 @@ export class LifecycleService {
   }
 
   async openWorktree(
-    branch: string,
+    worktreeId: string,
     options: { prompt?: string; oneshot?: OneshotMeta } = {},
   ): Promise<{
     branch: string;
     worktreeId: string;
   }> {
     try {
-      const resolved = await this.resolveExistingWorktree(branch);
+      const resolved = await this.resolveExistingWorktree(worktreeId);
+      const { branch } = resolved;
       let initialized = resolved.meta
         ? await this.refreshManagedArtifacts(resolved)
         : await this.initializeUnmanagedWorktree(resolved);
@@ -352,12 +354,13 @@ export class LifecycleService {
     }
   }
 
-  async refreshAgentTerminal(branch: string): Promise<{
+  async refreshAgentTerminal(worktreeId: string): Promise<{
     branch: string;
     worktreeId: string;
   }> {
     try {
-      const resolved = await this.resolveExistingWorktree(branch);
+      const resolved = await this.resolveExistingWorktree(worktreeId);
+      const { branch } = resolved;
       if (!resolved.meta) {
         throw new LifecycleError(`Worktree ${branch} has no managed metadata to refresh`, 409);
       }
@@ -432,9 +435,9 @@ export class LifecycleService {
     }
   }
 
-  async createWorktreeTab(branch: string): Promise<{ tab: WorktreeTab }> {
+  async createWorktreeTab(worktreeId: string): Promise<{ tab: WorktreeTab }> {
     try {
-      const ctx = await this.prepareTabContext(branch);
+      const ctx = await this.prepareTabContext(worktreeId);
       const rootSessionId = await this.ensureRootSessionId(ctx);
       if (!rootSessionId) {
         throw new LifecycleError(
@@ -452,7 +455,7 @@ export class LifecycleService {
         runtimeEnvPath: ctx.initialized.paths.runtimeEnvPath,
         repoRoot: this.deps.projectRoot,
         worktreePath: ctx.worktreePath,
-        branch,
+        branch: ctx.branch,
         profileName: ctx.profileName,
         yolo: ctx.profile.yolo === true,
         launchMode: "fork",
@@ -490,9 +493,9 @@ export class LifecycleService {
     }
   }
 
-  async selectWorktreeTab(branch: string, tabId: string): Promise<void> {
+  async selectWorktreeTab(worktreeId: string, tabId: string): Promise<void> {
     try {
-      const ctx = await this.prepareTabContext(branch);
+      const ctx = await this.prepareTabContext(worktreeId);
       const target = findTab(ctx.meta, tabId);
       if (!target) throw new LifecycleError(`Tab not found: ${tabId}`, 404);
       const outgoingActiveId = readActiveTabId(ctx.meta);
@@ -510,9 +513,9 @@ export class LifecycleService {
     }
   }
 
-  async deleteWorktreeTab(branch: string, tabId: string): Promise<void> {
+  async deleteWorktreeTab(worktreeId: string, tabId: string): Promise<void> {
     try {
-      const ctx = await this.prepareTabContext(branch);
+      const ctx = await this.prepareTabContext(worktreeId);
       const target = findTab(ctx.meta, tabId);
       if (!target) throw new LifecycleError(`Tab not found: ${tabId}`, 404);
       if (target.kind === "root") throw new LifecycleError("The root tab cannot be deleted", 400);
@@ -539,8 +542,9 @@ export class LifecycleService {
     return meta;
   }
 
-  private async prepareTabContext(branch: string): Promise<{
+  private async prepareTabContext(worktreeId: string): Promise<{
     resolved: ResolvedLifecycleWorktree;
+    branch: string;
     initialized: InitializeManagedWorktreeResult;
     meta: WorktreeMeta;
     worktreePath: string;
@@ -552,7 +556,8 @@ export class LifecycleService {
     windowName: string;
     parkingWindow: string;
   }> {
-    const resolved = await this.resolveExistingWorktree(branch);
+    const resolved = await this.resolveExistingWorktree(worktreeId);
+    const { branch } = resolved;
     if (!resolved.meta) throw new LifecycleError(`Worktree ${branch} has no managed metadata`, 409);
 
     const sessionName = buildProjectSessionName(this.deps.projectRoot);
@@ -573,6 +578,7 @@ export class LifecycleService {
     const initialized = await this.refreshManagedArtifacts(resolved);
     return {
       resolved,
+      branch,
       initialized,
       meta: initialized.meta,
       worktreePath: resolved.entry.path,
@@ -674,10 +680,10 @@ export class LifecycleService {
   /** Clears the oneshot watch state from a worktree's persisted meta, if present.
    *  Idempotent: returns true when armed state was cleared, false otherwise.
    *  The server-side oneshot watcher calls this on any browser-originated interaction. */
-  async disarmOneshot(branch: string): Promise<boolean> {
+  async disarmOneshot(worktreeId: string): Promise<boolean> {
     let resolved: ResolvedLifecycleWorktree;
     try {
-      resolved = await this.resolveExistingWorktree(branch);
+      resolved = await this.resolveExistingWorktree(worktreeId);
     } catch {
       return false;
     }
@@ -688,18 +694,18 @@ export class LifecycleService {
     return true;
   }
 
-  async closeWorktree(branch: string): Promise<void> {
+  async closeWorktree(worktreeId: string): Promise<void> {
     try {
-      await this.resolveExistingWorktree(branch);
-      await this.closeBranchWindow(branch);
+      const resolved = await this.resolveExistingWorktree(worktreeId);
+      await this.closeBranchWindow(resolved.branch);
     } catch (error) {
       throw this.wrapOperationError(error);
     }
   }
 
-  async removeWorktree(branch: string): Promise<void> {
+  async removeWorktree(worktreeId: string): Promise<void> {
     try {
-      const resolved = await this.resolveExistingWorktree(branch);
+      const resolved = await this.resolveExistingWorktree(worktreeId);
       await this.removeResolvedWorktree(resolved);
     } catch (error) {
       throw this.wrapOperationError(error);
@@ -713,7 +719,7 @@ export class LifecycleService {
       const removedBranches: string[] = [];
 
       for (const resolved of resolvedWorktrees) {
-        const branch = resolved.entry.branch ?? resolved.entry.path;
+        const { branch } = resolved;
         if (this.deps.tmux.hasWindow(sessionName, buildWorktreeWindowName(branch))) {
           continue;
         }
@@ -727,9 +733,10 @@ export class LifecycleService {
     }
   }
 
-  async mergeWorktree(branch: string): Promise<void> {
+  async mergeWorktree(worktreeId: string): Promise<void> {
     try {
-      const resolved = await this.resolveExistingWorktree(branch);
+      const resolved = await this.resolveExistingWorktree(worktreeId);
+      const { branch } = resolved;
       this.ensureNoUncommittedChanges(resolved.entry);
 
       mergeManagedWorktree(
@@ -754,11 +761,11 @@ export class LifecycleService {
     }
   }
 
-  async setWorktreeArchived(branch: string, archived: boolean): Promise<void> {
+  async setWorktreeArchived(worktreeId: string, archived: boolean): Promise<void> {
     try {
-      const resolved = await this.resolveExistingWorktree(branch);
+      const resolved = await this.resolveExistingWorktree(worktreeId);
       if (archived) {
-        await this.closeBranchWindow(branch);
+        await this.closeBranchWindow(resolved.branch);
       }
       await this.updateWorktreeArchivedState(resolved.entry.path, archived);
     } catch (error) {
@@ -766,12 +773,12 @@ export class LifecycleService {
     }
   }
 
-  async setWorktreeLabel(branch: string, label: string | null): Promise<{ label: string | null }> {
+  async setWorktreeLabel(worktreeId: string, label: string | null): Promise<{ label: string | null }> {
     try {
       const normalizedLabel = normalizeWorktreeLabel(label);
-      const resolved = await this.resolveExistingWorktree(branch);
+      const resolved = await this.resolveExistingWorktree(worktreeId);
       if (!resolved.meta) {
-        throw new LifecycleError(`Worktree ${branch} has no managed metadata to label`, 409);
+        throw new LifecycleError(`Worktree ${resolved.branch} has no managed metadata to label`, 409);
       }
       const nextMeta = this.withUpdatedLabel(resolved.meta, normalizedLabel);
       await writeWorktreeMeta(resolved.gitDir, nextMeta);
@@ -785,12 +792,13 @@ export class LifecycleService {
   /** Switch a worktree to another profile. When the worktree is open its tmux
    *  window is rebuilt from the new profile's pane templates (resuming the agent
    *  conversation); when it is closed the new profile applies on the next open. */
-  async setWorktreeProfile(branch: string, profileName: string): Promise<{
+  async setWorktreeProfile(worktreeId: string, profileName: string): Promise<{
     profile: string;
     restarted: boolean;
   }> {
     try {
-      const resolved = await this.resolveExistingWorktree(branch);
+      const resolved = await this.resolveExistingWorktree(worktreeId);
+      const { branch } = resolved;
       if (!resolved.meta) {
         throw new LifecycleError(`Worktree ${branch} has no managed metadata to reprofile`, 409);
       }
@@ -813,7 +821,7 @@ export class LifecycleService {
       });
 
       if (wasOpen) {
-        await this.openWorktree(branch);
+        await this.openWorktree(worktreeId);
       } else {
         await this.deps.reconciliation.reconcile(this.deps.projectRoot, { force: true });
       }
@@ -989,15 +997,16 @@ export class LifecycleService {
     );
   }
 
-  private async resolveExistingWorktree(branch: string): Promise<ResolvedLifecycleWorktree> {
-    const entry = this.listProjectWorktrees().find((candidate) => candidate.branch === branch);
-    if (!entry) {
-      throw new LifecycleError(`Worktree not found: ${branch}`, 404);
+  private async resolveExistingWorktree(worktreeId: string): Promise<ResolvedLifecycleWorktree> {
+    for (const entry of this.listProjectWorktrees()) {
+      if (entry.branch === null) continue;
+      const gitDir = this.deps.git.resolveWorktreeGitDir(entry.path);
+      const meta = await readWorktreeMeta(gitDir);
+      if (resolveWorktreeId(meta, entry.path) === worktreeId) {
+        return { entry, branch: entry.branch, gitDir, meta };
+      }
     }
-
-    const gitDir = this.deps.git.resolveWorktreeGitDir(entry.path);
-    const meta = await readWorktreeMeta(gitDir);
-    return { entry, gitDir, meta };
+    throw new LifecycleError(`Worktree not found: ${worktreeId}`, 404);
   }
 
   private async resolveAllWorktrees(): Promise<ResolvedLifecycleWorktree[]> {
@@ -1008,7 +1017,7 @@ export class LifecycleService {
     return await Promise.all(entries.map(async (entry) => {
       const gitDir = this.deps.git.resolveWorktreeGitDir(entry.path);
       const meta = await readWorktreeMeta(gitDir);
-      return { entry, gitDir, meta };
+      return { entry, branch: entry.branch ?? entry.path, gitDir, meta };
     }));
   }
 
@@ -1428,12 +1437,14 @@ export class LifecycleService {
     };
   }
 
-  private async rollbackCreatedWorktrees(branches: string[]): Promise<string | null> {
+  private async rollbackCreatedWorktrees(
+    created: Array<{ branch: string; worktreeId: string }>,
+  ): Promise<string | null> {
     const cleanupErrors: string[] = [];
 
-    for (const branch of [...branches].reverse()) {
+    for (const { branch, worktreeId } of [...created].reverse()) {
       try {
-        await this.removeWorktree(branch);
+        await this.removeWorktree(worktreeId);
       } catch (error) {
         cleanupErrors.push(`rollback failed for ${branch}: ${toErrorMessage(error)}`);
       }

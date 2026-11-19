@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { readProjectsRegistryFile } from "../../backend/src/adapters/projects-registry";
 import { buildProjectSessionName, buildWorktreeWindowName } from "../../backend/src/adapters/tmux";
 import type { CreateLifecycleWorktreeInput, CreateLifecycleWorktreesInput } from "../../backend/src/services/lifecycle-service";
+import { makeUnmanagedWorktreeId } from "../../backend/src/services/reconciliation-service";
 import {
   parseAddCommandArgs,
   parseBranchCommandArgs,
@@ -37,33 +38,33 @@ function stubLifecycleService(calls: Array<{ method: string; value: unknown }>) 
         : [branch];
       return { primaryBranch: branches[0] ?? branch, branches };
     },
-    async openWorktree(branch: string): Promise<{ branch: string; worktreeId: string }> {
-      calls.push({ method: "openWorktree", value: branch });
-      return { branch, worktreeId: "wt-2" };
+    async openWorktree(worktreeId: string): Promise<{ branch: string; worktreeId: string }> {
+      calls.push({ method: "openWorktree", value: worktreeId });
+      return { branch: "feature/search", worktreeId };
     },
-    async closeWorktree(branch: string): Promise<void> {
-      calls.push({ method: "closeWorktree", value: branch });
+    async closeWorktree(worktreeId: string): Promise<void> {
+      calls.push({ method: "closeWorktree", value: worktreeId });
     },
-    async refreshAgentTerminal(branch: string): Promise<{ branch: string; worktreeId: string }> {
-      calls.push({ method: "refreshAgentTerminal", value: branch });
-      return { branch, worktreeId: "wt-3" };
+    async refreshAgentTerminal(worktreeId: string): Promise<{ branch: string; worktreeId: string }> {
+      calls.push({ method: "refreshAgentTerminal", value: worktreeId });
+      return { branch: "feature/search", worktreeId };
     },
-    async setWorktreeArchived(branch: string, archived: boolean): Promise<void> {
-      calls.push({ method: "setWorktreeArchived", value: { branch, archived } });
+    async setWorktreeArchived(worktreeId: string, archived: boolean): Promise<void> {
+      calls.push({ method: "setWorktreeArchived", value: { worktreeId, archived } });
     },
-    async setWorktreeLabel(branch: string, label: string | null): Promise<{ label: string | null }> {
-      calls.push({ method: "setWorktreeLabel", value: { branch, label } });
+    async setWorktreeLabel(worktreeId: string, label: string | null): Promise<{ label: string | null }> {
+      calls.push({ method: "setWorktreeLabel", value: { worktreeId, label } });
       return { label };
     },
-    async setWorktreeProfile(branch: string, profile: string): Promise<{ profile: string; restarted: boolean }> {
-      calls.push({ method: "setWorktreeProfile", value: { branch, profile } });
+    async setWorktreeProfile(worktreeId: string, profile: string): Promise<{ profile: string; restarted: boolean }> {
+      calls.push({ method: "setWorktreeProfile", value: { worktreeId, profile } });
       return { profile, restarted: true };
     },
-    async removeWorktree(branch: string): Promise<void> {
-      calls.push({ method: "removeWorktree", value: branch });
+    async removeWorktree(worktreeId: string): Promise<void> {
+      calls.push({ method: "removeWorktree", value: worktreeId });
     },
-    async mergeWorktree(branch: string): Promise<void> {
-      calls.push({ method: "mergeWorktree", value: branch });
+    async mergeWorktree(worktreeId: string): Promise<void> {
+      calls.push({ method: "mergeWorktree", value: worktreeId });
     },
     async pruneWorktrees(): Promise<{ removedBranches: string[] }> {
       calls.push({ method: "pruneWorktrees", value: null });
@@ -103,6 +104,10 @@ function stubFetch(impl: (input: string | URL | Request, init?: RequestInit) => 
   globalThis.fetch = Object.assign(impl, { preconnect: globalThis.fetch.preconnect });
 }
 
+const SEARCH_WORKTREE_PATH = "/repo/.worktrees/feature-search";
+/** No meta is readable under the stub git dirs, so the CLI resolves the unmanaged id. */
+const SEARCH_WORKTREE_ID = makeUnmanagedWorktreeId(SEARCH_WORKTREE_PATH);
+
 function makeRuntime() {
   const calls: Array<{ method: string; value: unknown }> = [];
 
@@ -110,6 +115,10 @@ function makeRuntime() {
     calls,
     runtime: stubRuntime({
       config: stubConfig("develop"),
+      git: stubGit([
+        { path: "/repo", branch: "main", bare: false },
+        { path: SEARCH_WORKTREE_PATH, branch: "feature/search", bare: false },
+      ]),
       lifecycleService: stubLifecycleService(calls),
     }),
   };
@@ -641,7 +650,7 @@ describe("runWorktreeCommand", () => {
     );
 
     expect(exitCode).toBe(0);
-    expect(calls).toEqual([{ method: "openWorktree", value: "feature/search" }]);
+    expect(calls).toEqual([{ method: "openWorktree", value: SEARCH_WORKTREE_ID }]);
     expect(stdout).toEqual(["Opened worktree feature/search"]);
     expect(switchCalls).toEqual([{ projectDir: "/repo", branch: "feature/search" }]);
   });
@@ -664,7 +673,7 @@ describe("runWorktreeCommand", () => {
     );
 
     expect(exitCode).toBe(0);
-    expect(calls).toEqual([{ method: "refreshAgentTerminal", value: "feature/search" }]);
+    expect(calls).toEqual([{ method: "refreshAgentTerminal", value: SEARCH_WORKTREE_ID }]);
     expect(stdout).toEqual(["Refreshed agent terminal for feature/search"]);
   });
 
@@ -686,7 +695,7 @@ describe("runWorktreeCommand", () => {
     );
 
     expect(exitCode).toBe(0);
-    expect(calls).toEqual([{ method: "setWorktreeArchived", value: { branch: "feature/search", archived: true } }]);
+    expect(calls).toEqual([{ method: "setWorktreeArchived", value: { worktreeId: SEARCH_WORKTREE_ID, archived: true } }]);
     expect(stdout).toEqual(["Archived worktree feature/search"]);
   });
 
@@ -708,7 +717,7 @@ describe("runWorktreeCommand", () => {
     );
 
     expect(exitCode).toBe(0);
-    expect(calls).toEqual([{ method: "setWorktreeLabel", value: { branch: "feature/search", label: "Search ranking" } }]);
+    expect(calls).toEqual([{ method: "setWorktreeLabel", value: { worktreeId: SEARCH_WORKTREE_ID, label: "Search ranking" } }]);
     expect(stdout).toEqual(['Labeled worktree feature/search as "Search ranking"']);
   });
 
@@ -730,7 +739,7 @@ describe("runWorktreeCommand", () => {
     );
 
     expect(exitCode).toBe(0);
-    expect(calls).toEqual([{ method: "setWorktreeLabel", value: { branch: "feature/search", label: null } }]);
+    expect(calls).toEqual([{ method: "setWorktreeLabel", value: { worktreeId: SEARCH_WORKTREE_ID, label: null } }]);
     expect(stdout).toEqual(["Cleared label for feature/search"]);
   });
 
@@ -752,7 +761,7 @@ describe("runWorktreeCommand", () => {
     );
 
     expect(exitCode).toBe(0);
-    expect(calls).toEqual([{ method: "setWorktreeProfile", value: { branch: "feature/search", profile: "full" } }]);
+    expect(calls).toEqual([{ method: "setWorktreeProfile", value: { worktreeId: SEARCH_WORKTREE_ID, profile: "full" } }]);
     expect(stdout).toEqual(['Switched feature/search to profile "full" and restarted the session']);
   });
 
@@ -799,7 +808,7 @@ describe("runWorktreeCommand", () => {
     );
 
     expect(exitCode).toBe(0);
-    expect(calls).toEqual([{ method: "mergeWorktree", value: "feature/search" }]);
+    expect(calls).toEqual([{ method: "mergeWorktree", value: SEARCH_WORKTREE_ID }]);
     expect(stdout).toEqual(["Merged feature/search into develop"]);
   });
 
@@ -941,6 +950,7 @@ describe("runWorktreeCommand", () => {
       },
       {
         createRuntime: () => stubRuntime({
+          git: stubGit([{ path: SEARCH_WORKTREE_PATH, branch: "feature/search", bare: false }]),
           lifecycleService: {
             ...stubLifecycleService([]),
             async removeWorktree(): Promise<void> {
@@ -956,6 +966,24 @@ describe("runWorktreeCommand", () => {
     expect(exitCode).toBe(1);
     expect(stdout).toEqual([]);
     expect(stderr).toEqual(["Error: Worktree has uncommitted changes: feature/search"]);
+  });
+
+  it("reports an unknown branch without calling the lifecycle service", async () => {
+    const calls: Array<{ method: string; value: unknown }> = [];
+    const stderr: string[] = [];
+
+    const exitCode = await runWorktreeCommand(
+      { command: "close", args: ["feature/missing"], projectDir: "/repo", port: 5111 },
+      {
+        createRuntime: () => stubRuntime({ lifecycleService: stubLifecycleService(calls) }),
+        stdout: () => {},
+        stderr: (message) => stderr.push(message),
+      },
+    );
+
+    expect(exitCode).toBe(1);
+    expect(calls).toEqual([]);
+    expect(stderr).toEqual(["Error: Worktree not found: feature/missing"]);
   });
 
   it("rejects invalid branch arguments before creating a runtime", async () => {
@@ -1440,7 +1468,7 @@ describe("runWorktreeCommand restore", () => {
   function makeRestoreRuntime(options: {
     worktrees?: Array<{ path: string; branch: string | null; bare: boolean }>;
     windows?: Array<{ sessionName: string; windowName: string }>;
-    openWorktree?: (branch: string) => Promise<{ branch: string; worktreeId: string }>;
+    openWorktree?: (worktreeId: string) => Promise<{ branch: string; worktreeId: string }>;
   }) {
     const opened: string[] = [];
     return {
@@ -1450,10 +1478,10 @@ describe("runWorktreeCommand restore", () => {
         tmux: stubTmux(options.windows),
         lifecycleService: {
           ...stubLifecycleService([]),
-          async openWorktree(branch: string): Promise<{ branch: string; worktreeId: string }> {
-            if (options.openWorktree) return options.openWorktree(branch);
-            opened.push(branch);
-            return { branch, worktreeId: `wt-${branch}` };
+          async openWorktree(worktreeId: string): Promise<{ branch: string; worktreeId: string }> {
+            if (options.openWorktree) return options.openWorktree(worktreeId);
+            opened.push(worktreeId);
+            return { branch: worktreeId, worktreeId };
           },
         },
       }),
@@ -1489,7 +1517,7 @@ describe("runWorktreeCommand restore", () => {
     );
 
     expect(exitCode).toBe(0);
-    expect(opened).toEqual(["feature-a"]);
+    expect(opened).toEqual([makeUnmanagedWorktreeId("/repo/wt/feature-a")]);
     expect(stdout).toEqual([
       "Restored feature-a",
       "Already open: feature-b",
@@ -1547,7 +1575,7 @@ describe("runWorktreeCommand restore", () => {
         { path: "/repo", branch: "main", bare: false },
         { path: "/repo/wt/feature-a", branch: "feature-a", bare: false },
       ],
-      openWorktree: async (branch) => { throw new Error(`boom ${branch}`); },
+      openWorktree: async () => { throw new Error("boom feature-a"); },
     });
     const stdout: string[] = [];
     const stderr: string[] = [];
