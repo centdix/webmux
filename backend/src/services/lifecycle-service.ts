@@ -343,6 +343,9 @@ export class LifecycleService {
         worktreePath: resolved.entry.path,
       });
 
+      // Drop the windows found by id first: after an in-worktree branch rename they keep the
+      // old name, which the new layout (named after the current branch) would not replace.
+      this.killWorktreeWindows(resolved.worktreeId, branch);
       await this.materializeRuntimeSession({
         branch,
         profileName,
@@ -424,6 +427,9 @@ export class LifecycleService {
         worktreePath: resolved.entry.path,
       });
 
+      // Drop the windows found by id first: after an in-worktree branch rename they keep the
+      // old name, which the new layout (named after the current branch) would not replace.
+      this.killWorktreeWindows(resolved.worktreeId, branch);
       await this.materializeRuntimeSession({
         branch,
         profileName,
@@ -660,8 +666,7 @@ export class LifecycleService {
 
     const sessionName = buildProjectSessionName(this.deps.projectRoot);
     const windows = this.listTmuxWindows();
-    const windowName = findWindow(windows, sessionName, meta.worktreeId, input.branch)?.windowName
-      ?? buildWorktreeWindowName(input.branch);
+    const windowName = buildWorktreeWindowName(input.branch);
     const parkingWindow = findWindow(windows, sessionName, meta.worktreeId, input.branch, "parking")?.windowName
       ?? buildWorktreeParkingWindowName(input.branch);
     // A parking window may still exist (e.g. the agent terminal was refreshed without a

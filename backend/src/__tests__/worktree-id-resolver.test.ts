@@ -14,6 +14,9 @@ function makeDeps(
     get reconciles(): number {
       return reconciles;
     },
+    renameBranch(worktreeId: string, branch: string): void {
+      branchById = { ...branchById, [worktreeId]: branch };
+    },
     deps: {
       runtime: {
         getWorktree: (worktreeId: string) => {
@@ -111,10 +114,14 @@ describe("resolveRouteWorktree", () => {
   });
 
   it("keys the guards by id, so a renamed worktree stays busy", async () => {
-    const fixture = makeDeps({ "wt-a": "feature/a" }, { "wt-a": "feature/renamed" });
+    const fixture = makeDeps({ "wt-a": "feature/a" });
 
     await fixture.guards.withRemoving("wt-a", "feature/a", async () => {
-      await expect(resolveRouteWorktree("wt-a", fixture.deps, IDLE)).rejects.toMatchObject({ status: 409 });
+      fixture.renameBranch("wt-a", "feature/renamed");
+      await expect(resolveRouteWorktree("wt-a", fixture.deps, IDLE)).rejects.toMatchObject({
+        status: 409,
+        message: "Worktree is being removed: feature/renamed",
+      });
       await expect(resolveRouteWorktree("wt-b", fixture.deps, IDLE)).rejects.toMatchObject({ status: 404 });
     });
     expect(await resolveRouteWorktree("wt-a", fixture.deps, IDLE)).toMatchObject({ worktreeId: "wt-a" });

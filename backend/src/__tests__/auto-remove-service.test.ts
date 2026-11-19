@@ -19,14 +19,20 @@ function makeDeps(opts: {
   states: Map<string, PrEntry["state"][]> | null;
   dirty?: Set<string>;
   removing?: Set<string>;
+  /** Paths whose directory is gone: git cannot resolve their git dir. */
+  vanished?: Set<string>;
 }): { deps: AutoRemoveDependencies; removed: string[] } {
   const removed: string[] = [];
   const removing = opts.removing ?? new Set<string>();
   const dirty = opts.dirty ?? new Set<string>();
+  const vanished = opts.vanished ?? new Set<string>();
 
   const git = {
     listLiveWorktrees: () => [{ path: ROOT, branch: "main", bare: false }, ...opts.worktrees],
-    resolveWorktreeGitDir: (path: string) => path,
+    resolveWorktreeGitDir: (path: string) => {
+      if (vanished.has(path)) throw new Error(`git rev-parse failed in ${path}`);
+      return path;
+    },
     readWorktreeStatus: (path: string) => ({
       dirty: dirty.has(path),
       aheadCount: 0,
@@ -103,6 +109,18 @@ describe("runAutoRemove", () => {
     });
     await runAutoRemove(deps);
     expect(removed).toEqual([]);
+  });
+
+  it("skips a merged worktree whose directory vanished and still removes the others", async () => {
+    const gone = worktree("gone");
+    const wt = worktree("feature");
+    const { deps, removed } = makeDeps({
+      worktrees: [gone, wt],
+      states: new Map([["gone", ["merged"]], ["feature", ["merged"]]]),
+      vanished: new Set([gone.path]),
+    });
+    await runAutoRemove(deps);
+    expect(removed).toEqual([makeUnmanagedWorktreeId(wt.path)]);
   });
 
   it("keeps a worktree that has no PR", async () => {

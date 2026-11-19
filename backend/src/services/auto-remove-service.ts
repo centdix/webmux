@@ -39,7 +39,15 @@ export async function runAutoRemove(deps: AutoRemoveDependencies): Promise<void>
     if (!states || states.length === 0) continue;
     if (!states.every((state) => state === "merged")) continue;
 
-    const worktreeId = await readWorktreeIdAt(deps.git, entry.path);
+    let worktreeId: string;
+    try {
+      worktreeId = await readWorktreeIdAt(deps.git, entry.path);
+    } catch (err: unknown) {
+      // The directory can vanish between listing and reading it (e.g. a manual removal).
+      const msg = err instanceof Error ? err.message : String(err);
+      log.info(`[auto-remove] skipping unreadable worktree ${branch}: ${msg}`);
+      continue;
+    }
     if (deps.isRemoving(worktreeId)) continue;
 
     if (deps.git.readWorktreeStatus(entry.path).dirty) {
