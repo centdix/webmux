@@ -10,9 +10,9 @@ export interface AutoRemoveDependencies {
   git: GitGateway;
   projectRoot: string;
   notifications: NotificationService;
-  isRemoving: (branch: string) => boolean;
-  markRemoving: (branch: string) => void;
-  unmarkRemoving: (branch: string) => void;
+  isRemoving: (worktreeId: string) => boolean;
+  markRemoving: (worktreeId: string) => void;
+  unmarkRemoving: (worktreeId: string) => void;
   /** Authoritative PR states per branch across all configured repos. Queried live
    *  rather than read from the per-worktree PR cache, so a merge is detected even
    *  when no open-state display sync ever ran (dashboard was never opened). Returns
@@ -35,21 +35,22 @@ export async function runAutoRemove(deps: AutoRemoveDependencies): Promise<void>
 
   for (const entry of worktrees) {
     const branch = entry.branch!;
-    if (deps.isRemoving(branch)) continue;
-
     const states = branchStates.get(branch);
     if (!states || states.length === 0) continue;
     if (!states.every((state) => state === "merged")) continue;
+
+    const worktreeId = await readWorktreeIdAt(deps.git, entry.path);
+    if (deps.isRemoving(worktreeId)) continue;
 
     if (deps.git.readWorktreeStatus(entry.path).dirty) {
       log.info(`[auto-remove] skipping dirty worktree: ${branch}`);
       continue;
     }
 
-    deps.markRemoving(branch);
+    deps.markRemoving(worktreeId);
     try {
       log.info(`[auto-remove] removing merged worktree: ${branch}`);
-      await deps.lifecycleService.removeWorktree(await readWorktreeIdAt(deps.git, entry.path));
+      await deps.lifecycleService.removeWorktree(worktreeId);
       deps.notifications.notify({
         branch,
         type: "worktree_auto_removed",
@@ -60,7 +61,7 @@ export async function runAutoRemove(deps: AutoRemoveDependencies): Promise<void>
       const msg = err instanceof Error ? err.message : String(err);
       log.error(`[auto-remove] failed to remove worktree ${branch}: ${msg}`);
     } finally {
-      deps.unmarkRemoving(branch);
+      deps.unmarkRemoving(worktreeId);
     }
   }
 }

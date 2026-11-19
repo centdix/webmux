@@ -18,9 +18,10 @@ function makeDeps(opts: {
   worktrees: GitWorktreeEntry[];
   states: Map<string, PrEntry["state"][]> | null;
   dirty?: Set<string>;
+  removing?: Set<string>;
 }): { deps: AutoRemoveDependencies; removed: string[] } {
   const removed: string[] = [];
-  const removing = new Set<string>();
+  const removing = opts.removing ?? new Set<string>();
   const dirty = opts.dirty ?? new Set<string>();
 
   const git = {
@@ -77,6 +78,17 @@ describe("runAutoRemove", () => {
     const { deps, removed } = makeDeps({
       worktrees: [wt],
       states: new Map([["feature", ["merged", "open"]]]),
+    });
+    await runAutoRemove(deps);
+    expect(removed).toEqual([]);
+  });
+
+  it("skips a merged worktree whose id is already being removed", async () => {
+    const wt = worktree("feature");
+    const { deps, removed } = makeDeps({
+      worktrees: [wt],
+      states: new Map([["feature", ["merged"]]]),
+      removing: new Set([makeUnmanagedWorktreeId(wt.path)]),
     });
     await runAutoRemove(deps);
     expect(removed).toEqual([]);

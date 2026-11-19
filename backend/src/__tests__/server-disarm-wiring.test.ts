@@ -33,14 +33,6 @@ describe("server.ts disarm-on-interaction wiring", () => {
     const pattern = /if \(chatSupport\.data\.provider === "codex"\) \{[\s\S]*?interruptWorktreeConversation\(resolved\.worktree\)[\s\S]*?if \(!interruptResult\.ok\)[\s\S]*?setAgentTerminalStale\(resolved\.worktree, true\)[\s\S]*?jsonResponse\(interruptResult\.data\)/;
     expect(source).toMatch(pattern);
   });
-
-  it("guards agent terminal refreshes against busy worktrees", async () => {
-    const source = await Bun.file(serverPath).text();
-    // The busy-guard is now provided by withMutatingTab (which calls
-    // ensureBranchNotBusy internally) — see the serialization wiring test below.
-    const pattern = /async function apiRefreshWorktreeAgentTerminal\(id: string\): Promise<Response> \{\s*const \{ worktreeId, branch \} = await resolveRouteWorktree\(id\);\s*return withMutatingTab\(branch[\s\S]*?lifecycleService\.refreshAgentTerminal\(worktreeId\)/;
-    expect(source).toMatch(pattern);
-  });
 });
 
 /** Source-level regression test: a worktree being created is missing from the runtime, so the
@@ -61,9 +53,8 @@ describe("server.ts terminal WebSocket attaches by id", () => {
   });
 });
 
-/** Source-level regression test: routes addressed by worktree id check the id against the runtime
- *  (404 when unknown, 409 while still being created) and read the branch the busy guards key on
- *  from it, before doing anything else. */
+/** Source-level wiring test: which routes guard against busy worktrees. The resolve-then-guard
+ *  order itself is covered by `worktree-id-resolver.test.ts`. */
 describe("server.ts id routes resolve the worktree first", () => {
   const serverPath = join(import.meta.dir, "..", "server.ts");
   const expected = [
@@ -82,14 +73,11 @@ describe("server.ts id routes resolve the worktree first", () => {
     "apiDeleteWorktreeTab",
   ];
 
-  it.each(expected)("%s resolves the id, then guards its branch", async (fn) => {
+  it.each(expected)("%s resolves the id and requires an idle worktree first", async (fn) => {
     const source = await Bun.file(serverPath).text();
-    const pattern = new RegExp(
-      `async function ${fn}\\(id: string(, req: Request|, tabId: string)?\\): Promise<Response> \\{\\s*`
-        + `const \\{ worktreeId, branch \\} = await resolveRouteWorktree\\(id\\);\\s*`
-        + `(ensureBranchNotBusy|return withMutatingTab|return withRemovingBranch)\\(branch`,
-    );
-    expect(source).toMatch(pattern);
+    expect(source).toMatch(new RegExp(
+      `async function ${fn}\\(id: string[^)]*\\): Promise<Response> \\{\\s*const \\{ worktreeId, branch \\} = await resolveIdleRouteWorktree\\(id\\);`,
+    ));
   });
 
   it.each([
@@ -109,7 +97,7 @@ describe("server.ts id routes resolve the worktree first", () => {
 
 /** Source-level regression test for tab-mutation serialization. open and
  *  agent-terminal refresh both rewrite the whole tabs array (via
- *  restoreWorktreeTabs), so they must hold the same per-branch lock as
+ *  restoreWorktreeTabs), so they must hold the same per-worktree lock as
  *  tab create/select/delete — otherwise a reopen racing a fork creation can
  *  clobber tab bookkeeping. A future refactor that drops the lock from one of
  *  these paths would silently reopen that race without failing any other test. */
