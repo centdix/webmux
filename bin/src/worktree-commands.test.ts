@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readProjectsRegistryFile } from "../../backend/src/adapters/projects-registry";
 import { buildProjectSessionName, buildWorktreeWindowName } from "../../backend/src/adapters/tmux";
-import type { CreateLifecycleWorktreeInput, CreateLifecycleWorktreesInput } from "../../backend/src/services/lifecycle-service";
+import type { CreateLifecycleWorktreeInput, CreateLifecycleWorktreesInput, CreateLifecycleWorktreesResult } from "../../backend/src/services/lifecycle-service";
 import { makeUnmanagedWorktreeId } from "../../backend/src/services/reconciliation-service";
 import {
   parseAddCommandArgs,
@@ -29,14 +29,15 @@ function stubLifecycleService(calls: Array<{ method: string; value: unknown }>) 
       calls.push({ method: "createWorktree", value: input });
       return { branch: input.branch ?? "generated-branch", worktreeId: "wt-1" };
     },
-    async createWorktrees(input: CreateLifecycleWorktreesInput): Promise<{ primaryBranch: string; branches: string[] }> {
+    async createWorktrees(input: CreateLifecycleWorktreesInput): Promise<CreateLifecycleWorktreesResult> {
       calls.push({ method: "createWorktrees", value: input });
       const branch = input.branch ?? "generated-branch";
       const selectedAgents = input.agents ?? (input.agent ? [input.agent] : ["claude"]);
       const branches = selectedAgents.length > 1
         ? selectedAgents.map((agent) => `${agent}/${branch}`)
         : [branch];
-      return { primaryBranch: branches[0] ?? branch, branches };
+      const worktreeIds = branches.map((_, index) => `wt-${index + 1}`);
+      return { primaryBranch: branches[0] ?? branch, primaryWorktreeId: "wt-1", branches, worktreeIds };
     },
     async openWorktree(worktreeId: string): Promise<{ branch: string; worktreeId: string }> {
       calls.push({ method: "openWorktree", value: worktreeId });
@@ -454,7 +455,7 @@ describe("runWorktreeCommand", () => {
           config: stubConfig("develop"),
           lifecycleService: {
             ...stubLifecycleService([]),
-            async createWorktrees(): Promise<{ primaryBranch: string; branches: string[] }> {
+            async createWorktrees(): Promise<CreateLifecycleWorktreesResult> {
               onCreateProgress?.({ worktreeId: "wt-1", profile: "default", agent: "claude", phase: "naming_branch", source: "ui" });
               onCreateProgress?.({
                 worktreeId: "wt-1",
@@ -465,7 +466,7 @@ describe("runWorktreeCommand", () => {
                 phase: "creating_worktree",
                 source: "ui",
               });
-              return { primaryBranch: "fix-login-flow", branches: ["fix-login-flow"] };
+              return { primaryBranch: "fix-login-flow", primaryWorktreeId: "wt-1", branches: ["fix-login-flow"], worktreeIds: ["wt-1"] };
             },
           },
         }),

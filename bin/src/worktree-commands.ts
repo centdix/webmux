@@ -14,7 +14,7 @@ import { isValidPortLabel } from "../../backend/src/domain/port-registrations";
 import type { WorktreeRef } from "../../backend/src/services/worktree-port-api";
 import { buildArchivedWorktreePathSet } from "../../backend/src/services/archive-service";
 import { readWorktreeIdAt } from "../../backend/src/services/reconciliation-service";
-import { listLiveProjectWorktrees } from "../../backend/src/services/lifecycle-service";
+import { resolveWorktreeIdByBranch } from "./worktree-id";
 import { readProjectsRegistryFile, type ProjectsRegistryReadResult } from "../../backend/src/adapters/projects-registry";
 import type { ProjectEntry } from "../../backend/src/domain/projects";
 import { createPortRegistrationService, createWebmuxRuntime } from "../../backend/src/runtime";
@@ -876,16 +876,6 @@ async function readWorktreeId(
   } catch {
     return null;
   }
-}
-
-/** Translate a branch argument to the id the lifecycle service addresses its worktree by. */
-async function resolveWorktreeIdByBranch(runtime: WorktreeRuntimeLike, branch: string): Promise<string> {
-  const entry = listLiveProjectWorktrees(runtime.git, runtime.projectDir)
-    .find((candidate) => candidate.branch === branch);
-  if (!entry) {
-    throw new Error(`Worktree not found: ${branch}`);
-  }
-  return await readWorktreeIdAt(runtime.git, entry.path);
 }
 
 async function defaultConfirmPrune(worktreeCount: number): Promise<boolean> {

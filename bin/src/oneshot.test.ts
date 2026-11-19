@@ -1,6 +1,7 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import type { AgentSummary } from "@webmux/api-contract";
-import { agentStreamsConversation, parseOneshotArgs } from "./oneshot";
+import { agentStreamsConversation, parseOneshotArgs, runOneshot } from "./oneshot";
+import { resolveProjectRoot } from "./shared";
 
 describe("parseOneshotArgs", () => {
   it("requires --prompt for new oneshots", () => {
@@ -134,5 +135,66 @@ describe("agentStreamsConversation", () => {
     expect(agentStreamsConversation(agents, "pi")).toBe(false);
     expect(agentStreamsConversation(agents, "gemini")).toBe(false);
     expect(agentStreamsConversation(agents, null)).toBe(false);
+  });
+});
+
+describe("runOneshot --resume", () => {
+  const originalFetch = globalThis.fetch;
+  const originalWrite = process.stderr.write;
+  const originalStdoutWrite = process.stdout.write;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    process.stderr.write = originalWrite;
+    process.stdout.write = originalStdoutWrite;
+  });
+
+  /** Fake server: one served project at this repo, one worktree `feature/search` with id `wt_1`;
+   *  opening a worktree fails so the run stops right after the open call. */
+  function stubServer(calls: string[]): void {
+    globalThis.fetch = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      calls.push(`${init?.method ?? "GET"} ${url.pathname}`);
+      if (url.pathname === "/api/projects") {
+        return Response.json({ projects: [{ prefix: "myproject", name: "myproject", path: resolveProjectRoot() }] });
+      }
+      if (url.pathname.endsWith("/worktrees")) {
+        return Response.json({ worktrees: [{ id: "wt_1", branch: "feature/search" }] });
+      }
+      return Response.json({ error: "stop here" }, { status: 409 });
+    }, { preconnect: originalFetch.preconnect });
+  }
+
+  function captureStderr(): string[] {
+    const lines: string[] = [];
+    process.stdout.write = (() => true) as typeof process.stdout.write;
+    process.stderr.write = ((chunk: string) => {
+      lines.push(chunk);
+      return true;
+    }) as typeof process.stderr.write;
+    return lines;
+  }
+
+  it("opens the resumed worktree by its id", async () => {
+    const calls: string[] = [];
+    stubServer(calls);
+    captureStderr();
+    const parsed = parseOneshotArgs(["--resume", "feature/search", "--prompt", "Keep going"]);
+    if (!parsed) throw new Error("expected parsed args");
+
+    expect(await runOneshot(parsed, 5111)).toBe(1);
+    expect(calls).toContain("POST /api/projects/myproject/worktrees/wt_1/open");
+  });
+
+  it("names the typed branch when no worktree matches it", async () => {
+    const calls: string[] = [];
+    stubServer(calls);
+    const stderr = captureStderr();
+    const parsed = parseOneshotArgs(["--resume", "feature/missing", "--prompt", "Keep going"]);
+    if (!parsed) throw new Error("expected parsed args");
+
+    expect(await runOneshot(parsed, 5111)).toBe(1);
+    expect(calls.some((call) => call.endsWith("/open"))).toBe(false);
+    expect(stderr.join("")).toContain("Worktree not found: feature/missing");
   });
 });

@@ -1,5 +1,5 @@
-import { describe, expect, it } from "bun:test";
-import { parseLinearArgs, parseLinearTargetArg } from "./linear-commands";
+import { afterEach, describe, expect, it } from "bun:test";
+import { parseLinearArgs, parseLinearTargetArg, runLinearCommand } from "./linear-commands";
 
 describe("parseLinearTargetArg", () => {
   it("recognises team keys", () => {
@@ -49,5 +49,52 @@ describe("parseLinearArgs", () => {
   it("requires branch + team key", () => {
     expect(() => parseLinearArgs(["post"])).toThrow("requires a <branch>");
     expect(() => parseLinearArgs(["post", "feat/foo"])).toThrow("requires a <team-key>");
+  });
+});
+
+describe("runLinearCommand", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("resolves the branch to its worktree id and posts on the id route", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push(`${init?.method} ${String(input)}`);
+      return Response.json({ ok: true, issueId: "i1", issueUrl: "https://linear.app/i1", commentUrl: null, attachmentUrl: "https://linear.app/a1" });
+    }, { preconnect: originalFetch.preconnect });
+    const resolved: string[] = [];
+
+    const exitCode = await runLinearCommand(["post", "feat/foo", "ENG"], 5111, {
+      resolveServedProject: async () => "myproject",
+      resolveWorktreeId: async (branch) => {
+        resolved.push(branch);
+        return "wt_1";
+      },
+    });
+
+    expect(exitCode).toBe(0);
+    expect(resolved).toEqual(["feat/foo"]);
+    expect(calls).toEqual(["POST http://localhost:5111/api/projects/myproject/worktrees/wt_1/linear/post"]);
+  });
+
+  it("names the typed branch when it matches no worktree", async () => {
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (message: string) => errors.push(message);
+    try {
+      const exitCode = await runLinearCommand(["post", "feat/missing", "ENG"], 5111, {
+        resolveServedProject: async () => "myproject",
+        resolveWorktreeId: async (branch) => {
+          throw new Error(`Worktree not found: ${branch}`);
+        },
+      });
+      expect(exitCode).toBe(1);
+    } finally {
+      console.error = originalError;
+    }
+    expect(errors).toEqual(["Worktree not found: feat/missing"]);
   });
 });

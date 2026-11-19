@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { createHubApi, createProjectApi } from "./client";
+import { projectApiPaths } from "./contract";
 
 function success(body: unknown): { status: number; body: unknown; headers: Headers } {
   return {
@@ -49,6 +50,44 @@ describe("createProjectApi", () => {
       "GET https://example.com/api/projects/myproject/worktree-ids/wt_1/ports",
       "DELETE https://example.com/api/projects/myproject/worktree-ids/wt_1/ports/web",
     ]);
+  });
+
+  it("addresses worktree lifecycle routes by worktree id", async () => {
+    const calls: string[] = [];
+    const api = createProjectApi("myproject", {
+      origin: "https://example.com",
+      api: async ({ path, method }) => {
+        calls.push(`${method} ${path}`);
+        return success({ ok: true });
+      },
+    });
+    const params = { id: "wt_1" };
+
+    await api.removeWorktree({ params });
+    await api.openWorktree({ params, body: {} });
+    await api.closeWorktree({ params });
+    await api.refreshWorktreeAgentTerminal({ params });
+    await api.setWorktreeArchived({ params, body: { archived: true } });
+    await api.syncWorktreePrs({ params });
+    await api.postWorktreeToLinear({ params, body: { target: { kind: "team", teamKey: "ENG" } } });
+    await api.setWorktreeLabel({ params, body: { label: null } });
+    await api.setWorktreeProfile({ params, body: { profile: "full" } });
+    await api.mergeWorktree({ params });
+
+    const base = "https://example.com/api/projects/myproject/worktrees/wt_1";
+    expect(calls).toEqual([
+      `DELETE ${base}`,
+      `POST ${base}/open`,
+      `POST ${base}/close`,
+      `POST ${base}/agent-terminal/refresh`,
+      `PUT ${base}/archive`,
+      `POST ${base}/sync-prs`,
+      `POST ${base}/linear/post`,
+      `PUT ${base}/label`,
+      `PUT ${base}/profile`,
+      `POST ${base}/merge`,
+    ]);
+    expect(projectApiPaths.fetchNativeTerminalLaunch).toBe("/worktrees/:id/terminal-launch");
   });
 
   it("preserves numeric path params for notification and CI routes", async () => {

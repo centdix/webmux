@@ -95,16 +95,16 @@ export const projectApiPaths = {
   streamAgentsWorktreeConversation: "/ws/agents/worktrees/:name",
   fetchWorktrees: "/worktrees",
   createWorktree: "/worktrees",
-  removeWorktree: "/worktrees/:name",
-  openWorktree: "/worktrees/:name/open",
-  fetchNativeTerminalLaunch: "/worktrees/:name/terminal-launch",
-  closeWorktree: "/worktrees/:name/close",
-  refreshWorktreeAgentTerminal: "/worktrees/:name/agent-terminal/refresh",
-  setWorktreeArchived: "/worktrees/:name/archive",
-  syncWorktreePrs: "/worktrees/:name/sync-prs",
-  postWorktreeToLinear: "/worktrees/:name/linear/post",
-  setWorktreeLabel: "/worktrees/:name/label",
-  setWorktreeProfile: "/worktrees/:name/profile",
+  removeWorktree: "/worktrees/:id",
+  openWorktree: "/worktrees/:id/open",
+  fetchNativeTerminalLaunch: "/worktrees/:id/terminal-launch",
+  closeWorktree: "/worktrees/:id/close",
+  refreshWorktreeAgentTerminal: "/worktrees/:id/agent-terminal/refresh",
+  setWorktreeArchived: "/worktrees/:id/archive",
+  syncWorktreePrs: "/worktrees/:id/sync-prs",
+  postWorktreeToLinear: "/worktrees/:id/linear/post",
+  setWorktreeLabel: "/worktrees/:id/label",
+  setWorktreeProfile: "/worktrees/:id/profile",
   sendWorktreePrompt: "/worktrees/:name/send",
   createWorktreeTab: "/worktrees/:name/tabs",
   selectWorktreeTab: "/worktrees/:name/tabs/:tabId/select",
@@ -113,7 +113,7 @@ export const projectApiPaths = {
   deleteWorktreePort: "/worktrees/:name/ports/:label",
   worktreePortsById: "/worktree-ids/:id/ports",
   deleteWorktreePortById: "/worktree-ids/:id/ports/:label",
-  mergeWorktree: "/worktrees/:name/merge",
+  mergeWorktree: "/worktrees/:id/merge",
   fetchWorktreeDiff: "/worktrees/:name/diff",
   fetchLinearIssues: "/linear/issues",
   fetchAutoNameConfig: "/project/auto-name",
@@ -231,7 +231,7 @@ export const projectContract = c.router({
   removeWorktree: {
     method: "DELETE",
     path: projectApiPaths.removeWorktree,
-    pathParams: WorktreeNameParamsSchema,
+    pathParams: WorktreeIdParamsSchema,
     responses: {
       200: OkResponseSchema,
       ...commonErrorResponses,
@@ -240,7 +240,7 @@ export const projectContract = c.router({
   openWorktree: {
     method: "POST",
     path: projectApiPaths.openWorktree,
-    pathParams: WorktreeNameParamsSchema,
+    pathParams: WorktreeIdParamsSchema,
     body: OpenWorktreeRequestSchema,
     responses: {
       200: OkResponseSchema,
@@ -250,7 +250,7 @@ export const projectContract = c.router({
   closeWorktree: {
     method: "POST",
     path: projectApiPaths.closeWorktree,
-    pathParams: WorktreeNameParamsSchema,
+    pathParams: WorktreeIdParamsSchema,
     body: c.noBody(),
     responses: {
       200: OkResponseSchema,
@@ -260,7 +260,7 @@ export const projectContract = c.router({
   refreshWorktreeAgentTerminal: {
     method: "POST",
     path: projectApiPaths.refreshWorktreeAgentTerminal,
-    pathParams: WorktreeNameParamsSchema,
+    pathParams: WorktreeIdParamsSchema,
     body: c.noBody(),
     responses: {
       200: OkResponseSchema,
@@ -270,7 +270,7 @@ export const projectContract = c.router({
   setWorktreeArchived: {
     method: "PUT",
     path: projectApiPaths.setWorktreeArchived,
-    pathParams: WorktreeNameParamsSchema,
+    pathParams: WorktreeIdParamsSchema,
     body: SetWorktreeArchivedRequestSchema,
     responses: {
       200: SetWorktreeArchivedResponseSchema,
@@ -280,7 +280,7 @@ export const projectContract = c.router({
   postWorktreeToLinear: {
     method: "POST",
     path: projectApiPaths.postWorktreeToLinear,
-    pathParams: WorktreeNameParamsSchema,
+    pathParams: WorktreeIdParamsSchema,
     body: PostWorktreeToLinearRequestSchema,
     responses: {
       200: PostWorktreeToLinearResponseSchema,
@@ -290,7 +290,7 @@ export const projectContract = c.router({
   syncWorktreePrs: {
     method: "POST",
     path: projectApiPaths.syncWorktreePrs,
-    pathParams: WorktreeNameParamsSchema,
+    pathParams: WorktreeIdParamsSchema,
     body: c.noBody(),
     responses: {
       200: ProjectWorktreeSnapshotSchema,
@@ -300,7 +300,7 @@ export const projectContract = c.router({
   setWorktreeLabel: {
     method: "PUT",
     path: projectApiPaths.setWorktreeLabel,
-    pathParams: WorktreeNameParamsSchema,
+    pathParams: WorktreeIdParamsSchema,
     body: SetWorktreeLabelRequestSchema,
     responses: {
       200: SetWorktreeLabelResponseSchema,
@@ -310,7 +310,7 @@ export const projectContract = c.router({
   setWorktreeProfile: {
     method: "PUT",
     path: projectApiPaths.setWorktreeProfile,
-    pathParams: WorktreeNameParamsSchema,
+    pathParams: WorktreeIdParamsSchema,
     body: SetWorktreeProfileRequestSchema,
     responses: {
       200: SetWorktreeProfileResponseSchema,
@@ -415,7 +415,7 @@ export const projectContract = c.router({
   mergeWorktree: {
     method: "POST",
     path: projectApiPaths.mergeWorktree,
-    pathParams: WorktreeNameParamsSchema,
+    pathParams: WorktreeIdParamsSchema,
     body: c.noBody(),
     responses: {
       200: OkResponseSchema,

@@ -625,8 +625,8 @@
         linear.invalidate(targetProject);
         linear.ensure(targetProject);
       }
-      const created = store.findByBranch(targetProject, result.primaryBranch);
-      if (created && shouldAutoSelectCreatedWorktree && requestId === latestAutoSelectCreateId) {
+      const created: WorktreeRef = { project: targetProject, id: result.primaryWorktreeId };
+      if (store.find(created) && shouldAutoSelectCreatedWorktree && requestId === latestAutoSelectCreateId) {
         selectWorktree(created);
       }
     } catch (err) {

@@ -117,11 +117,11 @@ export function deleteWorktreeTab(project: string, branch: string, tabId: string
 
 export function postWorktreeToLinear(
   project: string,
-  branch: string,
+  worktreeId: string,
   target: PostWorktreeToLinearTarget,
 ): Promise<PostWorktreeToLinearResponse> {
   return projectApi(project).postWorktreeToLinear({
-    params: { name: branch },
+    params: { id: worktreeId },
     body: { target },
   });
 }
@@ -140,9 +140,9 @@ export async function fetchAllProjectWorktrees(focus?: string): Promise<ProjectW
   }));
 }
 
-export async function setWorktreeLabel(project: string, branch: string, label: string | null): Promise<string | null> {
+export async function setWorktreeLabel(project: string, worktreeId: string, label: string | null): Promise<string | null> {
   const response = await projectApi(project).setWorktreeLabel({
-    params: { name: branch },
+    params: { id: worktreeId },
     body: { label },
   });
   return response.label;
@@ -150,11 +150,11 @@ export async function setWorktreeLabel(project: string, branch: string, label: s
 
 export async function setWorktreeProfile(
   project: string,
-  branch: string,
+  worktreeId: string,
   profile: string,
 ): Promise<{ profile: string; restarted: boolean }> {
   const response = await projectApi(project).setWorktreeProfile({
-    params: { name: branch },
+    params: { id: worktreeId },
     body: { profile },
   });
   return { profile: response.profile, restarted: response.restarted };
@@ -189,9 +189,9 @@ export function interruptWorktreeConversation(project: string, branch: string): 
   });
 }
 
-export function refreshWorktreeAgentTerminal(project: string, branch: string): Promise<void> {
+export function refreshWorktreeAgentTerminal(project: string, worktreeId: string): Promise<void> {
   return projectApi(project).refreshWorktreeAgentTerminal({
-    params: { name: branch },
+    params: { id: worktreeId },
   }).then(() => undefined);
 }
 
