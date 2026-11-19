@@ -588,10 +588,13 @@ export class LifecycleService {
     if (!resolved.meta) throw new LifecycleError(`Worktree ${branch} has no managed metadata`, 409);
 
     const sessionName = buildProjectSessionName(this.deps.projectRoot);
-    const windowName = buildWorktreeWindowName(branch);
-    if (!this.deps.tmux.hasWindow(sessionName, windowName)) {
+    const windows = this.listTmuxWindows();
+    const window = findWindow(windows, sessionName, worktreeId, branch);
+    if (!window) {
       throw new LifecycleError(`Worktree ${branch} is not open`, 409);
     }
+    const parkingWindow = findWindow(windows, sessionName, worktreeId, branch, "parking")?.windowName
+      ?? buildWorktreeParkingWindowName(branch);
 
     const { profileName, profile } = this.resolveProfile(resolved.meta.profile);
     if (profile.runtime === "docker") {
@@ -614,8 +617,8 @@ export class LifecycleService {
       profile,
       profileName,
       sessionName,
-      windowName,
-      parkingWindow: buildWorktreeParkingWindowName(branch),
+      windowName: window.windowName,
+      parkingWindow,
     };
   }
 
