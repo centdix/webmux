@@ -4,7 +4,7 @@
  * Runs sandbox containers directly for managed docker worktrees.
  */
 
-import { chmod, mkdir, stat } from "node:fs/promises";
+import { chmod, mkdir, rename, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { type DockerProfileConfig } from "./config";
 import { webmuxRuntimeStateDir } from "./webmux-paths";
@@ -13,6 +13,8 @@ import { log } from "../lib/log";
 const DOCKER_RUN_TIMEOUT_MS = 60_000;
 const DOCKER_IMAGE_PREPARE_TIMEOUT_MS = 10 * 60_000;
 const SANDBOX_READY_TIMEOUT_MS = 30_000;
+const EXISTING_CONTAINER_READY_TIMEOUT_MS = 5_000;
+const DOCKER_KILL_GRACE_MS = 5_000;
 
 /** Home directory of the `webmux` user the injected entrypoint creates. */
 export const SANDBOX_HOME = "/home/webmux";
@@ -105,26 +107,37 @@ home=${SANDBOX_HOME}
 shell=/bin/sh
 [ -x /bin/bash ] && shell=/bin/bash
 
-group=$(awk -F: -v g="$gid" '$3 == g { print $1; exit }' /etc/group)
-if [ -z "$group" ]; then
+has_gid() { awk -F: -v g="$gid" '$3 == g { found = 1 } END { exit !found }' /etc/group; }
+has_uid() { awk -F: -v u="$uid" '$3 == u { found = 1 } END { exit !found }' /etc/passwd; }
+
+if ! has_gid; then
   if command -v groupadd >/dev/null 2>&1; then
-    groupadd -g "$gid" webmux
+    groupadd -o -g "$gid" webmux
   elif command -v addgroup >/dev/null 2>&1; then
     addgroup -g "$gid" webmux
-  else
-    echo "webmux:x:$gid:" >> /etc/group
   fi
-  group=webmux
+  # A name clash (an existing "webmux" group with another GID) makes the tools fail.
+  has_gid || echo "webmux-$gid:x:$gid:" >> /etc/group
 fi
+group=$(awk -F: -v g="$gid" '$3 == g { print $1; exit }' /etc/group)
 
-if ! awk -F: -v u="$uid" '$3 == u { found = 1 } END { exit !found }' /etc/passwd; then
+if [ "$uid" = 0 ]; then
+  : # webmux itself runs as root; reuse root as-is.
+elif has_uid; then
+  # The image already has this UID (node, bun, ubuntu...): repoint its home so
+  # tools that read the passwd entry instead of $HOME (ssh, sudo -H) agree.
+  if command -v usermod >/dev/null 2>&1; then
+    usermod -d "$home" "$(awk -F: -v u="$uid" '$3 == u { print $1; exit }' /etc/passwd)"
+  else
+    sed -i "s#^\\([^:]*:[^:]*:$uid:[^:]*:[^:]*:\\)[^:]*#\\1$home#" /etc/passwd
+  fi
+else
   if command -v useradd >/dev/null 2>&1; then
     useradd -o -u "$uid" -g "$gid" -d "$home" -M -s "$shell" webmux
   elif command -v adduser >/dev/null 2>&1; then
     adduser -D -H -u "$uid" -G "$group" -h "$home" -s "$shell" webmux
-  else
-    echo "webmux:x:$uid:$gid::$home:$shell" >> /etc/passwd
   fi
+  has_uid || echo "webmux-$uid:x:$uid:$gid::$home:$shell" >> /etc/passwd
 fi
 
 mkdir -p "$home" ${CONTAINER_TOOLS_DIR}
@@ -173,6 +186,8 @@ export interface DockerRunContext {
   image: string;
   /** Host path of the generated entrypoint script. */
   entrypointPath: string;
+  /** Host environment, read for `envPassthrough`. */
+  hostEnv: Record<string, string | undefined>;
   /** Host paths confirmed to exist; decides which credential mounts to add. */
   existingPaths: Set<string>;
   sshAuthSock: string | undefined;
@@ -198,6 +213,8 @@ export function buildDockerRunArgs(opts: LaunchContainerOpts, ctx: DockerRunCont
     "--network", "host",
     // Start as root with webmux's entrypoint, which creates the `webmux` user
     // with the host UID/GID; panes then `docker exec` as that user.
+    // `--user 0:0` overrides a non-root `USER` in the image.
+    "--user", "0:0",
     "--entrypoint", CONTAINER_ENTRYPOINT,
     "-v", `${ctx.entrypointPath}:${CONTAINER_ENTRYPOINT}:ro`,
   ];
@@ -229,7 +246,7 @@ export function buildDockerRunArgs(opts: LaunchContainerOpts, ctx: DockerRunCont
         continue;
       }
       if (reservedKeys.has(key)) continue;
-      const val = Bun.env[key];
+      const val = ctx.hostEnv[key];
       if (val !== undefined) {
         args.push("-e", `${key}=${val}`);
       }
@@ -326,8 +343,14 @@ export async function launchContainer(opts: LaunchContainerOpts): Promise<string
   // Idempotency: reuse an already-running container for this branch.
   const existing = await findContainer(branch);
   if (existing) {
-    log.info(`[docker] reusing existing container ${existing} for branch ${branch}`);
-    return existing;
+    // A container still running its entrypoint becomes ready shortly; one that
+    // never does predates the injected entrypoint and is replaced.
+    if (await isSandboxReady(existing, EXISTING_CONTAINER_READY_TIMEOUT_MS)) {
+      log.info(`[docker] reusing existing container ${existing} for branch ${branch}`);
+      return existing;
+    }
+    log.info(`[docker] replacing container ${existing} for branch ${branch}: not started by the current entrypoint`);
+    await Bun.spawn(["docker", "rm", "-f", existing], { stdout: "ignore", stderr: "ignore" }).exited;
   }
 
   if (!opts.sandboxConfig.image) {
@@ -376,6 +399,7 @@ export async function launchContainer(opts: LaunchContainerOpts): Promise<string
     user: hostSandboxUser(),
     image,
     entrypointPath,
+    hostEnv: Bun.env,
     existingPaths,
     sshAuthSock,
     webmuxCli,
@@ -415,20 +439,41 @@ interface DockerCommandResult {
 
 /** Run a docker command and kill it after `timeoutMs`, so a hung daemon or a
  *  slow pull cannot block the server indefinitely. */
-async function runDocker(argv: string[], timeoutMs: number): Promise<DockerCommandResult> {
+async function runDocker(
+  argv: string[],
+  timeoutMs: number,
+  onStdoutLine?: (line: string) => void,
+): Promise<DockerCommandResult> {
   const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
     proc.kill();
+    setTimeout(() => proc.kill("SIGKILL"), DOCKER_KILL_GRACE_MS).unref();
   }, timeoutMs);
   const [exitCode, stdout, stderr] = await Promise.all([
     proc.exited,
-    new Response(proc.stdout).text(),
+    onStdoutLine ? readLines(proc.stdout, onStdoutLine) : new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
   ]);
   clearTimeout(timer);
   return { exitCode: timedOut ? "timeout" : exitCode, stdout, stderr };
+}
+
+/** Read a stream to the end, reporting each complete line as it arrives. */
+async function readLines(stream: ReadableStream<Uint8Array>, onLine: (line: string) => void): Promise<string> {
+  const decoder = new TextDecoder();
+  let all = "";
+  let pending = "";
+  for await (const chunk of stream) {
+    const text = decoder.decode(chunk, { stream: true });
+    all += text;
+    const lines = (pending + text).split("\n");
+    pending = lines.pop() ?? "";
+    for (const line of lines) if (line.trim()) onLine(line);
+  }
+  if (pending.trim()) onLine(pending);
+  return all;
 }
 
 /** Make sure `image` is available locally, pulling it when missing. Kept apart
@@ -438,7 +483,11 @@ async function ensureImage(image: string): Promise<void> {
   if (inspect.exitCode === 0) return;
 
   log.info(`[docker] pulling image ${image}`);
-  const pull = await runDocker(["docker", "pull", image], DOCKER_IMAGE_PREPARE_TIMEOUT_MS);
+  const pull = await runDocker(
+    ["docker", "pull", image],
+    DOCKER_IMAGE_PREPARE_TIMEOUT_MS,
+    (line) => log.info(`[docker] pull ${image}: ${line}`),
+  );
   if (pull.exitCode === "timeout") {
     throw new Error(`docker pull ${image} timed out after ${DOCKER_IMAGE_PREPARE_TIMEOUT_MS / 60_000} min`);
   }
@@ -448,16 +497,26 @@ async function ensureImage(image: string): Promise<void> {
   log.info(`[docker] pulled image ${image}`);
 }
 
+/** Poll for the entrypoint's ready marker. False on timeout or when the
+ *  container stopped. */
+async function isSandboxReady(name: string, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const probe = await runDocker(
+      ["docker", "exec", name, "test", "-f", CONTAINER_READY_MARKER],
+      Math.max(1000, deadline - Date.now()),
+    );
+    if (probe.exitCode === 0) return true;
+    if (probe.stderr.includes("is not running")) return false;
+    await Bun.sleep(200);
+  }
+  return false;
+}
+
 /** Wait until the entrypoint has created the sandbox user, so the first
  *  `docker exec -u` of a pane finds its home and sudoers in place. */
 async function waitForSandboxReady(name: string): Promise<void> {
-  const deadline = Date.now() + SANDBOX_READY_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const probe = await runDocker(["docker", "exec", name, "test", "-f", CONTAINER_READY_MARKER], DOCKER_RUN_TIMEOUT_MS);
-    if (probe.exitCode === 0) return;
-    if (probe.stderr.includes("is not running")) break;
-    await Bun.sleep(200);
-  }
+  if (await isSandboxReady(name, SANDBOX_READY_TIMEOUT_MS)) return;
   const logs = await runDocker(["docker", "logs", "--tail", "50", name], DOCKER_RUN_TIMEOUT_MS);
   throw new Error(`sandbox container ${name} did not become ready: ${(logs.stdout + logs.stderr).trim()}`);
 }
@@ -466,9 +525,14 @@ async function waitForSandboxReady(name: string): Promise<void> {
 async function writeSandboxEntrypoint(): Promise<string> {
   const dir = join(webmuxRuntimeStateDir(), "docker");
   const path = join(dir, "entrypoint.sh");
+  const content = buildSandboxEntrypoint();
+  if (await Bun.file(path).exists() && await Bun.file(path).text() === content) return path;
+  // Write then rename: a container still reading the old script keeps its inode.
+  const tmpPath = `${path}.${process.pid}.tmp`;
   await mkdir(dir, { recursive: true });
-  await Bun.write(path, buildSandboxEntrypoint());
-  await chmod(path, 0o755);
+  await Bun.write(tmpPath, content);
+  await chmod(tmpPath, 0o755);
+  await rename(tmpPath, path);
   return path;
 }
 

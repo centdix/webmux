@@ -1,4 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   buildDockerRunArgs,
   buildSandboxEntrypoint,
@@ -41,6 +44,7 @@ function build(
   existingPaths = new Set<string>(),
   sshAuthSock?: string,
   webmuxCli: WebmuxCliMounts | null = null,
+  hostEnv: Record<string, string | undefined> = {},
 ): string[] {
   return buildDockerRunArgs(opts, {
     name: "wm-test-123",
@@ -48,6 +52,7 @@ function build(
     user: { uid: UID, gid: GID },
     image: opts.sandboxConfig.image,
     entrypointPath: ENTRYPOINT,
+    hostEnv,
     existingPaths,
     sshAuthSock,
     webmuxCli,
@@ -86,9 +91,10 @@ function envFlags(args: string[]): string[] {
 // ---------------------------------------------------------------------------
 
 describe("buildDockerRunArgs — sandbox user", () => {
-  it("starts as root with the injected entrypoint instead of --user", () => {
+  it("starts as root with the injected entrypoint, overriding the image USER", () => {
     const args = build(makeOpts());
-    expect(args).not.toContain("--user");
+    expect(args[args.indexOf("--user") + 1]).toBe("0:0");
+    expect(args.filter((a) => a === "--user")).toHaveLength(1);
     expect(args[args.indexOf("--entrypoint") + 1]).toBe("/opt/webmux/entrypoint.sh");
     expect(mounts(args)).toContain(`${ENTRYPOINT}:/opt/webmux/entrypoint.sh:ro`);
   });
@@ -119,6 +125,18 @@ describe("buildDockerRunArgs — sandbox user", () => {
   });
 });
 
+describe("buildDockerRunArgs — envPassthrough", () => {
+  it("forwards listed host vars that are set, from the given host env", () => {
+    const flags = envFlags(build(
+      makeOpts({ sandboxConfig: makeDockerProfile({ envPassthrough: ["FOO", "UNSET", "HOME"] }) }),
+      new Set(), undefined, null, { FOO: "bar", HOME: "/host" },
+    ));
+    expect(flags).toContain("FOO=bar");
+    expect(flags.some((f) => f.startsWith("UNSET="))).toBe(false);
+    expect(flags).not.toContain("HOME=/host");
+  });
+});
+
 describe("buildSandboxEntrypoint", () => {
   const script = buildSandboxEntrypoint();
 
@@ -132,6 +150,12 @@ describe("buildSandboxEntrypoint", () => {
     expect(script).toContain('adduser -D -H -u "$uid"');
     expect(script).toContain('addgroup -g "$gid" webmux');
     expect(script).toContain("home=/home/webmux");
+  });
+
+  it("repoints the home of a UID the image already has, and falls back to editing passwd", () => {
+    expect(script).toContain('usermod -d "$home"');
+    expect(script).toContain('has_uid || echo "webmux-$uid:x:$uid:$gid::$home:$shell" >> /etc/passwd');
+    expect(script).toContain('has_gid || echo "webmux-$gid:x:$gid:" >> /etc/group');
   });
 
   it("hands over the home and tools dirs without a recursive chown", () => {
@@ -384,3 +408,57 @@ describe("buildDockerRunArgs — SSH agent forwarding", () => {
     expect(envFlags(args).filter(f => f.startsWith("SSH_AUTH_SOCK="))).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Opt-in integration: run the generated entrypoint in real containers. Skipped
+// unless docker is reachable and the (small) test images are already present.
+// ---------------------------------------------------------------------------
+
+function dockerImagePresent(image: string): boolean {
+  try {
+    return Bun.spawnSync(["docker", "image", "inspect", image], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+
+for (const image of ["busybox:latest", "alpine:3.20", "debian:bookworm-slim"]) {
+  describe.skipIf(!dockerImagePresent(image))(`sandbox entrypoint on ${image}`, () => {
+    it("creates the host-UID user, a writable home, and leaves root-owned mounts alone", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "webmux-entrypoint-"));
+      const entrypointPath = join(dir, "entrypoint.sh");
+      await writeFile(entrypointPath, buildSandboxEntrypoint());
+      await chmod(entrypointPath, 0o755);
+      const name = `wm-entrypoint-test-${Date.now()}`;
+      const uid = 4242;
+      const gid = 4343;
+      try {
+        const run = Bun.spawnSync([
+          "docker", "run", "-d", "--name", name, "--user", "0:0",
+          "--entrypoint", "/opt/webmux/entrypoint.sh",
+          "-v", `${entrypointPath}:/opt/webmux/entrypoint.sh:ro`,
+          "-v", "/etc:/home/webmux/.config/hostetc:ro",
+          "-e", `WEBMUX_UID=${uid}`, "-e", `WEBMUX_GID=${gid}`,
+          image,
+        ]);
+        expect(run.exitCode).toBe(0);
+        let ready = false;
+        for (let i = 0; i < 50 && !ready; i++) {
+          ready = Bun.spawnSync(["docker", "exec", name, "test", "-f", "/opt/webmux/.ready"]).exitCode === 0;
+          if (!ready) await Bun.sleep(100);
+        }
+        expect(ready).toBe(true);
+        const probe = Bun.spawnSync([
+          "docker", "exec", "-u", `${uid}:${gid}`, "-e", "HOME=/home/webmux", name, "sh", "-c",
+          "id -u; id -g; touch $HOME/probe && echo writable; stat -c %u $HOME/.config $HOME/.config/hostetc",
+        ]);
+        expect(probe.stdout.toString().trim().split("\n")).toEqual([
+          String(uid), String(gid), "writable", String(uid), "0",
+        ]);
+      } finally {
+        Bun.spawnSync(["docker", "rm", "-f", name], { stdout: "ignore", stderr: "ignore" });
+        await rm(dir, { recursive: true, force: true });
+      }
+    }, 20_000);
+  });
+}
