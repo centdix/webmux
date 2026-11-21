@@ -17,7 +17,7 @@ import {
   writeWorktreeMeta,
 } from "../adapters/fs";
 import { expandTemplate, getDefaultProfileName, isDockerProfile, type DockerProfileConfig } from "../adapters/config";
-import { type DockerGateway } from "../adapters/docker";
+import { hostSandboxUser, type DockerGateway } from "../adapters/docker";
 import { buildProjectSessionName, buildWorktreeParkingWindowName, buildWorktreeWindowName, type TmuxGateway } from "../adapters/tmux";
 import { captureNewSessionId, type SessionDiscoveryGateway } from "../adapters/session-discovery";
 import type { AgentId, AgentKind, ProfileConfig, ProjectConfig, RuntimeKind } from "../domain/config";
@@ -1224,6 +1224,7 @@ export class LifecycleService {
                 containerName,
                 input.worktreePath,
                 input.initialized.paths.runtimeEnvPath,
+                hostSandboxUser(),
               ),
             }
           : {

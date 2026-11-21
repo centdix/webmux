@@ -11,6 +11,26 @@ import { webmuxRuntimeStateDir } from "./webmux-paths";
 import { log } from "../lib/log";
 
 const DOCKER_RUN_TIMEOUT_MS = 60_000;
+const DOCKER_IMAGE_PREPARE_TIMEOUT_MS = 10 * 60_000;
+const SANDBOX_READY_TIMEOUT_MS = 30_000;
+
+/** Home directory of the `webmux` user the injected entrypoint creates. */
+export const SANDBOX_HOME = "/home/webmux";
+/** Webmux-owned files inside the container (entrypoint, CLI bundle, tools). */
+const CONTAINER_WEBMUX_DIR = "/opt/webmux";
+const CONTAINER_ENTRYPOINT = `${CONTAINER_WEBMUX_DIR}/entrypoint.sh`;
+const CONTAINER_READY_MARKER = `${CONTAINER_WEBMUX_DIR}/.ready`;
+export const CONTAINER_TOOLS_DIR = `${CONTAINER_WEBMUX_DIR}/tools`;
+
+/** Host UID/GID the sandbox user is created with and every `docker exec` runs as. */
+export interface SandboxUser {
+  uid: number;
+  gid: number;
+}
+
+export function hostSandboxUser(): SandboxUser {
+  return { uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0 };
+}
 
 /** Check if a path (file or directory) exists on the host. */
 async function pathExists(p: string): Promise<boolean> {
@@ -61,12 +81,70 @@ export interface WebmuxCliMounts {
   instancesDir: string;
 }
 
-const CONTAINER_CLI_ENTRY = "/opt/webmux/webmux.js";
+const CONTAINER_CLI_ENTRY = `${CONTAINER_WEBMUX_DIR}/webmux.js`;
 
 /** Host PIDs in the instance registry mean nothing in the container's PID
  *  namespace, so the in-container CLI skips the registry's liveness check. */
 export function buildWebmuxCliWrapper(): string {
   return `#!/bin/sh\nWEBMUX_SKIP_INSTANCE_PID_CHECK=1 exec bun ${CONTAINER_CLI_ENTRY} "$@"\n`;
+}
+
+/**
+ * Entrypoint webmux injects into every sandbox container, whatever the image.
+ * It runs as root, creates a `webmux` user with the host UID/GID (so files
+ * written to mounted dirs belong to the host user), grants it passwordless
+ * sudo when sudo exists, then idles. It is best-effort on purpose: a failed
+ * step is logged to `docker logs` but the container stays up.
+ */
+export function buildSandboxEntrypoint(): string {
+  return `#!/bin/sh
+set -u
+uid="\${WEBMUX_UID:?WEBMUX_UID is required}"
+gid="\${WEBMUX_GID:?WEBMUX_GID is required}"
+home=${SANDBOX_HOME}
+shell=/bin/sh
+[ -x /bin/bash ] && shell=/bin/bash
+
+group=$(awk -F: -v g="$gid" '$3 == g { print $1; exit }' /etc/group)
+if [ -z "$group" ]; then
+  if command -v groupadd >/dev/null 2>&1; then
+    groupadd -g "$gid" webmux
+  elif command -v addgroup >/dev/null 2>&1; then
+    addgroup -g "$gid" webmux
+  else
+    echo "webmux:x:$gid:" >> /etc/group
+  fi
+  group=webmux
+fi
+
+if ! awk -F: -v u="$uid" '$3 == u { found = 1 } END { exit !found }' /etc/passwd; then
+  if command -v useradd >/dev/null 2>&1; then
+    useradd -o -u "$uid" -g "$gid" -d "$home" -M -s "$shell" webmux
+  elif command -v adduser >/dev/null 2>&1; then
+    adduser -D -H -u "$uid" -G "$group" -h "$home" -s "$shell" webmux
+  else
+    echo "webmux:x:$uid:$gid::$home:$shell" >> /etc/passwd
+  fi
+fi
+
+mkdir -p "$home" ${CONTAINER_TOOLS_DIR}
+chown "$uid:$gid" "$home" ${CONTAINER_TOOLS_DIR}
+# Docker creates the parents of mounts under $home as root. Hand them over,
+# but never touch a mount point itself (a different device): that is a host dir.
+home_dev=$(stat -c %d "$home")
+find "$home" -xdev -maxdepth 3 -type d -user 0 | while IFS= read -r dir; do
+  [ "$(stat -c %d "$dir")" = "$home_dev" ] && chown "$uid:$gid" "$dir"
+done
+
+if command -v sudo >/dev/null 2>&1; then
+  mkdir -p /etc/sudoers.d
+  echo "#$uid ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/webmux
+  chmod 0440 /etc/sudoers.d/webmux
+fi
+
+touch ${CONTAINER_READY_MARKER}
+exec sleep infinity
+`;
 }
 
 export interface DockerGateway {
@@ -84,51 +162,55 @@ export class BunDockerGateway implements DockerGateway {
   }
 }
 
+/** Everything `buildDockerRunArgs` needs that the caller resolves with I/O. */
+export interface DockerRunContext {
+  /** Pre-generated container name. */
+  name: string;
+  /** Host home directory (e.g. Bun.env.HOME). */
+  home: string;
+  user: SandboxUser;
+  /** Image to run, already present locally. */
+  image: string;
+  /** Host path of the generated entrypoint script. */
+  entrypointPath: string;
+  /** Host paths confirmed to exist; decides which credential mounts to add. */
+  existingPaths: Set<string>;
+  sshAuthSock: string | undefined;
+  /** Host paths for the in-container `webmux` CLI, or null when the running
+   *  webmux has no JS bundle to mount. */
+  webmuxCli: WebmuxCliMounts | null;
+}
+
 /**
- * Build the `docker run` argument list from the given options.
- *
- * This is a pure function — all I/O (path existence checks, env reads) must
- * be resolved by the caller and passed in as parameters.
- *
- * @param opts          - Launch options (branch, dirs, config, env).
- * @param existingPaths - Set of host paths confirmed to exist; used to decide
- *                        which credential mounts to include.
- * @param home          - Resolved home directory (e.g. Bun.env.HOME ?? "/root").
- * @param name          - Pre-generated container name.
- * @param webmuxCli     - Host paths for the in-container `webmux` CLI, or null
- *                        when the running webmux has no JS bundle to mount.
+ * Build the `docker run` argument list. Pure: all I/O is resolved by the
+ * caller and passed in through `ctx`.
  */
-export function buildDockerRunArgs(
-  opts: LaunchContainerOpts,
-  existingPaths: Set<string>,
-  home: string,
-  name: string,
-  sshAuthSock: string | undefined,
-  hostUid: number,
-  hostGid: number,
-  webmuxCli: WebmuxCliMounts | null,
-): string[] {
+export function buildDockerRunArgs(opts: LaunchContainerOpts, ctx: DockerRunContext): string[] {
   const { wtDir, mainRepoDir, sandboxConfig, runtimeEnv } = opts;
+  const { home, existingPaths, sshAuthSock, webmuxCli } = ctx;
 
   const args: string[] = [
     "docker", "run", "-d",
-    "--name", name,
+    "--name", ctx.name,
     "-w", wtDir,
     // Share the host network: dev servers bind host ports directly, and the
     // webmux server is reachable on localhost (CLI and control URL).
     "--network", "host",
-    // Run as the host user so files created in mounted dirs (.git, worktree)
-    // are owned by the right UID/GID instead of root.
-    "--user", `${hostUid}:${hostGid}`,
+    // Start as root with webmux's entrypoint, which creates the `webmux` user
+    // with the host UID/GID; panes then `docker exec` as that user.
+    "--entrypoint", CONTAINER_ENTRYPOINT,
+    "-v", `${ctx.entrypointPath}:${CONTAINER_ENTRYPOINT}:ro`,
   ];
 
   // Core env vars — defined first so passthrough cannot override them.
   const reservedKeys = new Set([
-    "HOME", "TERM", "IS_SANDBOX", "SSH_AUTH_SOCK",
+    "HOME", "TERM", "IS_SANDBOX", "SSH_AUTH_SOCK", "WEBMUX_UID", "WEBMUX_GID",
     "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
     "GIT_CONFIG_KEY_1", "GIT_CONFIG_VALUE_1",
   ]);
-  args.push("-e", "HOME=/root");
+  args.push("-e", `HOME=${SANDBOX_HOME}`);
+  args.push("-e", `WEBMUX_UID=${ctx.user.uid}`);
+  args.push("-e", `WEBMUX_GID=${ctx.user.gid}`);
   args.push("-e", "TERM=xterm-256color");
   args.push("-e", "IS_SANDBOX=1");
 
@@ -170,15 +252,15 @@ export function buildDockerRunArgs(
   args.push("-v", `${mainRepoDir}:${mainRepoDir}:ro`);
 
   // Agent config mounts.
-  args.push("-v", `${home}/.claude:/root/.claude`);
-  args.push("-v", `${home}/.claude.json:/root/.claude.json`);
-  args.push("-v", `${home}/.codex:/root/.codex`);
+  args.push("-v", `${home}/.claude:${SANDBOX_HOME}/.claude`);
+  args.push("-v", `${home}/.claude.json:${SANDBOX_HOME}/.claude.json`);
+  args.push("-v", `${home}/.codex:${SANDBOX_HOME}/.codex`);
 
   // The running webmux's CLI, so agents can call `webmux port` in the container.
   if (webmuxCli) {
     args.push("-v", `${webmuxCli.entryPath}:${CONTAINER_CLI_ENTRY}:ro`);
     args.push("-v", `${webmuxCli.wrapperPath}:/usr/local/bin/webmux:ro`);
-    args.push("-v", `${webmuxCli.instancesDir}:/root/.webmux/instances:ro`);
+    args.push("-v", `${webmuxCli.instancesDir}:${SANDBOX_HOME}/.webmux/instances:ro`);
   }
 
   // Compute which guest paths are already covered by configured mounts so
@@ -195,9 +277,9 @@ export function buildDockerRunArgs(
   // Git/GitHub credential mounts (read-only, only if they exist on host and
   // are not overridden by a configured mount for the same guest path).
   const credentialMounts = [
-    { hostPath: `${home}/.gitconfig`, guestPath: "/root/.gitconfig" },
-    { hostPath: `${home}/.ssh`, guestPath: "/root/.ssh" },
-    { hostPath: `${home}/.config/gh`, guestPath: "/root/.config/gh" },
+    { hostPath: `${home}/.gitconfig`, guestPath: `${SANDBOX_HOME}/.gitconfig` },
+    { hostPath: `${home}/.ssh`, guestPath: `${SANDBOX_HOME}/.ssh` },
+    { hostPath: `${home}/.config/gh`, guestPath: `${SANDBOX_HOME}/.config/gh` },
   ];
   for (const { hostPath, guestPath } of credentialMounts) {
     if (extraMountGuestPaths.has(guestPath)) continue;
@@ -228,8 +310,8 @@ export function buildDockerRunArgs(
     }
   }
 
-  // Image + command.
-  args.push(sandboxConfig.image, "sleep", "infinity");
+  // Image; the entrypoint ends in `sleep infinity`.
+  args.push(ctx.image);
 
   return args;
 }
@@ -282,42 +364,112 @@ export async function launchContainer(opts: LaunchContainerOpts): Promise<string
     if (await pathExists(p)) existingPaths.add(p);
   }));
 
-  const webmuxCli = await prepareWebmuxCliMounts();
-  const args = buildDockerRunArgs(opts, existingPaths, home, name, sshAuthSock, process.getuid!(), process.getgid!(), webmuxCli);
+  const image = opts.sandboxConfig.image;
+  await ensureImage(image);
+  const [webmuxCli, entrypointPath] = await Promise.all([
+    prepareWebmuxCliMounts(),
+    writeSandboxEntrypoint(),
+  ]);
+  const args = buildDockerRunArgs(opts, {
+    name,
+    home,
+    user: hostSandboxUser(),
+    image,
+    entrypointPath,
+    existingPaths,
+    sshAuthSock,
+    webmuxCli,
+  });
 
   if (process.platform === "darwin") {
     log.warn("[docker] sandbox containers use host networking; on macOS enable it in Docker Desktop >= 4.34 (Settings > Resources > Network > Enable host networking) or use OrbStack");
   }
   log.info(`[docker] launching container: ${name}`);
-  const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
-
-  // Race process exit against a hard timeout so a hung daemon or slow image
-  // pull does not block the server indefinitely.
-  const timeout = Bun.sleep(DOCKER_RUN_TIMEOUT_MS).then(() => {
-    proc.kill();
-    return "timeout" as const;
-  });
-
-  const [exitResult, stderr, containerId] = await Promise.all([
-    Promise.race([proc.exited, timeout]),
-    new Response(proc.stderr).text(),
-    new Response(proc.stdout).text(),
-  ]);
-
-  if (exitResult === "timeout") {
-    await Bun.spawn(["docker", "rm", "-f", name], { stdout: "ignore", stderr: "ignore" }).exited;
-    throw new Error(`docker run timed out after ${DOCKER_RUN_TIMEOUT_MS / 1000}s`);
-  }
-
-  if (exitResult !== 0) {
+  const run = await runDocker(args, DOCKER_RUN_TIMEOUT_MS);
+  if (run.exitCode !== 0) {
     // Clean up any stopped container docker may have left behind.
     await Bun.spawn(["docker", "rm", "-f", name], { stdout: "ignore", stderr: "ignore" }).exited;
-    throw new Error(`docker run failed (exit ${exitResult}): ${stderr}`);
+    throw new Error(run.exitCode === "timeout"
+      ? `docker run timed out after ${DOCKER_RUN_TIMEOUT_MS / 1000}s`
+      : `docker run failed (exit ${run.exitCode}): ${run.stderr}`);
+  }
+  const containerId = run.stdout;
+
+  try {
+    await waitForSandboxReady(name);
+  } catch (error) {
+    await Bun.spawn(["docker", "rm", "-f", name], { stdout: "ignore", stderr: "ignore" }).exited;
+    throw error;
   }
 
   log.info(`[docker] container ${name} ready (id=${containerId.trim().slice(0, 12)})`);
 
   return name;
+}
+
+interface DockerCommandResult {
+  exitCode: number | "timeout";
+  stdout: string;
+  stderr: string;
+}
+
+/** Run a docker command and kill it after `timeoutMs`, so a hung daemon or a
+ *  slow pull cannot block the server indefinitely. */
+async function runDocker(argv: string[], timeoutMs: number): Promise<DockerCommandResult> {
+  const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    proc.kill();
+  }, timeoutMs);
+  const [exitCode, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  clearTimeout(timer);
+  return { exitCode: timedOut ? "timeout" : exitCode, stdout, stderr };
+}
+
+/** Make sure `image` is available locally, pulling it when missing. Kept apart
+ *  from `docker run` so a slow first pull gets its own, longer timeout. */
+async function ensureImage(image: string): Promise<void> {
+  const inspect = await runDocker(["docker", "image", "inspect", "--format", "{{.Id}}", image], DOCKER_RUN_TIMEOUT_MS);
+  if (inspect.exitCode === 0) return;
+
+  log.info(`[docker] pulling image ${image}`);
+  const pull = await runDocker(["docker", "pull", image], DOCKER_IMAGE_PREPARE_TIMEOUT_MS);
+  if (pull.exitCode === "timeout") {
+    throw new Error(`docker pull ${image} timed out after ${DOCKER_IMAGE_PREPARE_TIMEOUT_MS / 60_000} min`);
+  }
+  if (pull.exitCode !== 0) {
+    throw new Error(`docker pull ${image} failed (exit ${pull.exitCode}): ${pull.stderr}`);
+  }
+  log.info(`[docker] pulled image ${image}`);
+}
+
+/** Wait until the entrypoint has created the sandbox user, so the first
+ *  `docker exec -u` of a pane finds its home and sudoers in place. */
+async function waitForSandboxReady(name: string): Promise<void> {
+  const deadline = Date.now() + SANDBOX_READY_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const probe = await runDocker(["docker", "exec", name, "test", "-f", CONTAINER_READY_MARKER], DOCKER_RUN_TIMEOUT_MS);
+    if (probe.exitCode === 0) return;
+    if (probe.stderr.includes("is not running")) break;
+    await Bun.sleep(200);
+  }
+  const logs = await runDocker(["docker", "logs", "--tail", "50", name], DOCKER_RUN_TIMEOUT_MS);
+  throw new Error(`sandbox container ${name} did not become ready: ${(logs.stdout + logs.stderr).trim()}`);
+}
+
+/** Write the injected entrypoint to the runtime state dir and return its path. */
+async function writeSandboxEntrypoint(): Promise<string> {
+  const dir = join(webmuxRuntimeStateDir(), "docker");
+  const path = join(dir, "entrypoint.sh");
+  await mkdir(dir, { recursive: true });
+  await Bun.write(path, buildSandboxEntrypoint());
+  await chmod(path, 0o755);
+  return path;
 }
 
 /** Resolve the host paths for the in-container `webmux` CLI and write its
