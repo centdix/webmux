@@ -2,7 +2,7 @@ import { getAgentAdapter } from "../agents";
 import { quoteShell } from "../agents/shared";
 import type { AgentLaunchMode } from "../agents/types";
 import type { AgentDefinition } from "./agent-registry";
-import { SANDBOX_HOME, type SandboxUser } from "../adapters/docker";
+import { CONTAINER_TOOLS_DIR, SANDBOX_HOME, type SandboxUser } from "../adapters/docker";
 
 export type { AgentLaunchMode };
 
@@ -21,8 +21,45 @@ function buildRuntimeBootstrap(runtimeEnvPath: string): string {
   return `set -a; . ${quoteShell(runtimeEnvPath)}; set +a`;
 }
 
+const DOCKER_TOOLS_PATH = `${CONTAINER_TOOLS_DIR}/bin:${CONTAINER_TOOLS_DIR}/bun/bin`;
+
+const DOCKER_TOOLS_ENV = `NPM_CONFIG_PREFIX=${CONTAINER_TOOLS_DIR} BUN_INSTALL=${CONTAINER_TOOLS_DIR}/bun`;
+
+/** Global npm/bun installs (including an agent's self-update) go to the shared
+ *  tools volume: the image's default prefix is not writable by the sandbox user. */
 function buildDockerRuntimeBootstrap(runtimeEnvPath: string): string {
-  return `${buildRuntimeBootstrap(runtimeEnvPath)}; export PATH="$PATH:${DOCKER_PATH_FALLBACK}"`;
+  return `${buildRuntimeBootstrap(runtimeEnvPath)}; export ${DOCKER_TOOLS_ENV} PATH="${DOCKER_TOOLS_PATH}:$PATH:${DOCKER_PATH_FALLBACK}"`;
+}
+
+/**
+ * Install step for the sandbox's shared tools volume, serialized with `flock`
+ * so two containers starting together don't install over each other. With a
+ * `binary`, it is skipped once that binary is on the PATH; without one (custom
+ * agents) it runs on every launch, so the command must be idempotent.
+ */
+export function buildSandboxInstallCommand(install: string, binary?: string): string {
+  const isInstalled = binary ? `command -v ${binary} >/dev/null 2>&1` : null;
+  const notice = binary ? `webmux: installing ${binary} in the sandbox...` : "webmux: running the agent's sandbox install...";
+  // The install runs as its own `sh -c` so a trailing `;`, `&` or comment in a
+  // user-supplied command cannot break the surrounding script.
+  const script = `${isInstalled ? `${isInstalled} || ` : ""}{ echo ${quoteShell(notice)}; sh -c ${quoteShell(install)}; }`;
+  const env = DOCKER_TOOLS_ENV;
+  const locked = `if command -v flock >/dev/null 2>&1; then ${env} flock ${CONTAINER_TOOLS_DIR}/.lock sh -c ${quoteShell(script)}; else ${env} sh -c ${quoteShell(script)}; fi`;
+  return isInstalled ? `${isInstalled} || { ${locked}; }` : locked;
+}
+
+const SANDBOX_INSTALL_FAILED = "webmux: the agent install failed (see above); it is retried on the next launch";
+
+/** The mounted webmux CLI runs on bun, which most images lack. */
+const BUN_INSTALL_STEP = `if command -v webmux >/dev/null 2>&1; then ${buildSandboxInstallCommand("npm i -g bun", "bun")}; fi`;
+
+function buildAgentSandboxInstall(agent: AgentDefinition): string | null {
+  if (agent.kind === "builtin") {
+    const adapter = getAgentAdapter(agent.implementation.agent);
+    return buildSandboxInstallCommand(adapter.sandbox.install, adapter.binary);
+  }
+  const install = agent.implementation.config.sandboxInstall;
+  return install ? buildSandboxInstallCommand(install) : null;
 }
 
 function renderCustomCommandTemplate(template: string): string {
@@ -130,8 +167,8 @@ function buildAgentCommand(input: {
   resumeConversationId?: string;
   forkFromSessionId?: string;
   pinSessionId?: string;
-}, bootstrap = buildRuntimeBootstrap): string {
-  return `${bootstrap(input.runtimeEnvPath)}; ${buildAgentInvocation(input)}`;
+}): string {
+  return `${buildRuntimeBootstrap(input.runtimeEnvPath)}; ${buildAgentInvocation(input)}`;
 }
 
 function buildDockerExecCommand(input: {
@@ -207,5 +244,13 @@ export function buildDockerAgentPaneCommand(input: {
   forkFromSessionId?: string;
   pinSessionId?: string;
 }): string {
-  return buildAgentCommand(input, buildDockerRuntimeBootstrap);
+  const install = buildAgentSandboxInstall(input.agent);
+  const steps = [
+    buildDockerRuntimeBootstrap(input.runtimeEnvPath),
+    BUN_INSTALL_STEP,
+    // The invocation stays last and unwrapped: custom start commands are user text.
+    install ? `{ ${install}; } || echo ${quoteShell(SANDBOX_INSTALL_FAILED)} >&2` : null,
+    buildAgentInvocation(input),
+  ];
+  return steps.filter((step): step is string => step !== null).join("; ");
 }

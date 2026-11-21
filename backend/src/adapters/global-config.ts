@@ -16,6 +16,9 @@ function parseCustomAgent(raw: unknown): CustomAgentConfig | null {
     ...(typeof raw.resumeCommand === "string" && raw.resumeCommand.trim()
       ? { resumeCommand: raw.resumeCommand.trim() }
       : {}),
+    ...(typeof raw.sandboxInstall === "string" && raw.sandboxInstall.trim()
+      ? { sandboxInstall: raw.sandboxInstall.trim() }
+      : {}),
   };
 }
 
@@ -73,6 +76,7 @@ export async function writeGlobalCustomAgent(
       label: agent.label,
       startCommand: agent.startCommand,
       ...(agent.resumeCommand ? { resumeCommand: agent.resumeCommand } : {}),
+      ...(agent.sandboxInstall ? { sandboxInstall: agent.sandboxInstall } : {}),
     };
   } else {
     delete agents[agentId];

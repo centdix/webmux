@@ -7,6 +7,9 @@ export interface CustomAgentConfig {
   label: string;
   startCommand: string;
   resumeCommand?: string;
+  /** Shell run in a docker sandbox before the agent starts (e.g. an npm install
+   *  into the shared tools volume). Runs on every launch, so keep it idempotent. */
+  sandboxInstall?: string;
 }
 
 /** Custom agents by id, from the machine-wide `~/.config/webmux/config.yaml`. */

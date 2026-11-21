@@ -126,6 +126,7 @@ describe("agent-registry", () => {
         },
         startCommand: null,
         resumeCommand: null,
+        sandboxInstall: null,
       },
       {
         id: "codex",
@@ -140,6 +141,7 @@ describe("agent-registry", () => {
         },
         startCommand: null,
         resumeCommand: null,
+        sandboxInstall: null,
       },
       {
         id: "opencode",
@@ -154,6 +156,7 @@ describe("agent-registry", () => {
         },
         startCommand: null,
         resumeCommand: null,
+        sandboxInstall: null,
       },
       {
         id: "pi",
@@ -168,6 +171,7 @@ describe("agent-registry", () => {
         },
         startCommand: null,
         resumeCommand: null,
+        sandboxInstall: null,
       },
       {
         id: "gemini",
@@ -182,6 +186,7 @@ describe("agent-registry", () => {
         },
         startCommand: 'gemini --prompt "${PROMPT}"',
         resumeCommand: "gemini resume --last",
+        sandboxInstall: null,
       },
     ]);
   });

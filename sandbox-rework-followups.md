@@ -13,3 +13,11 @@ Out of scope for the 4-PR stack in `sandbox-rework-plan.md`. Each item says wher
 - **The SSH→HTTPS rewrite catches all GitHub SSH remotes.** A narrow or SSO-restricted token breaks remotes the forwarded SSH agent could have served. `ssh://git@github.com:22/…` and SSH host aliases are not rewritten.
 - **Partial git identity:** if only one of `user.name`/`user.email` is set on the host, neither is forwarded.
 - **`git pull` with no argument** has no upstream, because `.git/config` is read-only (known limitation, per the plan).
+
+## Agent harnesses (PR 3)
+
+- **No host `~/.claude` means no resume.** Agent home dirs are mounted only if they exist on the host, so a Docker-only user without `~/.claude` (or `~/.codex`) gets sessions stored only in the container. Host-side session discovery then finds nothing, and the sessions disappear with the container. Fix: create the worktree agent's home *directories* on the host before launch. Don't create single-file entries like `.claude.json`: docker would create them as root-owned dirs.
+- **Auth secrets on argv:** `-e ANTHROPIC_API_KEY=<value>` (like `GH_TOKEN`) is visible in host `ps`. Pass `-e KEY` without a value and inherit it from the spawn env.
+- **Stale agents in the tools volume:** the install is skipped once the binary is on the PATH. Self-updates now land in the volume (`NPM_CONFIG_PREFIX` is exported at runtime), but run without the lock. A forced refresh is `docker volume rm webmux-sandbox-tools`. Because tools come first on the PATH, a volume copy wins over a newer binary in the image.
+- **Custom installs with no binary** take the global tools lock on every launch.
+- **Forked tabs in docker worktrees:** `createWorktreeTab` builds the host command (no install step, no tools PATH, no `docker exec`), and forked-tab restore skips docker. Tabs in docker are out of scope per the plan.

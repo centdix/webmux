@@ -21,6 +21,7 @@
       label: string;
       startCommand: string;
       resumeCommand: string;
+      sandboxInstall: string;
     };
   }
 
@@ -64,6 +65,7 @@
         label: "",
         startCommand: "",
         resumeCommand: "",
+        sandboxInstall: "",
       },
     };
   }
@@ -77,6 +79,7 @@
         label: agent.label,
         startCommand: agent.startCommand ?? "",
         resumeCommand: agent.resumeCommand ?? "",
+        sandboxInstall: agent.sandboxInstall ?? "",
       },
     };
   }
@@ -89,6 +92,7 @@
         label: `${agent.label} Copy`,
         startCommand: agent.startCommand ?? "",
         resumeCommand: agent.resumeCommand ?? "",
+        sandboxInstall: agent.sandboxInstall ?? "",
       },
     };
   }
@@ -128,6 +132,10 @@
   }
 </script>
 
+{#snippet commandDetail(name: string, command: string)}
+  <p class="mt-1 text-[11px] text-muted font-mono break-all">{name}: {command}</p>
+{/snippet}
+
 <div class="mb-5">
   <span class="block text-xs text-muted mb-2">Agents</span>
   <div class="rounded-lg border border-edge bg-surface/40 p-3">
@@ -160,9 +168,10 @@
                   {agent.startCommand}
                 </p>
                 {#if agent.resumeCommand}
-                  <p class="mt-1 text-[11px] text-muted font-mono break-all">
-                    Resume: {agent.resumeCommand}
-                  </p>
+                  {@render commandDetail("Resume", agent.resumeCommand)}
+                {/if}
+                {#if agent.sandboxInstall}
+                  {@render commandDetail("Sandbox install", agent.sandboxInstall)}
                 {/if}
               </div>
 

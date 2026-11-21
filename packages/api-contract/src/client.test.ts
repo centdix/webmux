@@ -160,6 +160,7 @@ describe("createHubApi", () => {
       capabilities: { terminal: true, inAppChat: false, conversationHistory: false, interrupt: false, resume: false },
       startCommand: "gemini",
       resumeCommand: null,
+      sandboxInstall: null,
     };
     const api = createHubApi({
       origin: "https://example.com",

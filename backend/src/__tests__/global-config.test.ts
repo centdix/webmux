@@ -57,6 +57,14 @@ describe("global config custom agents", () => {
     expect(await readdir(join(path, ".."))).toEqual(["config.yaml"]);
   });
 
+  it("reads and writes an agent's sandboxInstall", async () => {
+    const path = await configPath();
+    const agent = { label: "Gemini CLI", startCommand: "gemini", sandboxInstall: "npm i -g @google/gemini-cli" };
+    expect(await writeGlobalCustomAgent(path, "gemini", agent)).toEqual({ gemini: agent });
+    expect(await Bun.file(path).text()).toContain("sandboxInstall: npm i -g @google/gemini-cli");
+    expect(loadGlobalCustomAgents(path)).toEqual({ gemini: agent });
+  });
+
   it("keeps agents hand-added to the file after it was loaded", async () => {
     const path = await configPath();
     await writeGlobalCustomAgent(path, "gemini", { label: "Gemini CLI", startCommand: "gemini" });

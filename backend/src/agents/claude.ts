@@ -242,6 +242,11 @@ export const claudeAdapter: AgentAdapter = {
   id: "claude",
   label: "Claude",
   binary: "claude",
+  sandbox: {
+    install: "npm i -g @anthropic-ai/claude-code",
+    homeMounts: [".claude", ".claude.json"],
+    authEnv: ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+  },
   capabilities: {
     terminal: true,
     inAppChat: true,

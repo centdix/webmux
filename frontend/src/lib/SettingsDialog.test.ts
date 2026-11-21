@@ -49,6 +49,7 @@ function createAgentDetails(overrides: Partial<AgentDetails> = {}): AgentDetails
     },
     startCommand: 'gemini --prompt "${PROMPT}"',
     resumeCommand: 'gemini resume --branch "${BRANCH}"',
+    sandboxInstall: null,
     ...overrides,
   };
 }

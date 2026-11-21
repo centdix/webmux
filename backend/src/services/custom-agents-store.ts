@@ -20,6 +20,7 @@ function toAgentConfig(input: UpsertCustomAgentRequest): CustomAgentConfig {
     label: input.label,
     startCommand: input.startCommand,
     ...(input.resumeCommand?.trim() ? { resumeCommand: input.resumeCommand.trim() } : {}),
+    ...(input.sandboxInstall?.trim() ? { sandboxInstall: input.sandboxInstall.trim() } : {}),
   };
 }
 

@@ -16,6 +16,7 @@
       label: string;
       startCommand: string;
       resumeCommand: string;
+      sandboxInstall: string;
     };
     onsave: (value: UpsertCustomAgentRequest) => Promise<void>;
     onvalidate?: (value: UpsertCustomAgentRequest) => Promise<ValidateCustomAgentResponse>;
@@ -25,6 +26,7 @@
   let label = $state("");
   let startCommand = $state("");
   let resumeCommand = $state("");
+  let sandboxInstall = $state("");
   let initialized = false;
   let saving = $state(false);
   let validating = $state(false);
@@ -38,6 +40,7 @@
     label = initialValue.label;
     startCommand = initialValue.startCommand;
     resumeCommand = initialValue.resumeCommand;
+    sandboxInstall = initialValue.sandboxInstall;
   });
 
   function buildRequest(): UpsertCustomAgentRequest {
@@ -45,6 +48,7 @@
       label: label.trim(),
       startCommand: startCommand.trim(),
       ...(resumeCommand.trim() ? { resumeCommand: resumeCommand.trim() } : {}),
+      ...(sandboxInstall.trim() ? { sandboxInstall: sandboxInstall.trim() } : {}),
     };
   }
 
@@ -115,6 +119,22 @@
         placeholder={"e.g. pi -c --append-system-prompt \"${SYSTEM_PROMPT}\""}
         bind:value={resumeCommand}
       />
+    </div>
+
+    <div class="mb-4">
+      <label class="block text-xs text-muted mb-1.5" for="agent-sandbox-install">
+        Docker sandbox install <span class="opacity-60">(optional)</span>
+      </label>
+      <input
+        id="agent-sandbox-install"
+        type="text"
+        class="w-full px-2.5 py-1.5 rounded-md border border-edge bg-surface text-primary text-[13px] placeholder:text-muted/50 outline-none focus:border-accent font-mono"
+        placeholder={"e.g. command -v gemini >/dev/null || npm i -g @google/gemini-cli"}
+        bind:value={sandboxInstall}
+      />
+      <p class="mt-1 text-[11px] text-muted">
+        Runs in Docker sandboxes before the agent starts, on every launch. npm and bun install into a volume shared by all sandboxes.
+      </p>
     </div>
 
     <div class="mb-5 rounded-lg border border-edge bg-surface/40 p-3">
