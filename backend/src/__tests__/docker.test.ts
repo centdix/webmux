@@ -1,6 +1,10 @@
 import { describe, expect, it } from "bun:test";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   buildDockerRunArgs,
+  buildSandboxEntrypoint,
   buildWebmuxCliWrapper,
   type LaunchContainerOpts,
   type WebmuxCliMounts,
@@ -10,6 +14,7 @@ import type { DockerProfileConfig } from "../adapters/config";
 const HOME = "/home/testuser";
 const UID = 1000;
 const GID = 1000;
+const ENTRYPOINT = `${HOME}/.webmux/docker/entrypoint.sh`;
 
 /** Minimal valid opts; individual tests override what they need. */
 function makeDockerProfile(overrides: Partial<DockerProfileConfig> = {}): DockerProfileConfig {
@@ -39,8 +44,19 @@ function build(
   existingPaths = new Set<string>(),
   sshAuthSock?: string,
   webmuxCli: WebmuxCliMounts | null = null,
+  hostEnv: Record<string, string | undefined> = {},
 ): string[] {
-  return buildDockerRunArgs(opts, existingPaths, HOME, "wm-test-123", sshAuthSock, UID, GID, webmuxCli);
+  return buildDockerRunArgs(opts, {
+    name: "wm-test-123",
+    home: HOME,
+    user: { uid: UID, gid: GID },
+    image: opts.sandboxConfig.image,
+    entrypointPath: ENTRYPOINT,
+    hostEnv,
+    existingPaths,
+    sshAuthSock,
+    webmuxCli,
+  });
 }
 
 /** Pull all -v flag values out of an args array. */
@@ -71,15 +87,96 @@ function envFlags(args: string[]): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// --user flag
+// Sandbox user + injected entrypoint
 // ---------------------------------------------------------------------------
 
-describe("buildDockerRunArgs — host user mapping", () => {
-  it("passes --user with host UID:GID", () => {
+describe("buildDockerRunArgs — sandbox user", () => {
+  it("starts as root with the injected entrypoint, overriding the image USER", () => {
     const args = build(makeOpts());
-    const idx = args.indexOf("--user");
-    expect(idx).toBeGreaterThan(-1);
-    expect(args[idx + 1]).toBe(`${UID}:${GID}`);
+    expect(args[args.indexOf("--user") + 1]).toBe("0:0");
+    expect(args.filter((a) => a === "--user")).toHaveLength(1);
+    expect(args[args.indexOf("--entrypoint") + 1]).toBe("/opt/webmux/entrypoint.sh");
+    expect(mounts(args)).toContain(`${ENTRYPOINT}:/opt/webmux/entrypoint.sh:ro`);
+  });
+
+  it("passes the host UID/GID and the sandbox HOME", () => {
+    const flags = envFlags(build(makeOpts()));
+    expect(flags).toContain(`WEBMUX_UID=${UID}`);
+    expect(flags).toContain(`WEBMUX_GID=${GID}`);
+    expect(flags).toContain("HOME=/home/webmux");
+  });
+
+  it("ends with the image and no command (the entrypoint idles)", () => {
+    const args = build(makeOpts());
+    expect(args.at(-1)).toBe("my-image:latest");
+  });
+
+  it("mounts agent config under /home/webmux", () => {
+    const m = mounts(build(makeOpts()));
+    expect(m).toContain(`${HOME}/.claude:/home/webmux/.claude`);
+    expect(m).toContain(`${HOME}/.claude.json:/home/webmux/.claude.json`);
+    expect(m).toContain(`${HOME}/.codex:/home/webmux/.codex`);
+    expect(m.some((v) => v.includes(":/root/"))).toBe(false);
+  });
+
+  it("WEBMUX_UID from runtime env cannot override the host UID", () => {
+    const flags = envFlags(build(makeOpts({ runtimeEnv: { WEBMUX_UID: "0" } })));
+    expect(flags.filter((f) => f.startsWith("WEBMUX_UID="))).toEqual([`WEBMUX_UID=${UID}`]);
+  });
+});
+
+describe("buildDockerRunArgs — envPassthrough", () => {
+  it("forwards listed host vars that are set, from the given host env", () => {
+    const flags = envFlags(build(
+      makeOpts({ sandboxConfig: makeDockerProfile({ envPassthrough: ["FOO", "UNSET", "HOME"] }) }),
+      new Set(), undefined, null, { FOO: "bar", HOME: "/host" },
+    ));
+    expect(flags).toContain("FOO=bar");
+    expect(flags.some((f) => f.startsWith("UNSET="))).toBe(false);
+    expect(flags).not.toContain("HOME=/host");
+  });
+});
+
+describe("buildSandboxEntrypoint", () => {
+  const script = buildSandboxEntrypoint();
+
+  it("is a POSIX sh script that ends by idling", () => {
+    expect(script.startsWith("#!/bin/sh\n")).toBe(true);
+    expect(script.trimEnd().endsWith("exec sleep infinity")).toBe(true);
+  });
+
+  it("creates the user with the host UID, tolerating an existing UID, with a busybox fallback", () => {
+    expect(script).toContain('useradd -o -u "$uid" -g "$gid" -d "$home"');
+    expect(script).toContain('adduser -D -H -u "$uid"');
+    expect(script).toContain('addgroup -g "$gid" webmux');
+    expect(script).toContain("home=/home/webmux");
+  });
+
+  it("repoints the home of a UID the image already has, and falls back to editing passwd", () => {
+    expect(script).toContain('usermod -d "$home"');
+    expect(script).toContain('has_uid || echo "webmux-$uid:x:$uid:$gid::$home:$shell" >> /etc/passwd');
+    expect(script).toContain('has_gid || echo "webmux-$gid:x:$gid:" >> /etc/group');
+  });
+
+  it("hands over the home and tools dirs without a recursive chown", () => {
+    expect(script).toContain('chown "$uid:$gid" "$home" /opt/webmux/tools');
+    expect(script).toContain('find "$home" -xdev -maxdepth 3 -type d -user 0');
+    expect(script).not.toContain("chown -R");
+    expect(script).not.toContain("chmod -R");
+  });
+
+  it("grants passwordless sudo by UID only when sudo exists", () => {
+    expect(script).toContain("if command -v sudo >/dev/null 2>&1; then");
+    expect(script).toContain('echo "#$uid ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/webmux');
+  });
+
+  it("signals readiness before idling", () => {
+    expect(script.indexOf("touch /opt/webmux/.ready")).toBeLessThan(script.indexOf("exec sleep infinity"));
+  });
+
+  it("passes sh -n syntax check", () => {
+    const proc = Bun.spawnSync(["sh", "-n"], { stdin: new TextEncoder().encode(script) });
+    expect(proc.exitCode).toBe(0);
   });
 });
 
@@ -151,56 +248,56 @@ describe("buildDockerRunArgs — extraMounts override credential mounts", () => 
     const existingPaths = new Set([`${HOME}/.ssh`]);
     const args = build(
       makeOpts({ sandboxConfig: makeDockerProfile({ image: "img", mounts: [
-        { hostPath: "~/.ssh", guestPath: "/root/.ssh", writable: true },
+        { hostPath: "~/.ssh", guestPath: "/home/webmux/.ssh", writable: true },
       ] }) }),
       existingPaths,
     );
     const m = mounts(args);
-    expect(m).toContain(`${HOME}/.ssh:/root/.ssh`);
-    expect(m).not.toContain(`${HOME}/.ssh:/root/.ssh:ro`);
+    expect(m).toContain(`${HOME}/.ssh:/home/webmux/.ssh`);
+    expect(m).not.toContain(`${HOME}/.ssh:/home/webmux/.ssh:ro`);
   });
 
   it("config ~/.ssh read-only still suppresses the credential mount (config controls it)", () => {
     const existingPaths = new Set([`${HOME}/.ssh`]);
     const args = build(
       makeOpts({ sandboxConfig: makeDockerProfile({ image: "img", mounts: [
-        { hostPath: "~/.ssh", guestPath: "/root/.ssh", writable: false },
+        { hostPath: "~/.ssh", guestPath: "/home/webmux/.ssh", writable: false },
       ] }) }),
       existingPaths,
     );
     const m = mounts(args);
-    const sshMounts = m.filter(v => v.includes("/root/.ssh"));
+    const sshMounts = m.filter(v => v.includes("/home/webmux/.ssh"));
     expect(sshMounts).toHaveLength(1);
-    expect(sshMounts[0]).toBe(`${HOME}/.ssh:/root/.ssh:ro`);
+    expect(sshMounts[0]).toBe(`${HOME}/.ssh:/home/webmux/.ssh:ro`);
   });
 
   it("config ~/.gitconfig override does not affect unrelated credential mounts", () => {
     const existingPaths = new Set([`${HOME}/.gitconfig`, `${HOME}/.ssh`]);
     const args = build(
       makeOpts({ sandboxConfig: makeDockerProfile({ image: "img", mounts: [
-        { hostPath: "~/.gitconfig", guestPath: "/root/.gitconfig", writable: true },
+        { hostPath: "~/.gitconfig", guestPath: "/home/webmux/.gitconfig", writable: true },
       ] }) }),
       existingPaths,
     );
     const m = mounts(args);
-    expect(m).toContain(`${HOME}/.gitconfig:/root/.gitconfig`);
-    expect(m).not.toContain(`${HOME}/.gitconfig:/root/.gitconfig:ro`);
-    expect(m).toContain(`${HOME}/.ssh:/root/.ssh:ro`);
+    expect(m).toContain(`${HOME}/.gitconfig:/home/webmux/.gitconfig`);
+    expect(m).not.toContain(`${HOME}/.gitconfig:/home/webmux/.gitconfig:ro`);
+    expect(m).toContain(`${HOME}/.ssh:/home/webmux/.ssh:ro`);
   });
 
   it("credential mounts are included normally when there are no extraMounts", () => {
     const existingPaths = new Set([`${HOME}/.gitconfig`, `${HOME}/.ssh`]);
     const args = build(makeOpts(), existingPaths);
     const m = mounts(args);
-    expect(m).toContain(`${HOME}/.gitconfig:/root/.gitconfig:ro`);
-    expect(m).toContain(`${HOME}/.ssh:/root/.ssh:ro`);
+    expect(m).toContain(`${HOME}/.gitconfig:/home/webmux/.gitconfig:ro`);
+    expect(m).toContain(`${HOME}/.ssh:/home/webmux/.ssh:ro`);
   });
 
   it("credential mounts are omitted for paths that do not exist on the host", () => {
     const args = build(makeOpts());
     const m = mounts(args);
-    expect(m).not.toContain(`${HOME}/.gitconfig:/root/.gitconfig:ro`);
-    expect(m).not.toContain(`${HOME}/.ssh:/root/.ssh:ro`);
+    expect(m).not.toContain(`${HOME}/.gitconfig:/home/webmux/.gitconfig:ro`);
+    expect(m).not.toContain(`${HOME}/.ssh:/home/webmux/.ssh:ro`);
   });
 });
 
@@ -241,12 +338,12 @@ describe("buildDockerRunArgs — webmux CLI", () => {
     const m = mounts(build(makeOpts(), new Set(), undefined, CLI));
     expect(m).toContain("/opt/pkg/webmux/bin/webmux.js:/opt/webmux/webmux.js:ro");
     expect(m).toContain(`${HOME}/.webmux/docker/webmux:/usr/local/bin/webmux:ro`);
-    expect(m).toContain(`${HOME}/.webmux/instances:/root/.webmux/instances:ro`);
+    expect(m).toContain(`${HOME}/.webmux/instances:/home/webmux/.webmux/instances:ro`);
   });
 
   it("adds no CLI mounts when there is no bundle to mount", () => {
     const m = mounts(build(makeOpts()));
-    expect(m.some((v) => v.includes("/opt/webmux/") || v.includes("/usr/local/bin/webmux") || v.includes(".webmux/instances"))).toBe(false);
+    expect(m.some((v) => v.includes("/opt/webmux/webmux.js") || v.includes("/usr/local/bin/webmux") || v.includes(".webmux/instances"))).toBe(false);
   });
 
   it("wrapper runs the mounted bundle with bun and skips host PID checks", () => {
@@ -261,10 +358,10 @@ describe("buildDockerRunArgs — webmux CLI", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildDockerRunArgs — reserved env vars", () => {
-  it("HOME from runtime env does not override the hardcoded HOME=/root", () => {
+  it("HOME from runtime env does not override the sandbox HOME", () => {
     const args = build(makeOpts({ runtimeEnv: { HOME: "/attacker" } }));
     const flags = envFlags(args);
-    expect(flags).toContain("HOME=/root");
+    expect(flags).toContain("HOME=/home/webmux");
     expect(flags).not.toContain("HOME=/attacker");
   });
 
@@ -311,3 +408,57 @@ describe("buildDockerRunArgs — SSH agent forwarding", () => {
     expect(envFlags(args).filter(f => f.startsWith("SSH_AUTH_SOCK="))).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Opt-in integration: run the generated entrypoint in real containers. Skipped
+// unless docker is reachable and the (small) test images are already present.
+// ---------------------------------------------------------------------------
+
+function dockerImagePresent(image: string): boolean {
+  try {
+    return Bun.spawnSync(["docker", "image", "inspect", image], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+
+for (const image of ["busybox:latest", "alpine:3.20", "debian:bookworm-slim"]) {
+  describe.skipIf(!dockerImagePresent(image))(`sandbox entrypoint on ${image}`, () => {
+    it("creates the host-UID user, a writable home, and leaves root-owned mounts alone", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "webmux-entrypoint-"));
+      const entrypointPath = join(dir, "entrypoint.sh");
+      await writeFile(entrypointPath, buildSandboxEntrypoint());
+      await chmod(entrypointPath, 0o755);
+      const name = `wm-entrypoint-test-${Date.now()}`;
+      const uid = 4242;
+      const gid = 4343;
+      try {
+        const run = Bun.spawnSync([
+          "docker", "run", "-d", "--name", name, "--user", "0:0",
+          "--entrypoint", "/opt/webmux/entrypoint.sh",
+          "-v", `${entrypointPath}:/opt/webmux/entrypoint.sh:ro`,
+          "-v", "/etc:/home/webmux/.config/hostetc:ro",
+          "-e", `WEBMUX_UID=${uid}`, "-e", `WEBMUX_GID=${gid}`,
+          image,
+        ]);
+        expect(run.exitCode).toBe(0);
+        let ready = false;
+        for (let i = 0; i < 50 && !ready; i++) {
+          ready = Bun.spawnSync(["docker", "exec", name, "test", "-f", "/opt/webmux/.ready"]).exitCode === 0;
+          if (!ready) await Bun.sleep(100);
+        }
+        expect(ready).toBe(true);
+        const probe = Bun.spawnSync([
+          "docker", "exec", "-u", `${uid}:${gid}`, "-e", "HOME=/home/webmux", name, "sh", "-c",
+          "id -u; id -g; touch $HOME/probe && echo writable; stat -c %u $HOME/.config $HOME/.config/hostetc",
+        ]);
+        expect(probe.stdout.toString().trim().split("\n")).toEqual([
+          String(uid), String(gid), "writable", String(uid), "0",
+        ]);
+      } finally {
+        Bun.spawnSync(["docker", "rm", "-f", name], { stdout: "ignore", stderr: "ignore" });
+        await rm(dir, { recursive: true, force: true });
+      }
+    }, 20_000);
+  });
+}

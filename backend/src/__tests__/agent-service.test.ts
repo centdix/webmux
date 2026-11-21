@@ -312,6 +312,7 @@ describe("agent-service command builders", () => {
       "wm-feature-container",
       "/repos/feature",
       "/repos/main/.git/worktrees/feature/webmux/runtime.env",
+      { uid: 1000, gid: 1001 },
       "/bin/zsh",
     );
     const agent = buildDockerAgentPaneCommand({
@@ -325,12 +326,12 @@ describe("agent-service command builders", () => {
       prompt: "ship the fix",
     });
 
-    expect(shell).toContain("docker exec -it -w '/repos/feature' 'wm-feature-container' /bin/sh -c");
+    expect(shell).toContain("docker exec -it -u 1000:1001 -e HOME='/home/webmux' -w '/repos/feature' 'wm-feature-container' /bin/sh -c");
     expect(shell).toContain("/bin/zsh");
-    expect(shell).toContain('export PATH="$PATH:/root/.local/bin:/usr/local/bin:/root/.bun/bin:/root/.cargo/bin"');
+    expect(shell).toContain('export PATH="$PATH:/home/webmux/.local/bin:/usr/local/bin:/home/webmux/.bun/bin:/home/webmux/.cargo/bin"');
     expect(agent).toContain("codex --enable hooks --yolo");
     expect(agent).toContain("ship the fix");
-    expect(agent).toContain('export PATH="$PATH:/root/.local/bin:/usr/local/bin:/root/.bun/bin:/root/.cargo/bin"');
+    expect(agent).toContain('export PATH="$PATH:/home/webmux/.local/bin:/usr/local/bin:/home/webmux/.bun/bin:/home/webmux/.cargo/bin"');
     expect(agent).not.toContain("docker exec");
   });
 
@@ -339,11 +340,12 @@ describe("agent-service command builders", () => {
       "wm-feature-container",
       "/repos/feature",
       "/repos/main/.git/worktrees/feature/webmux/runtime.env",
+      { uid: 1000, gid: 1001 },
     );
 
     expect(shell).toContain("/bin/bash");
     expect(shell).not.toContain(" /bin/sh -lc ");
-    expect(shell).toContain('export PATH="$PATH:/root/.local/bin:/usr/local/bin:/root/.bun/bin:/root/.cargo/bin"');
+    expect(shell).toContain('export PATH="$PATH:/home/webmux/.local/bin:/usr/local/bin:/home/webmux/.bun/bin:/home/webmux/.cargo/bin"');
   });
 
   it("falls back to /bin/sh when the preferred docker shell is unavailable", () => {
@@ -351,6 +353,7 @@ describe("agent-service command builders", () => {
       "wm-feature-container",
       "/repos/feature",
       "/repos/main/.git/worktrees/feature/webmux/runtime.env",
+      { uid: 1000, gid: 1001 },
       "/missing/bash",
     );
 

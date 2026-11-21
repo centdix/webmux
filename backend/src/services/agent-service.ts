@@ -2,10 +2,11 @@ import { getAgentAdapter } from "../agents";
 import { quoteShell } from "../agents/shared";
 import type { AgentLaunchMode } from "../agents/types";
 import type { AgentDefinition } from "./agent-registry";
+import { SANDBOX_HOME, type SandboxUser } from "../adapters/docker";
 
 export type { AgentLaunchMode };
 
-const DOCKER_PATH_FALLBACK = "/root/.local/bin:/usr/local/bin:/root/.bun/bin:/root/.cargo/bin";
+const DOCKER_PATH_FALLBACK = `${SANDBOX_HOME}/.local/bin:/usr/local/bin:${SANDBOX_HOME}/.bun/bin:${SANDBOX_HOME}/.cargo/bin`;
 
 const CUSTOM_AGENT_TEMPLATE_VARS = {
   PROMPT: "WEBMUX_AGENT_PROMPT",
@@ -133,12 +134,21 @@ function buildAgentCommand(input: {
   return `${bootstrap(input.runtimeEnvPath)}; ${buildAgentInvocation(input)}`;
 }
 
-function buildDockerExecCommand(
-  containerName: string,
-  worktreePath: string,
-  command: string,
-): string {
-  return `docker exec -it -w ${quoteShell(worktreePath)} ${quoteShell(containerName)} /bin/sh -c ${quoteShell(command)}`;
+function buildDockerExecCommand(input: {
+  containerName: string;
+  worktreePath: string;
+  user: SandboxUser;
+  home: string;
+  command: string;
+}): string {
+  return [
+    "docker exec -it",
+    `-u ${input.user.uid}:${input.user.gid}`,
+    `-e HOME=${quoteShell(input.home)}`,
+    `-w ${quoteShell(input.worktreePath)}`,
+    quoteShell(input.containerName),
+    `/bin/sh -c ${quoteShell(input.command)}`,
+  ].join(" ");
 }
 
 export function buildManagedShellCommand(
@@ -170,13 +180,16 @@ export function buildDockerShellCommand(
   containerName: string,
   worktreePath: string,
   runtimeEnvPath: string,
+  user: SandboxUser,
   shellPath = "/bin/bash",
 ): string {
-  return buildDockerExecCommand(
+  return buildDockerExecCommand({
     containerName,
     worktreePath,
-    `${buildDockerRuntimeBootstrap(runtimeEnvPath)}; if [ -x ${quoteShell(shellPath)} ]; then exec ${quoteShell(shellPath)} -i; elif [ -x /bin/sh ]; then exec /bin/sh -i; else echo 'webmux: no shell found in container' >&2; exit 127; fi`,
-  );
+    user,
+    home: SANDBOX_HOME,
+    command: `${buildDockerRuntimeBootstrap(runtimeEnvPath)}; if [ -x ${quoteShell(shellPath)} ]; then exec ${quoteShell(shellPath)} -i; elif [ -x /bin/sh ]; then exec /bin/sh -i; else echo 'webmux: no shell found in container' >&2; exit 127; fi`,
+  });
 }
 
 export function buildDockerAgentPaneCommand(input: {
