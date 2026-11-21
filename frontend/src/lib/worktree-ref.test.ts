@@ -1,20 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { WorktreeInfo } from "./types";
 import {
-  findSavedWorktree,
-  legacyBranchKey,
-  migrateBranchKeys,
   notificationKey,
   parseWorktreeKey,
   sameWorktree,
   worktreeKey,
 } from "./worktree-ref";
-
-type Named = Pick<WorktreeInfo, "project" | "id" | "branch">;
-
-function worktree(project: string, id: string, branch: string): Named {
-  return { project, id, branch };
-}
 
 describe("worktreeKey", () => {
   it("round-trips project and worktree id", () => {
@@ -49,40 +39,7 @@ describe("worktree ref helpers", () => {
     expect(sameWorktree(null, { project: "a", id: "x" })).toBe(false);
   });
 
-  it("finds a saved worktree by id, else by a branch saved by older versions", () => {
-    const worktrees = [worktree("alpha", "wt-1", "main"), worktree("alpha", "wt-2", "wt-1")];
-    expect(findSavedWorktree(worktrees, "wt-1")?.id).toBe("wt-1");
-    expect(findSavedWorktree(worktrees, "main")?.id).toBe("wt-1");
-    expect(findSavedWorktree(worktrees, "gone")).toBeUndefined();
-  });
-
   it("keys notifications by project and id", () => {
     expect(notificationKey({ project: "alpha", id: 1 })).not.toBe(notificationKey({ project: "beta", id: 1 }));
-  });
-});
-
-describe("migrateBranchKeys", () => {
-  const loaded: Record<string, Named[]> = {
-    alpha: [worktree("alpha", "wt-1", "feat/x"), worktree("alpha", "wt-2", "main")],
-  };
-  const worktreesOf = (project: string): Named[] | null => loaded[project] ?? null;
-
-  it("moves branch keys of loaded projects to ids", () => {
-    const keys = new Set([legacyBranchKey("alpha", "feat/x"), worktreeKey({ project: "alpha", id: "wt-2" })]);
-    expect(migrateBranchKeys(keys, worktreesOf)).toEqual(new Set(["alpha:wt-1", "alpha:wt-2"]));
-  });
-
-  it("moves the same branch of two loaded projects to each project's worktree", () => {
-    const twoProjects: Record<string, Named[]> = {
-      alpha: [worktree("alpha", "wt-a", "main")],
-      beta: [worktree("beta", "wt-b", "main")],
-    };
-    const keys = new Set([legacyBranchKey("alpha", "main"), legacyBranchKey("beta", "main")]);
-    expect(migrateBranchKeys(keys, (project) => twoProjects[project] ?? null)).toEqual(new Set(["alpha:wt-a", "beta:wt-b"]));
-  });
-
-  it("keeps keys of projects not loaded yet, and keys naming no worktree", () => {
-    const keys = new Set([legacyBranchKey("beta", "feat/x"), legacyBranchKey("alpha", "gone"), "alpha:wt-1"]);
-    expect(migrateBranchKeys(keys, worktreesOf)).toBeNull();
   });
 });

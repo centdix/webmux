@@ -52,17 +52,6 @@ describe("WorktreeSelection", () => {
     expect(new WorktreeSelection("beta").pending).toBeNull();
   });
 
-  it("resolves a branch saved by older versions, and saves the id instead", () => {
-    localStorage.setItem("wt-last-selected-worktree:alpha", "main");
-    const selection = new WorktreeSelection("alpha");
-
-    selection.resolvePending([worktree("wt-1", "feat/x"), worktree("wt-2", "main")]);
-    expect(selection.selected).toEqual({ project: "alpha", id: "wt-2" });
-
-    selection.persist(worktree("wt-2", "main"), true, true);
-    expect(localStorage.getItem("wt-last-selected-worktree:alpha")).toBe("wt-2");
-  });
-
   it("makes a selected worktree's project current", () => {
     const selection = new WorktreeSelection("alpha");
 

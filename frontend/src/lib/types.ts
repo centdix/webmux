@@ -150,8 +150,7 @@ export interface PendingCreationInfo extends PendingWorktreeCreation {
 }
 
 /** A worktree named before its project's list has loaded: by the URL hash
- *  (a branch) or by the saved selection (an id, or a branch saved by older
- *  versions). */
+ *  (a branch) or by the saved selection (an id). */
 export interface PendingSelection {
   project: string;
   name: string;

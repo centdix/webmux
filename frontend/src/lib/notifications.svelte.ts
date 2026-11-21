@@ -10,7 +10,7 @@ import type {
   UiToastItem,
   WorktreeRef,
 } from "./types";
-import { notificationKey, worktreeKey } from "./worktree-ref";
+import { notificationKey, notificationWorktree, worktreeKey } from "./worktree-ref";
 
 const AUTO_DISMISS_MS = 4000;
 const MAX_HISTORY = 10;
@@ -55,12 +55,12 @@ export class NotificationCenter {
    *  reconnect leaves the bell as it is. */
   readonly #seen = new Set<string>();
 
-  /** `unread`: the worktree the notification marks unread; null when the user
-   *  is looking at it right now or it is gone. */
-  receive(notification: AppNotification, unread: WorktreeRef | null): void {
+  /** `viewing`: the user is looking at that worktree right now, so it doesn't
+   *  get an unread mark. */
+  receive(notification: AppNotification, viewing: boolean): void {
     this.#seen.add(notificationKey(notification));
     this.active = [...this.active, notification];
-    if (unread) this.unreadWorktrees.add(worktreeKey(unread));
+    if (!viewing) this.unreadWorktrees.add(worktreeKey(notificationWorktree(notification)));
     this.history = [notification, ...this.history].slice(0, MAX_HISTORY);
     this.unreadCount++;
     setTimeout(() => {

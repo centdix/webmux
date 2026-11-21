@@ -1,7 +1,7 @@
 import { pickInitialSelection, readLocationHash, writeLocationHash } from "./project-location";
 import type { PendingSelection, WorktreeInfo, WorktreeRef } from "./types";
 import { loadSavedSelectedWorktree, saveSelectedWorktree } from "./utils";
-import { findSavedWorktree, refOf } from "./worktree-ref";
+import { refOf } from "./worktree-ref";
 
 /** Branch Cmd+Up/Down moves to in `branches` (the displayed order): from
  *  nothing, the first or last one; at either end, stay put. */
@@ -63,14 +63,12 @@ export class WorktreeSelection {
 
   /** Select the pending worktree among the current project's loaded list
    *  (nothing when it is gone): the hash names a branch, the saved selection
-   *  an id or, saved by older versions, a branch. */
+   *  an id. */
   resolvePending(worktrees: Array<Pick<WorktreeInfo, "project" | "id" | "branch">>): void {
     const pending = this.pending;
     if (!pending) return;
-    const match = pending.source === "hash"
-      ? worktrees.find((worktree) => worktree.branch === pending.name)
-      : findSavedWorktree(worktrees, pending.name);
-    this.select(match ?? null);
+    const key = pending.source === "hash" ? "branch" : "id";
+    this.select(worktrees.find((worktree) => worktree[key] === pending.name) ?? null);
   }
 
   /** Mirror the selection into the hash: its current branch, else the hash

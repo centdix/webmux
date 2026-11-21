@@ -586,7 +586,7 @@ describe("App create selection", () => {
   });
 
   it("selects the hash branch over the saved selection at mount", async () => {
-    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "feature/saved");
+    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "wt-feature/saved");
     window.history.replaceState(null, "", `/#${PROJECT}/feature/hash`);
     vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("feature/saved"), createWorktree("feature/hash")]);
 
@@ -597,7 +597,7 @@ describe("App create selection", () => {
   });
 
   it("ignores a hash that targets another project", async () => {
-    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "feature/saved");
+    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "wt-feature/saved");
     window.history.replaceState(null, "", "/#other/feature/hash");
     vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("feature/hash"), createWorktree("feature/saved")]);
 
@@ -634,7 +634,7 @@ describe("App create selection", () => {
   });
 
   it("does not restore a selection saved for another project", async () => {
-    localStorage.setItem("wt-last-selected-worktree:other", "feature/b");
+    localStorage.setItem("wt-last-selected-worktree:other", "wt-feature/b");
     vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("feature/a"), createWorktree("feature/b")]);
 
     renderApp();
@@ -651,7 +651,7 @@ describe("App create selection", () => {
       error: null,
     }];
     vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("feature/web")]);
-    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "feature/web");
+    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "wt-feature/web");
     const edited = deferred<AppConfig>();
     vi.mocked(api.fetchConfig)
       .mockResolvedValueOnce(createConfig({ name: "repo" }))
@@ -722,7 +722,7 @@ describe("App create selection", () => {
     vi.mocked(fetchWorktrees)
       .mockResolvedValueOnce([createWorktree("main"), createWorktree("feature/gone")])
       .mockResolvedValue([createWorktree("main")]);
-    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "feature/gone");
+    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "wt-feature/gone");
 
     renderApp();
     await screen.findByTitle("feature/gone");
@@ -757,30 +757,6 @@ describe("App create selection", () => {
     expect(vi.mocked(terminalSocketUrl).mock.calls.filter(([, id]) => id === "wt-renamed")).toHaveLength(1);
     expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("wt-renamed");
     expect(JSON.parse(localStorage.getItem("wt-favorite-worktree-keys") ?? "[]")).toEqual([`${PROJECT}:wt-renamed`]);
-  });
-
-  it("moves favorites and the selection saved by branch to worktree ids once the project loads", async () => {
-    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "feature/saved");
-    localStorage.setItem("wt-favorite-worktree-keys", JSON.stringify([`${PROJECT}:feature/fav`, "images:feature/img"]));
-    vi.mocked(fetchWorktrees).mockResolvedValue([
-      createWorktree("main"),
-      createWorktree("feature/saved"),
-      createWorktree("feature/fav"),
-    ]);
-    vi.mocked(fetchAllProjectWorktrees).mockResolvedValueOnce([
-      { prefix: PROJECT, name: PROJECT, worktrees: await fetchWorktrees(), pendingCreations: [], error: null },
-      { prefix: "images", name: "images", worktrees: [], pendingCreations: [], error: "git exploded" },
-    ]);
-
-    renderApp();
-
-    expect(await screen.findByTitle("feature/saved")).toBeInTheDocument();
-    await waitFor(() => expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("wt-feature/saved"));
-    expect(rowButton("feature/fav").textContent).toContain("★");
-    // The images project has not loaded yet: its favorite waits for it.
-    expect(new Set(JSON.parse(localStorage.getItem("wt-favorite-worktree-keys") ?? "[]"))).toEqual(
-      new Set([`${PROJECT}:wt-feature/fav`, "images:feature/img"]),
-    );
   });
 
   it("marks and selects the worktree a notification names by its id, even after a branch rename", async () => {
@@ -845,7 +821,7 @@ describe("App create selection", () => {
   });
 
   it("keeps the saved selection when the project's first poll fails", async () => {
-    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "feature/saved");
+    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "wt-feature/saved");
     vi.mocked(fetchAllProjectWorktrees).mockResolvedValueOnce([
       { prefix: PROJECT, name: PROJECT, worktrees: [], pendingCreations: [], error: "git exploded" },
     ]);
@@ -854,9 +830,9 @@ describe("App create selection", () => {
     render(App, { props: { selection, onNoProjects: vi.fn() } });
 
     expect(await screen.findByText("git exploded")).toBeInTheDocument();
-    expect(selection.pending).toEqual({ project: PROJECT, name: "feature/saved", source: "saved" });
+    expect(selection.pending).toEqual({ project: PROJECT, name: "wt-feature/saved", source: "saved" });
     expect(window.location.hash).toBe(`#${PROJECT}`);
-    expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("feature/saved");
+    expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("wt-feature/saved");
   });
 
   it("keeps a hash worktree pending, even through a hashchange, while its project fails to load, and selects it once loaded", async () => {
@@ -1004,7 +980,7 @@ describe("App create selection", () => {
 
   it("reselects a project's last selected worktree when coming back to it", async () => {
     useThreeProjects();
-    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "feature/web");
+    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "wt-feature/web");
 
     renderApp();
     await screen.findByTitle("feature/web");
@@ -1020,7 +996,7 @@ describe("App create selection", () => {
 
   it("falls back to the first row when coming back to a project whose remembered worktree is gone", async () => {
     useThreeProjects();
-    localStorage.setItem("wt-last-selected-worktree:images", "feature/removed");
+    localStorage.setItem("wt-last-selected-worktree:images", "wt-feature/removed");
 
     renderApp();
     await screen.findByTitle("main");
@@ -1098,7 +1074,7 @@ describe("App create selection", () => {
 
   it("moves within the project with Cmd+Up/Down and between projects with Cmd+Shift+Up/Down", async () => {
     useThreeProjects();
-    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "feature/web");
+    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "wt-feature/web");
 
     renderApp();
     await screen.findByTitle("feature/web");
@@ -1122,7 +1098,7 @@ describe("App create selection", () => {
 
   it("leaves Cmd+Shift+Up/Down to text fields, but not to the terminal's", async () => {
     useThreeProjects();
-    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "feature/web");
+    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "wt-feature/web");
 
     renderApp();
     await screen.findByTitle("feature/web");
@@ -1751,7 +1727,7 @@ describe("App create selection", () => {
   });
 
   it("reconnects the visible terminal after refreshing a stale terminal", async () => {
-    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "feature/active");
+    localStorage.setItem(`wt-last-selected-worktree:${PROJECT}`, "wt-feature/active");
     const staleWorktree = createWorktree("feature/active", {
       mux: "✓",
       agentName: "codex",

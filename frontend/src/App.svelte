@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, untrack, type Component } from "svelte";
+  import { onMount, type Component } from "svelte";
   import WorktreeList from "./lib/WorktreeList.svelte";
   import TopBar from "./lib/TopBar.svelte";
   import Terminal from "./lib/Terminal.svelte";
@@ -62,7 +62,7 @@
   import { setToastController } from "./lib/toast-context";
   import { projectApi, subscribeNotifications } from "./lib/api";
   import TabBar from "./lib/TabBar.svelte";
-  import { migrateBranchKeys, notificationWorktree, parseWorktreeKey, refOf, sameWorktree, worktreeKey } from "./lib/worktree-ref";
+  import { notificationWorktree, parseWorktreeKey, refOf, sameWorktree, worktreeKey } from "./lib/worktree-ref";
   import {
     ACTIVE_CREATE_POLL_INTERVAL_MS,
     DEFAULT_POLL_INTERVAL_MS,
@@ -137,8 +137,7 @@
   let linearIssues = $derived(linearData?.issues ?? []);
   let linearAvailability = $derived(linearData?.availability ?? "disabled");
   let hasLoadedWorktrees = $derived(store.hasLoaded(activeProject));
-  // The boot project inherits the unscoped legacy favorites.
-  let favoriteKeys = $state(untrack(() => loadFavoriteWorktreeKeys(selection.project)));
+  let favoriteKeys = $state(loadFavoriteWorktreeKeys());
 
   function worktreeSupportsChat(worktree: WorktreeInfo | undefined): boolean {
     return supportsWorktreeChat(config.agents, worktree);
@@ -265,9 +264,8 @@
   function handleNotification(n: AppNotification): void {
     // Only suppress the unread dot when the user is actually looking at this
     // worktree (selected and tab visible); otherwise a finished run should still surface.
-    const worktree = store.find(notificationWorktree(n));
-    const viewing = sameWorktree(worktree, selection.selected) && !document.hidden;
-    notifications.receive(n, worktree && !viewing ? refOf(worktree) : null);
+    const viewing = sameWorktree(notificationWorktree(n), selection.selected) && !document.hidden;
+    notifications.receive(n, viewing);
   }
 
   function ensureDiffDialogLoaded(): Promise<void> {
@@ -415,16 +413,6 @@
     if (nextSelectedId !== selection.id) {
       selection.selectId(nextSelectedId);
     }
-  });
-
-  $effect(() => {
-    const migrated = migrateBranchKeys(
-      untrack(() => favoriteKeys),
-      (project) => (store.hasLoaded(project) ? store.worktreesOf(project) : null),
-    );
-    if (!migrated) return;
-    favoriteKeys = migrated;
-    saveFavoriteWorktreeKeys(migrated);
   });
 
   $effect(() => {
@@ -692,11 +680,8 @@
     if (isMobile) sidebarOpen = false;
   }
 
-  /** Select the worktree a notification names, else its project (the worktree is gone). */
   function selectNotification(n: AppNotification): void {
-    const worktree = store.find(notificationWorktree(n));
-    if (worktree) selectWorktree(worktree);
-    else switchToProject(n.project);
+    selectWorktree(notificationWorktree(n));
   }
 
   function handleProjectAdded(): void {
