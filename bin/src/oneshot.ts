@@ -533,6 +533,7 @@ function recordPrEvents(
 
 function pollProjectState(
   branch: string,
+  worktreeId: string,
   port: number,
   state: PollState,
   callbacks: {
@@ -551,7 +552,7 @@ function pollProjectState(
 
   const forcePrSync = async (): Promise<void> => {
     try {
-      const refreshed = await api.syncWorktreePrs({ params: { name: branch } });
+      const refreshed = await api.syncWorktreePrs({ params: { id: worktreeId } });
       recordPrEvents(state, refreshed, callbacks.onPrEvent);
     } catch (err: unknown) {
       // Surface the cause: a silent swallow would let us mis-classify the run
@@ -786,6 +787,7 @@ export async function runOneshot(parsed: ParsedOneshotCommand, port: number): Pr
   }
   const api = oneshotApi(port);
   let branch = parsed.branch;
+  let worktreeId: string | null = null;
   const body: CreateWorktreeRequest = { ...parsed.body };
   let fromLinearIssueId = parsed.fromLinearIssueId;
   let postToLinearTarget = parsed.postToLinearTarget;
@@ -932,6 +934,8 @@ export async function runOneshot(parsed: ParsedOneshotCommand, port: number): Pr
 
     if (parsed.resume || existingWorktree) {
       if (!branch) throw new Error("resume requires a branch name");
+      if (!existingWorktree) throw new Error(`Worktree not found: ${branch}`);
+      worktreeId = existingWorktree.id;
       const reason = parsed.resume ? "resuming" : `worktree exists, resuming ${branch}`;
       stdout(`[${timestamp()}] [event] ${reason}`);
       if (fromLinearIssueId) {
@@ -942,7 +946,7 @@ export async function runOneshot(parsed: ParsedOneshotCommand, port: number): Pr
       // before the TUI starts. Avoids the paste/Enter race against Claude's
       // input loop.
       await api.openWorktree({
-        params: { name: branch },
+        params: { id: worktreeId },
         body: {
           ...(parsed.prompt ? { prompt: parsed.prompt } : {}),
           oneshot: oneshotConfig,
@@ -955,6 +959,7 @@ export async function runOneshot(parsed: ParsedOneshotCommand, port: number): Pr
         body: { ...body, source: "oneshot", oneshot: oneshotConfig },
       });
       branch = result.primaryBranch;
+      worktreeId = result.primaryWorktreeId;
       stdout(`[${timestamp()}] [event] created ${branch}`);
     }
   } catch (error) {
@@ -962,7 +967,7 @@ export async function runOneshot(parsed: ParsedOneshotCommand, port: number): Pr
     return 1;
   }
 
-  if (!branch) {
+  if (!branch || !worktreeId) {
     stderr(`[${timestamp()}] [error] could not resolve branch`);
     return 1;
   }
@@ -1037,7 +1042,7 @@ export async function runOneshot(parsed: ParsedOneshotCommand, port: number): Pr
     watcherWasArmed: false,
   };
 
-  poller = pollProjectState(branch, port, pollState, {
+  poller = pollProjectState(branch, worktreeId, port, pollState, {
     onSessionClosed: () => {
       stdout(`[${timestamp()}] [event] session closed — exiting`);
       finalize(0);

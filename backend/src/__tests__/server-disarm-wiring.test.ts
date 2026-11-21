@@ -38,7 +38,7 @@ describe("server.ts disarm-on-interaction wiring", () => {
     const source = await Bun.file(serverPath).text();
     // The busy-guard is now provided by withMutatingTab (which calls
     // ensureBranchNotBusy internally) — see the serialization wiring test below.
-    const pattern = /async function apiRefreshWorktreeAgentTerminal\(branch: string\): Promise<Response> \{[\s\S]*?withMutatingTab\(branch[\s\S]*?lifecycleService\.refreshAgentTerminal\(await resolveWorktreeIdByName\(branch\)\)/;
+    const pattern = /async function apiRefreshWorktreeAgentTerminal\(id: string\): Promise<Response> \{\s*const \{ worktreeId, branch \} = await resolveRouteWorktree\(id\);\s*return withMutatingTab\(branch[\s\S]*?lifecycleService\.refreshAgentTerminal\(worktreeId\)/;
     expect(source).toMatch(pattern);
   });
 });
@@ -57,6 +57,39 @@ describe("server.ts busy guard before name resolution", () => {
   it("checks the branch is not busy before resolving a sent prompt", async () => {
     const source = await Bun.file(serverPath).text();
     expect(source).toMatch(/async function apiSendPrompt\(name: string, req: Request\): Promise<Response> \{\s*ensureBranchNotBusy\(name\);[\s\S]*?resolveWorktreeIdByName\(name\)/);
+  });
+});
+
+/** Source-level regression test: routes addressed by worktree id check the id against the runtime
+ *  (404 when unknown, 409 while still being created) and read the branch the busy guards key on
+ *  from it, before doing anything else. */
+describe("server.ts id routes resolve the worktree first", () => {
+  const serverPath = join(import.meta.dir, "..", "server.ts");
+  const expected = [
+    "apiDeleteWorktree",
+    "apiOpenWorktree",
+    "apiGetNativeTerminalLaunch",
+    "apiCloseWorktree",
+    "apiRefreshWorktreeAgentTerminal",
+    "apiSetWorktreeArchived",
+    "apiSetWorktreeLabel",
+    "apiSetWorktreeProfile",
+    "apiMergeWorktree",
+  ];
+
+  it.each(expected)("%s resolves the id, then guards its branch", async (fn) => {
+    const source = await Bun.file(serverPath).text();
+    const pattern = new RegExp(
+      `async function ${fn}\\(id: string(, req: Request)?\\): Promise<Response> \\{\\s*`
+        + `const \\{ worktreeId, branch \\} = await resolveRouteWorktree\\(id\\);\\s*`
+        + `(ensureBranchNotBusy|return withMutatingTab|return withRemovingBranch)\\(branch`,
+    );
+    expect(source).toMatch(pattern);
+  });
+
+  it.each(["apiPostWorktreeToLinear", "apiSyncWorktreePrs"])("%s resolves the id", async (fn) => {
+    const source = await Bun.file(serverPath).text();
+    expect(source).toMatch(new RegExp(`async function ${fn}\\(id: string[^)]*\\): Promise<Response> \\{[\\s\\S]*?await resolveRouteWorktree\\(id\\)`));
   });
 });
 

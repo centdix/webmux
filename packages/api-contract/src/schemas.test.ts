@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { AllProjectWorktreesResponseSchema, ProjectSnapshotSchema, ProjectWorktreeSnapshotSchema } from "./schemas";
+import { AllProjectWorktreesResponseSchema, CreateWorktreeResponseSchema, ProjectSnapshotSchema, ProjectWorktreeSnapshotSchema } from "./schemas";
 
 const worktree = {
   id: "u-0123456789abcdef",
@@ -81,5 +81,18 @@ describe("pending creations", () => {
         notifications: [],
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("CreateWorktreeResponseSchema", () => {
+  it("carries the created worktree ids aligned with their branches", () => {
+    const response = {
+      primaryBranch: "claude-feature/search",
+      primaryWorktreeId: "wt-claude",
+      branches: ["claude-feature/search", "codex-feature/search"],
+      worktreeIds: ["wt-claude", "wt-codex"],
+    };
+    expect(CreateWorktreeResponseSchema.parse(response)).toEqual(response);
+    expect(CreateWorktreeResponseSchema.safeParse({ primaryBranch: "a", branches: ["a"] }).success).toBe(false);
   });
 });

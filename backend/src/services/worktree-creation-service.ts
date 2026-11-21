@@ -60,6 +60,10 @@ export class WorktreeCreationTracker {
     return this.worktrees.delete(worktreeId);
   }
 
+  has(worktreeId: string): boolean {
+    return this.worktrees.has(worktreeId);
+  }
+
   hasBranch(branch: string): boolean {
     return this.list().some((state) => state.branch === branch);
   }

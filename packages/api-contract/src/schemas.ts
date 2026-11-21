@@ -172,7 +172,10 @@ export const OpenWorktreeRequestSchema = z.object({
 
 export const CreateWorktreeResponseSchema = z.object({
   primaryBranch: z.string(),
+  primaryWorktreeId: z.string(),
   branches: z.array(z.string()),
+  /** Aligned with `branches`: `worktreeIds[i]` is the id of the worktree on `branches[i]`. */
+  worktreeIds: z.array(z.string()),
 });
 
 export const SetWorktreeArchivedRequestSchema = z.object({

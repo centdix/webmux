@@ -1,5 +1,7 @@
 import { createProjectApi, parseLinearTarget, type PostWorktreeToLinearTarget } from "@webmux/api-contract";
-import { CommandUsageError, formatServerError, resolveServedProjectPrefix, serverOrigin } from "./shared";
+import { BunGitGateway } from "../../backend/src/adapters/git";
+import { CommandUsageError, formatServerError, resolveProjectRoot, resolveServedProjectPrefix, serverOrigin } from "./shared";
+import { resolveWorktreeIdByBranch } from "./worktree-id";
 
 export interface ParsedLinearPostCommand {
   branch: string;
@@ -112,7 +114,17 @@ export function parseLinearArgs(args: string[]): ParsedLinearCommand | null {
   };
 }
 
-export async function runLinearCommand(args: string[], port: number): Promise<number> {
+interface LinearCommandDependencies {
+  resolveServedProject?: (port: number) => Promise<string>;
+  /** Branch argument → worktree id. Defaults to the project's live git worktrees. */
+  resolveWorktreeId?: (branch: string) => Promise<string>;
+}
+
+function defaultResolveWorktreeId(branch: string): Promise<string> {
+  return resolveWorktreeIdByBranch({ git: new BunGitGateway(), projectDir: resolveProjectRoot() ?? process.cwd() }, branch);
+}
+
+export async function runLinearCommand(args: string[], port: number, deps: LinearCommandDependencies = {}): Promise<number> {
   let parsed: ParsedLinearCommand | null;
   try {
     parsed = parseLinearArgs(args);
@@ -127,9 +139,11 @@ export async function runLinearCommand(args: string[], port: number): Promise<nu
   }
 
   try {
-    const api = createProjectApi(await resolveServedProjectPrefix(port), { origin: serverOrigin(port) });
+    const resolveServedProject = deps.resolveServedProject ?? resolveServedProjectPrefix;
+    const api = createProjectApi(await resolveServedProject(port), { origin: serverOrigin(port) });
+    const id = await (deps.resolveWorktreeId ?? defaultResolveWorktreeId)(parsed.post.branch);
     const response = await api.postWorktreeToLinear({
-      params: { name: parsed.post.branch },
+      params: { id },
       body: { target: parsed.post.target },
     });
     console.log(`Posted to Linear issue: ${response.issueUrl}`);

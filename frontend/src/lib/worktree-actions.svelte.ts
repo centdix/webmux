@@ -51,7 +51,7 @@ export class WorktreeActions {
   async open(ref: WorktreeRef): Promise<void> {
     await this.#deps.store.opening.during(ref, async () => {
       try {
-        await projectApi(ref.project).openWorktree({ params: { name: this.#deps.store.branchOf(ref) }, body: {} });
+        await projectApi(ref.project).openWorktree({ params: { id: ref.id }, body: {} });
         await this.#deps.store.refresh();
       } catch (err) {
         this.#deps.toast({ tone: "error", message: `Failed to open worktree: ${errorMessage(err)}` });
@@ -62,7 +62,7 @@ export class WorktreeActions {
   async close(ref: WorktreeRef): Promise<void> {
     this.#deps.leave(ref);
     try {
-      await projectApi(ref.project).closeWorktree({ params: { name: this.#deps.store.branchOf(ref) } });
+      await projectApi(ref.project).closeWorktree({ params: { id: ref.id } });
       await this.#deps.store.refresh();
     } catch (err) {
       this.#deps.toast({ tone: "error", message: `Failed to close worktree: ${errorMessage(err)}` });
@@ -75,7 +75,7 @@ export class WorktreeActions {
     const archived = !worktree.archived;
     await this.#deps.store.archiving.during(ref, async () => {
       try {
-        await projectApi(ref.project).setWorktreeArchived({ params: { name: this.#deps.store.branchOf(ref) }, body: { archived } });
+        await projectApi(ref.project).setWorktreeArchived({ params: { id: ref.id }, body: { archived } });
         await this.#deps.store.refresh();
       } catch (err) {
         alert(`Failed to ${archived ? "archive" : "restore"} worktree: ${errorMessage(err)}`);
@@ -87,7 +87,7 @@ export class WorktreeActions {
     this.#deps.leave(ref);
     await this.#deps.store.removing.during(ref, async () => {
       try {
-        await projectApi(ref.project).removeWorktree({ params: { name: this.#deps.store.branchOf(ref) } });
+        await projectApi(ref.project).removeWorktree({ params: { id: ref.id } });
         this.#deps.onBranchesChanged();
         await this.#deps.store.refresh();
       } catch (err) {
@@ -98,16 +98,16 @@ export class WorktreeActions {
 
   /** Throws so the label dialog can show the error. */
   async setLabel(ref: WorktreeRef, label: string | null): Promise<void> {
-    const next = await setWorktreeLabel(ref.project, this.#deps.store.branchOf(ref), label);
+    const next = await setWorktreeLabel(ref.project, ref.id, label);
     this.#deps.store.patch(ref, { label: next });
   }
 
   /** Throws so the profile dialog can show the error. */
   async setProfile(ref: WorktreeRef, profile: string): Promise<void> {
-    const branch = this.#deps.store.branchOf(ref);
-    const result = await setWorktreeProfile(ref.project, branch, profile);
+    const result = await setWorktreeProfile(ref.project, ref.id, profile);
     await this.#deps.store.refresh();
     if (result.restarted) this.#bumpTerminal(ref);
+    const branch = this.#deps.store.find(ref)?.branch ?? "worktree";
     this.#deps.toast({
       tone: "success",
       message: result.restarted
@@ -120,7 +120,7 @@ export class WorktreeActions {
     if (this.#deps.store.refreshingAgentTerminal.has(ref)) return;
     await this.#deps.store.refreshingAgentTerminal.during(ref, async () => {
       try {
-        await refreshWorktreeAgentTerminal(ref.project, this.#deps.store.branchOf(ref));
+        await refreshWorktreeAgentTerminal(ref.project, ref.id);
         await this.#deps.store.refresh();
         this.#bumpTerminal(ref);
         this.#deps.toast({ tone: "success", message: "Agent terminal refreshed" });
@@ -144,7 +144,7 @@ export class WorktreeActions {
 
   /** Throws so the Linear post dialog can show the error. */
   async postToLinear(ref: WorktreeRef, target: PostWorktreeToLinearTarget): Promise<PostWorktreeToLinearResponse> {
-    const response = await postWorktreeToLinear(ref.project, this.#deps.store.branchOf(ref), target);
+    const response = await postWorktreeToLinear(ref.project, ref.id, target);
     this.#deps.toast({ tone: "success", message: `Posted to Linear: ${response.issueUrl}` });
     return response;
   }

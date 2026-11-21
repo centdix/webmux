@@ -546,8 +546,11 @@ describe("LifecycleService", () => {
 
     expect(created).toEqual({
       primaryBranch: claudeBranch,
+      primaryWorktreeId: claudeMeta?.worktreeId ?? "",
       branches: [claudeBranch, codexBranch],
+      worktreeIds: [claudeMeta?.worktreeId ?? "", codexMeta?.worktreeId ?? ""],
     });
+    expect(created.worktreeIds.every((id) => id.length > 0)).toBe(true);
     expect(claudeMeta?.agent).toBe("claude");
     expect(codexMeta?.agent).toBe("codex");
     expect(claudeMeta?.baseBranch).toBe("main");
@@ -2077,10 +2080,15 @@ describe("LifecycleService", () => {
       agents: ["claude", "codex"],
     });
 
-    expect(created).toEqual({
+    expect(created).toMatchObject({
       primaryBranch: "claude-fix-login-flow",
       branches: ["claude-fix-login-flow", "codex-fix-login-flow"],
     });
+    expect(created.worktreeIds).toEqual([
+      runtime.getWorktreeByBranch("claude-fix-login-flow")?.worktreeId ?? "",
+      runtime.getWorktreeByBranch("codex-fix-login-flow")?.worktreeId ?? "",
+    ]);
+    expect(created.primaryWorktreeId).toBe(created.worktreeIds[0]);
     expect(autoName.calls).toEqual([
       {
         config: {

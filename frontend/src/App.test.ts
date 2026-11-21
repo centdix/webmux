@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import type {
   AgentsUiWorktreeConversationResponse,
   AppConfig,
+  CreateWorktreeResponse,
   AppNotification,
   PendingCreationInfo,
   LinearIssue,
@@ -287,6 +288,12 @@ function createConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     ide: "cursor",
     ...overrides,
   };
+}
+
+/** A create response for the given branches; ids follow `createWorktree`'s `wt-<branch>`. */
+function createdResult(...branches: string[]): CreateWorktreeResponse {
+  const worktreeIds = branches.map((branch) => `wt-${branch}`);
+  return { primaryBranch: branches[0], primaryWorktreeId: worktreeIds[0], branches, worktreeIds };
 }
 
 function createWorktree(
@@ -893,7 +900,7 @@ describe("App create selection", () => {
       { prefix: "images", name: "images", path: "/repos/images", active: false },
     ]);
     const creatingWorktree = createWorktree("feature/new", { creating: true, creationPhase: "creating_worktree" });
-    const createResult = deferred<{ primaryBranch: string; branches: string[] }>();
+    const createResult = deferred<CreateWorktreeResponse>();
     vi.mocked(fetchWorktrees)
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([creatingWorktree])
@@ -908,7 +915,7 @@ describe("App create selection", () => {
     await chooseProject("images");
     expect(await screen.findByTitle("feature/img")).toBeInTheDocument();
 
-    createResult.resolve({ primaryBranch: "feature/new", branches: ["feature/new"] });
+    createResult.resolve(createdResult("feature/new"));
     await waitFor(() => expect(fetchWorktrees).toHaveBeenCalledTimes(3));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -925,7 +932,7 @@ describe("App create selection", () => {
       error: null,
     }];
     const creatingWorktree = createWorktree("feature/new", { creating: true, creationPhase: "creating_worktree" });
-    const createResult = deferred<{ primaryBranch: string; branches: string[] }>();
+    const createResult = deferred<CreateWorktreeResponse>();
     vi.mocked(fetchWorktrees)
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([creatingWorktree])
@@ -941,7 +948,7 @@ describe("App create selection", () => {
     window.dispatchEvent(new HashChangeEvent("hashchange"));
     expect(await screen.findByTitle("feature/img")).toBeInTheDocument();
 
-    createResult.resolve({ primaryBranch: "feature/new", branches: ["feature/new"] });
+    createResult.resolve(createdResult("feature/new"));
     await waitFor(() => expect(fetchWorktrees).toHaveBeenCalledTimes(3));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -1137,7 +1144,7 @@ describe("App create selection", () => {
 
   it("creates a sub-worktree in the parent row's project", async () => {
     useThreeProjects();
-    vi.mocked(api.createWorktree).mockResolvedValue({ primaryBranch: "feature/doc-child", branches: ["feature/doc-child"] });
+    vi.mocked(api.createWorktree).mockResolvedValue(createdResult("feature/doc-child"));
 
     renderApp();
     await screen.findByTitle("main");
@@ -1188,33 +1195,40 @@ describe("App create selection", () => {
     expect(screen.queryByText("New Sub-Worktree")).not.toBeInTheDocument();
   });
 
-  it("closes, archives and removes a row through its project's API", async () => {
+  it("opens, closes, archives and removes a row through its project's API, by worktree id", async () => {
     useThreeProjects();
     otherProjects.list[1] = {
       ...otherProjects.list[1]!,
-      worktrees: [createWorktree("feature/doc", { project: "docs", mux: "✓" })],
+      worktrees: [
+        createWorktree("feature/doc", { project: "docs", mux: "✓", id: "doc-id" }),
+        createWorktree("feature/closed", { project: "docs", id: "closed-id" }),
+      ],
     };
 
     renderApp();
     await screen.findByTitle("main");
     await chooseProject("docs");
-    async function runRowAction(label: string): Promise<void> {
-      await fireEvent.click(within(await openRowMenu("feature/doc")).getByRole("menuitem", { name: label }));
+    async function runRowAction(label: string, branch = "feature/doc"): Promise<void> {
+      await fireEvent.click(within(await openRowMenu(branch)).getByRole("menuitem", { name: label }));
     }
 
+    await runRowAction("Open", "feature/closed");
+    await waitFor(() => expect(api.openWorktree).toHaveBeenCalledWith({ params: { id: "closed-id" }, body: {} }));
+    expect(projectOfFirstCall(api.openWorktree)).toBe("docs");
+
     await runRowAction("Close");
-    await waitFor(() => expect(api.closeWorktree).toHaveBeenCalledWith({ params: { name: "feature/doc" } }));
+    await waitFor(() => expect(api.closeWorktree).toHaveBeenCalledWith({ params: { id: "doc-id" } }));
     expect(projectOfFirstCall(api.closeWorktree)).toBe("docs");
 
     await runRowAction("Archive");
-    await waitFor(() => expect(api.setWorktreeArchived).toHaveBeenCalled());
+    await waitFor(() => expect(api.setWorktreeArchived).toHaveBeenCalledWith({ params: { id: "doc-id" }, body: { archived: true } }));
     expect(projectOfFirstCall(api.setWorktreeArchived)).toBe("docs");
 
     await runRowAction("Remove");
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent('Remove worktree "feature/doc" from docs?');
     await fireEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
-    await waitFor(() => expect(api.removeWorktree).toHaveBeenCalledWith({ params: { name: "feature/doc" } }));
+    await waitFor(() => expect(api.removeWorktree).toHaveBeenCalledWith({ params: { id: "doc-id" } }));
     expect(projectOfFirstCall(api.removeWorktree)).toBe("docs");
   });
 
@@ -1230,7 +1244,7 @@ describe("App create selection", () => {
     await fireEvent.keyDown(window, { key: "d", metaKey: true });
     await fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Remove" }));
 
-    await waitFor(() => expect(api.removeWorktree).toHaveBeenCalledWith({ params: { name: "feature/img" } }));
+    await waitFor(() => expect(api.removeWorktree).toHaveBeenCalledWith({ params: { id: "wt-feature/img" } }));
     expect(projectOfFirstCall(api.removeWorktree)).toBe("images");
     await waitFor(() => expect(window.location.hash).toBe("#images/main"));
   });
@@ -1242,7 +1256,7 @@ describe("App create selection", () => {
       creationPhase: "creating_worktree",
     });
     const newWorktree = createWorktree("feature/new");
-    const createResult = deferred<{ primaryBranch: string; branches: string[] }>();
+    const createResult = deferred<CreateWorktreeResponse>();
 
     vi.mocked(fetchWorktrees)
       .mockResolvedValueOnce([existingWorktree])
@@ -1264,7 +1278,7 @@ describe("App create selection", () => {
     expect(screen.getByTitle("main")).toBeInTheDocument();
     expect(screen.queryByTitle("feature/new")).not.toBeInTheDocument();
 
-    createResult.resolve({ primaryBranch: "feature/new", branches: ["feature/new"] });
+    createResult.resolve(createdResult("feature/new"));
 
     await waitFor(() => {
       expect(fetchWorktrees).toHaveBeenCalledTimes(3);
@@ -1273,13 +1287,44 @@ describe("App create selection", () => {
     expect(screen.queryByTitle("feature/new")).not.toBeInTheDocument();
   });
 
+  it("selects the created worktree by its id even when its branch already changed", async () => {
+    // Paired create: the primary's branch moved on by the time the list refreshes, and the
+    // other agent's worktree sorts first, so only the id points at the primary.
+    const primaryWorktree = createWorktree("zzz-renamed", { id: "wt-primary" });
+    const secondWorktree = createWorktree("aaa-second", { id: "wt-second" });
+    const createResult = deferred<CreateWorktreeResponse>();
+
+    vi.mocked(fetchWorktrees)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([secondWorktree, primaryWorktree]);
+    vi.mocked(api.createWorktree).mockReturnValueOnce(createResult.promise);
+
+    renderApp();
+
+    await screen.findByText("Select a worktree");
+
+    await openCreateDialogAndSubmit("feature/new");
+    createResult.resolve({
+      primaryBranch: "claude-feature/new",
+      primaryWorktreeId: "wt-primary",
+      branches: ["claude-feature/new", "codex-feature/new"],
+      worktreeIds: ["wt-primary", "wt-second"],
+    });
+
+    await waitFor(() => {
+      expect(window.location.hash).toBe(`#${PROJECT}/zzz-renamed`);
+    });
+    expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("wt-primary");
+  });
+
   it("selects the new worktree when nothing was selected before creation", async () => {
     const creatingWorktree = createWorktree("feature/new", {
       creating: true,
       creationPhase: "creating_worktree",
     });
     const newWorktree = createWorktree("feature/new");
-    const createResult = deferred<{ primaryBranch: string; branches: string[] }>();
+    const createResult = deferred<CreateWorktreeResponse>();
 
     vi.mocked(fetchWorktrees)
       .mockResolvedValueOnce([])
@@ -1293,7 +1338,7 @@ describe("App create selection", () => {
     await screen.findByText("Select a worktree");
 
     await openCreateDialogAndSubmit("feature/new");
-    createResult.resolve({ primaryBranch: "feature/new", branches: ["feature/new"] });
+    createResult.resolve(createdResult("feature/new"));
 
     await waitFor(() => {
       expect(fetchWorktrees).toHaveBeenCalledTimes(3);
@@ -1313,7 +1358,7 @@ describe("App create selection", () => {
     };
     const creatingWorktree = createWorktree("fix-login", { id: "wt-new", creating: true, creationPhase: "creating_worktree" });
     const newWorktree = createWorktree("fix-login", { id: "wt-new" });
-    const createResult = deferred<{ primaryBranch: string; branches: string[] }>();
+    const createResult = deferred<CreateWorktreeResponse>();
 
     vi.mocked(fetchWorktrees)
       .mockResolvedValueOnce([])
@@ -1341,7 +1386,7 @@ describe("App create selection", () => {
     await waitFor(() => expect(window.location.hash).toBe("#webmux/fix-login"), { timeout: 3000 });
     expect(screen.getByRole("button", { name: "Creating worktree…" })).toBe(pendingRow);
 
-    createResult.resolve({ primaryBranch: "fix-login", branches: ["fix-login"] });
+    createResult.resolve(createdResult("fix-login"));
     await waitFor(() => expect(screen.getByRole("button", { name: /^fix-login\b/ })).toBe(pendingRow));
   });
 
@@ -1421,7 +1466,7 @@ describe("App create selection", () => {
 
     beforeEach(() => {
       vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("feature/web")]);
-      vi.mocked(api.createWorktree).mockResolvedValue({ primaryBranch: "feature/new", branches: ["feature/new"] });
+      vi.mocked(api.createWorktree).mockResolvedValue(createdResult("feature/new"));
     });
 
     it("creates a worktree in the chosen project from the header's + button", async () => {
@@ -1579,7 +1624,7 @@ describe("App create selection", () => {
     });
     const createdClaude = createWorktree("claude-feature/new");
     const createdCodex = createWorktree("codex-feature/new");
-    const createResult = deferred<{ primaryBranch: string; branches: string[] }>();
+    const createResult = deferred<CreateWorktreeResponse>();
 
     vi.mocked(fetchWorktrees)
       .mockResolvedValueOnce([])
@@ -1601,10 +1646,7 @@ describe("App create selection", () => {
     });
     await fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
-    createResult.resolve({
-      primaryBranch: "claude-feature/new",
-      branches: ["claude-feature/new", "codex-feature/new"],
-    });
+    createResult.resolve(createdResult("claude-feature/new", "codex-feature/new"));
 
     await waitFor(() => {
       expect(fetchWorktrees).toHaveBeenCalledTimes(3);
@@ -1640,7 +1682,7 @@ describe("App create selection", () => {
     await fireEvent.input(screen.getByLabelText("Label"), { target: { value: "Other work" } });
     await fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-    await waitFor(() => expect(setWorktreeLabel).toHaveBeenCalledWith(PROJECT, "feature/other", "Other work"));
+    await waitFor(() => expect(setWorktreeLabel).toHaveBeenCalledWith(PROJECT, "wt-feature/other", "Other work"));
   });
 
   it("keeps the current selection while filtering the worktree list", async () => {
@@ -1693,7 +1735,7 @@ describe("App create selection", () => {
 
     await waitFor(() => {
       expect(api.setWorktreeArchived).toHaveBeenCalledWith({
-        params: { name: "feature/active" },
+        params: { id: "wt-feature/active" },
         body: { archived: true },
       });
     });
@@ -1729,7 +1771,7 @@ describe("App create selection", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
 
     await waitFor(() => {
-      expect(refreshWorktreeAgentTerminal).toHaveBeenCalledWith(PROJECT, "feature/active");
+      expect(refreshWorktreeAgentTerminal).toHaveBeenCalledWith(PROJECT, "wt-feature/active");
     });
     await waitFor(() => {
       expect(MockWebSocket.instances).toHaveLength(2);
@@ -1751,7 +1793,7 @@ describe("App create selection", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
-      expect(setWorktreeLabel).toHaveBeenCalledWith(PROJECT, "feature/active", "Search ranking");
+      expect(setWorktreeLabel).toHaveBeenCalledWith(PROJECT, "wt-feature/active", "Search ranking");
     });
     expect(screen.getAllByText("Search ranking").length).toBeGreaterThan(0);
   });
@@ -1774,7 +1816,7 @@ describe("App create selection", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Switch" }));
 
     await waitFor(() => {
-      expect(setWorktreeProfile).toHaveBeenCalledWith(PROJECT, "feature/active", "full");
+      expect(setWorktreeProfile).toHaveBeenCalledWith(PROJECT, "wt-feature/active", "full");
     });
   });
 
@@ -1874,7 +1916,7 @@ describe("App create selection", () => {
   it("creates a worktree from a Linear issue in the Linear panel's project", async () => {
     useThreeProjects();
     const docs = useDocsClient();
-    vi.mocked(docs.createWorktree).mockResolvedValue({ primaryBranch: "doc-1", branches: ["doc-1"] });
+    vi.mocked(docs.createWorktree).mockResolvedValue(createdResult("doc-1"));
 
     renderApp();
     await screen.findByTitle("main");
@@ -1895,7 +1937,7 @@ describe("App create selection", () => {
   it("creates from a Linear issue's details in the project it was opened from", async () => {
     useThreeProjects();
     const docs = useDocsClient();
-    vi.mocked(docs.createWorktree).mockResolvedValue({ primaryBranch: "doc-1", branches: ["doc-1"] });
+    vi.mocked(docs.createWorktree).mockResolvedValue(createdResult("doc-1"));
 
     renderApp();
     await screen.findByTitle("main");
@@ -1971,10 +2013,7 @@ describe("App create selection", () => {
       linearCreateTicketOption: true,
     }));
     vi.mocked(fetchWorktrees).mockResolvedValue([]);
-    vi.mocked(api.createWorktree).mockResolvedValue({
-      primaryBranch: "eng-123-new-flow",
-      branches: ["eng-123-new-flow"],
-    });
+    vi.mocked(api.createWorktree).mockResolvedValue(createdResult("eng-123-new-flow"));
 
     renderApp();
 
@@ -2037,10 +2076,7 @@ describe("App create selection", () => {
 
   it("submits multi-agent worktree creation when multiple agents are selected", async () => {
     vi.mocked(fetchWorktrees).mockResolvedValue([]);
-    vi.mocked(api.createWorktree).mockResolvedValue({
-      primaryBranch: "claude-feature/new",
-      branches: ["claude-feature/new", "codex-feature/new"],
-    });
+    vi.mocked(api.createWorktree).mockResolvedValue(createdResult("claude-feature/new", "codex-feature/new"));
 
     renderApp();
 
@@ -2073,10 +2109,7 @@ describe("App create selection", () => {
   it("submits an explicit base branch when provided", async () => {
     vi.mocked(fetchWorktrees).mockResolvedValue([]);
     vi.mocked(api.fetchBaseBranches).mockResolvedValue({ branches: [{ name: "release/base" }] });
-    vi.mocked(api.createWorktree).mockResolvedValue({
-      primaryBranch: "feature/from-release",
-      branches: ["feature/from-release"],
-    });
+    vi.mocked(api.createWorktree).mockResolvedValue(createdResult("feature/from-release"));
 
     renderApp();
 
@@ -2189,7 +2222,7 @@ describe("App create selection", () => {
     await waitFor(() => {
       expect(postWorktreeToLinear).toHaveBeenCalledTimes(1);
     });
-    expect(postWorktreeToLinear).toHaveBeenCalledWith(PROJECT, "feature/linked", {
+    expect(postWorktreeToLinear).toHaveBeenCalledWith(PROJECT, "wt-feature/linked", {
       kind: "issue",
       issueId: "ENG-42",
     });

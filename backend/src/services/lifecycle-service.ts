@@ -193,7 +193,9 @@ export interface CreateLifecycleWorktreesInput extends Omit<CreateLifecycleWorkt
 
 export interface CreateLifecycleWorktreesResult {
   primaryBranch: string;
+  primaryWorktreeId: string;
   branches: string[];
+  worktreeIds: string[];
 }
 
 interface ResolvedCreateLifecycleWorktreeInput extends Omit<CreateLifecycleWorktreeInput, "mode" | "branch" | "agent"> {
@@ -273,9 +275,12 @@ export class LifecycleService {
       }
 
       const createdBranches = created.map((worktree) => worktree.branch);
+      const createdIds = created.map((worktree) => worktree.worktreeId);
       return {
         primaryBranch: createdBranches[0],
+        primaryWorktreeId: createdIds[0],
         branches: createdBranches,
+        worktreeIds: createdIds,
       };
     } finally {
       await this.finishReported(reported);
