@@ -54,12 +54,16 @@ class FakeTmuxGateway implements TmuxGateway {
   readonly commands: Array<{ target: string; command: string }> = [];
   readonly swaps: Array<{ source: string; destination: string }> = [];
   readonly killedPanes: string[] = [];
+  /** The target each resolved pane id was read from. */
+  readonly paneIdTargets = new Map<string, string>();
   private paneCounter = 0;
 
   // Each resolution yields a fresh id so a code path that reads the same slot twice gets two
   // different values — surfacing any double-read where a single captured id is expected.
-  getPaneId(_target: string): string {
-    return `%pane-${this.paneCounter++}`;
+  getPaneId(target: string): string {
+    const paneId = `%pane-${this.paneCounter++}`;
+    this.paneIdTargets.set(paneId, target);
+    return paneId;
   }
 
   createParkedPane(opts: {
@@ -2805,7 +2809,10 @@ describe("LifecycleService", () => {
     expect(tmux.swaps[0]?.destination).toBe(restoredRootPaneId);
   });
 
-  it("rebuilds parked fork panes when the codex agent terminal is refreshed", async () => {
+  it.each([
+    ["", false],
+    [" after its branch is renamed", true],
+  ])("rebuilds parked fork panes when the codex agent terminal is refreshed%s", async (_title, renameFirst) => {
     const repoRoot = await initRepo();
     const runtime = new ProjectRuntime();
     const tmux = new FakeTmuxGateway();
@@ -2839,7 +2846,8 @@ describe("LifecycleService", () => {
     );
 
     await lifecycle.createWorktree({ branch: "feature-codex-tab-refresh" });
-    await lifecycle.createWorktreeTab(await worktreeIdOf(repoRoot, "feature-codex-tab-refresh"));
+    const worktreeId = await worktreeIdOf(repoRoot, "feature-codex-tab-refresh");
+    await lifecycle.createWorktreeTab(worktreeId);
 
     const session = buildProjectSessionName(repoRoot);
     const parkingWindow = buildWorktreeParkingWindowName("feature-codex-tab-refresh");
@@ -2867,12 +2875,21 @@ describe("LifecycleService", () => {
 
     tmux.swaps.length = 0;
     tmux.commands.length = 0;
-    await lifecycle.refreshAgentTerminal(await worktreeIdOf(repoRoot, "feature-codex-tab-refresh"));
+    // Before a reconcile heals the window names, the parking window is still named after the old branch.
+    if (renameFirst) run(["git", "branch", "-m", "feature-codex-tab-renamed"], join(repoRoot, "__worktrees", "feature-codex-tab-refresh"));
+    await lifecycle.refreshAgentTerminal(worktreeId);
 
     // The parking window is rebuilt from a clean slate — exactly one fork pane, not a
     // duplicate stacked on top of the pre-refresh pane.
-    const parking = tmux.listWindows().find((window) => window.windowName === parkingWindow);
-    expect(parking?.paneCount).toBe(1);
+    const parkings = tmux.listWindows().filter((window) => window.worktreeId === worktreeId && window.role === "parking");
+    expect(parkings).toHaveLength(1);
+    expect(parkings[0]?.paneCount).toBe(1);
+    if (!renameFirst) expect(parkings[0]?.windowName).toBe(parkingWindow);
+    // Exactly one main window carries the id: the freshly built one, named after the current branch.
+    const mains = tmux.listWindows().filter((window) => window.worktreeId === worktreeId && window.role === "main");
+    expect(mains.map((window) => window.windowName)).toEqual([
+      buildWorktreeWindowName(renameFirst ? "feature-codex-tab-renamed" : "feature-codex-tab-refresh"),
+    ]);
     // The fork's codex session is resumed into the rebuilt parked pane.
     expect(tmux.commands.some((entry) => entry.command.includes("resume 'fork-session-1'"))).toBe(true);
 
@@ -2889,7 +2906,11 @@ describe("LifecycleService", () => {
     // The previously active fork is brought back on-screen, and a subsequent select against
     // the refreshed (live) pane ids resolves instead of throwing on a stale pane.
     expect(tmux.swaps.length).toBeGreaterThan(0);
-    await lifecycle.selectWorktreeTab(await worktreeIdOf(repoRoot, "feature-codex-tab-refresh"), "root");
+    // The fork is swapped into, and the root tab points at, that window's visible pane.
+    const visibleSlot = `${session}:${mains[0]?.windowName}.0`;
+    expect(tmux.paneIdTargets.get(tmux.swaps[0]?.destination ?? "")).toBe(visibleSlot);
+    expect(tmux.paneIdTargets.get(rootAfter?.paneId ?? "")).toBe(visibleSlot);
+    await lifecycle.selectWorktreeTab(worktreeId, "root");
     expect((await readWorktreeMeta(gitDir))?.activeTabId).toBe("root");
   });
 

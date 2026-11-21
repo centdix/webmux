@@ -77,7 +77,9 @@ export function findWindow(
   ) ?? null;
 }
 
-function resolveBranch(entry: GitWorktreeEntry, metaBranch: string | null): string {
+/** The branch a worktree is listed (and addressed from the CLI) by: git's branch, else the branch
+ *  its meta recorded (detached HEAD, e.g. mid-rebase), else its directory name. */
+export function labelWorktreeBranch(entry: Pick<GitWorktreeEntry, "path" | "branch">, metaBranch: string | null): string {
   const fallback = basename(entry.path);
   return entry.branch ?? metaBranch ?? (fallback.length > 0 ? fallback : "unknown");
 }
@@ -190,7 +192,7 @@ export class ReconciliationService {
     const reconciledStates = await mapWithConcurrency(candidateEntries, this.concurrency, async (entry) => {
       const gitDir = this.deps.git.resolveWorktreeGitDir(entry.path);
       const meta = await readWorktreeMeta(gitDir);
-      const branch = resolveBranch(entry, meta?.branch ?? null);
+      const branch = labelWorktreeBranch(entry, meta?.branch ?? null);
       const worktreeId = resolveWorktreeId(meta, entry.path);
       const gitStatus = this.deps.git.readWorktreeStatus(entry.path);
       const window = findWindow(windows, sessionName, worktreeId, branch);

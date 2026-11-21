@@ -71,6 +71,7 @@ describe("TopBar", () => {
     const notification: AppNotification = {
       id: 1,
       project: "webmux",
+      worktreeId: "wt-pr-notif",
       branch: "feature/pr-notif",
       type: "pr_opened",
       message: "PR opened",
@@ -104,7 +105,7 @@ describe("TopBar", () => {
   });
 
   it("lists notifications of two projects that share an id", async () => {
-    const base = { id: 1, branch: "main", type: "agent_stopped" as const, timestamp: Date.UTC(2026, 9, 31) };
+    const base = { id: 1, worktreeId: "wt-main", branch: "main", type: "agent_stopped" as const, timestamp: Date.UTC(2026, 9, 31) };
     render(TopBar, {
       props: {
         name: null,

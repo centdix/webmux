@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, untrack, type Component } from "svelte";
+  import { onMount, type Component } from "svelte";
   import WorktreeList from "./lib/WorktreeList.svelte";
   import TopBar from "./lib/TopBar.svelte";
   import Terminal from "./lib/Terminal.svelte";
@@ -62,7 +62,7 @@
   import { setToastController } from "./lib/toast-context";
   import { projectApi, subscribeNotifications } from "./lib/api";
   import TabBar from "./lib/TabBar.svelte";
-  import { migrateBranchKeys, parseWorktreeKey, refOf, sameWorktree, worktreeKey } from "./lib/worktree-ref";
+  import { notificationWorktree, parseWorktreeKey, refOf, sameWorktree, worktreeKey } from "./lib/worktree-ref";
   import {
     ACTIVE_CREATE_POLL_INTERVAL_MS,
     DEFAULT_POLL_INTERVAL_MS,
@@ -137,8 +137,7 @@
   let linearIssues = $derived(linearData?.issues ?? []);
   let linearAvailability = $derived(linearData?.availability ?? "disabled");
   let hasLoadedWorktrees = $derived(store.hasLoaded(activeProject));
-  // The boot project inherits the unscoped legacy favorites.
-  let favoriteKeys = $state(untrack(() => loadFavoriteWorktreeKeys(selection.project)));
+  let favoriteKeys = $state(loadFavoriteWorktreeKeys());
 
   function worktreeSupportsChat(worktree: WorktreeInfo | undefined): boolean {
     return supportsWorktreeChat(config.agents, worktree);
@@ -181,7 +180,8 @@
   let currentTheme = $state<ThemeKey>(loadSavedTheme());
   let useWebChatUi = $state(loadUseWebChatUi());
   let terminalTheme = $derived(getTheme(currentTheme).terminal);
-  let pendingCreate = $state<{ project: string; branchHint: string | null } | null>(null);
+  /** Auto-select target of a create in flight: its id once the server answered, else the requested branch. */
+  let pendingCreate = $state<{ project: string; worktreeId: string | null; branchHint: string | null } | null>(null);
   let availableBranches = $state<AvailableBranch[]>([]);
   let availableBranchesLoading = $state(false);
   let availableBranchesError = $state<string | null>(null);
@@ -264,10 +264,8 @@
   function handleNotification(n: AppNotification): void {
     // Only suppress the unread dot when the user is actually looking at this
     // worktree (selected and tab visible); otherwise a finished run should still surface.
-    // Notifications name a branch: mark the worktree on it now.
-    const worktree = store.findByBranch(n.project, n.branch);
-    const viewing = sameWorktree(worktree, selection.selected) && !document.hidden;
-    notifications.receive(n, worktree && !viewing ? refOf(worktree) : null);
+    const viewing = sameWorktree(notificationWorktree(n), selection.selected) && !document.hidden;
+    notifications.receive(n, viewing);
   }
 
   function ensureDiffDialogLoaded(): Promise<void> {
@@ -418,30 +416,22 @@
   });
 
   $effect(() => {
-    const migrated = migrateBranchKeys(
-      untrack(() => favoriteKeys),
-      (project) => (store.hasLoaded(project) ? store.worktreesOf(project) : null),
-    );
-    if (!migrated) return;
-    favoriteKeys = migrated;
-    saveFavoriteWorktreeKeys(migrated);
-  });
-
-  $effect(() => {
     const present = new Set(store.projects.flatMap((entry) => entry.worktrees.map(worktreeKey)));
     actions.pruneTerminalRevisions(present);
   });
 
   $effect(() => {
     if (pendingCreateCount === 0 || latestAutoSelectCreateId === -1 || !pendingCreate) return;
-    const { project: createProject, branchHint } = pendingCreate;
+    const { project: createProject, worktreeId, branchHint } = pendingCreate;
     const candidates = store.worktreesOf(createProject);
     const creating = candidates.filter((w) => w.creating);
-    const target = branchHint
-      ? candidates.find((w) => w.branch === branchHint)
-      : creating.length === 1
-        ? creating[0]
-        : undefined;
+    const target = worktreeId
+      ? candidates.find((w) => w.id === worktreeId)
+      : branchHint
+        ? candidates.find((w) => w.branch === branchHint)
+        : creating.length === 1
+          ? creating[0]
+          : undefined;
     if (!target) return;
     selectWorktree(target);
   });
@@ -599,6 +589,7 @@
     if (shouldAutoSelectCreatedWorktree) {
       pendingCreate = {
         project: targetProject,
+        worktreeId: null,
         branchHint: expectedCreatedCount > 1 ? null : request.branch ?? null,
       };
     }
@@ -617,7 +608,7 @@
       void store.refresh();
       const result = await createPromise;
       if (shouldAutoSelectCreatedWorktree && requestId === latestAutoSelectCreateId) {
-        pendingCreate = { project: targetProject, branchHint: result.primaryBranch };
+        pendingCreate = { project: targetProject, worktreeId: result.primaryWorktreeId, branchHint: null };
       }
       invalidateBranchCaches();
       await store.refresh();
@@ -689,11 +680,8 @@
     if (isMobile) sidebarOpen = false;
   }
 
-  /** Notifications name a branch: select the worktree on it, else its project. */
   function selectNotification(n: AppNotification): void {
-    const worktree = store.findByBranch(n.project, n.branch);
-    if (worktree) selectWorktree(worktree);
-    else switchToProject(n.project);
+    selectWorktree(notificationWorktree(n));
   }
 
   function handleProjectAdded(): void {

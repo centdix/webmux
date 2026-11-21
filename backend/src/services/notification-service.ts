@@ -4,6 +4,7 @@ import type { RuntimeEvent } from "../domain/events";
 export interface RuntimeNotification {
   id: number;
   project: string;
+  worktreeId: string;
   branch: string;
   type: "agent_stopped" | "pr_opened" | "runtime_error" | "worktree_auto_removed";
   message: string;
@@ -17,14 +18,17 @@ export type NotificationEvent =
 
 export type NotificationListener = (event: NotificationEvent) => void;
 
-function eventToNotificationInput(event: RuntimeEvent, branch: string): { branch: string; type: RuntimeNotification["type"]; message: string; url?: string } | null {
+export type NotificationInput = Pick<RuntimeNotification, "worktreeId" | "branch" | "type" | "message" | "url">;
+
+function eventToNotificationInput(event: RuntimeEvent, branch: string): NotificationInput | null {
+  const { worktreeId } = event;
   switch (event.type) {
     case "agent_stopped":
-      return { branch, type: "agent_stopped", message: `Agent stopped on ${branch}` };
+      return { worktreeId, branch, type: "agent_stopped", message: `Agent stopped on ${branch}` };
     case "pr_opened":
-      return { branch, type: "pr_opened", message: `PR opened on ${branch}`, url: event.url };
+      return { worktreeId, branch, type: "pr_opened", message: `PR opened on ${branch}`, url: event.url };
     case "runtime_error":
-      return { branch, type: "runtime_error", message: `Runtime error on ${branch}: ${event.message}` };
+      return { worktreeId, branch, type: "runtime_error", message: `Runtime error on ${branch}: ${event.message}` };
     default:
       return null;
   }
@@ -58,10 +62,11 @@ export class NotificationService {
     return true;
   }
 
-  notify(input: { branch: string; type: RuntimeNotification["type"]; message: string; url?: string }): RuntimeNotification {
+  notify(input: NotificationInput): RuntimeNotification {
     const notification: RuntimeNotification = {
       id: this.nextId,
       project: this.project,
+      worktreeId: input.worktreeId,
       branch: input.branch,
       type: input.type,
       message: input.message,

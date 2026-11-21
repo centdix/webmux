@@ -1,15 +1,15 @@
 import { describe, expect, it } from "bun:test";
-import { CreateWorktreeRequestSchema, NotificationIdParamsSchema, RunIdParamsSchema, WorktreeNameParamsSchema } from "@webmux/api-contract";
+import { CreateWorktreeRequestSchema, NotificationIdParamsSchema, RunIdParamsSchema, WorktreeIdParamsSchema } from "@webmux/api-contract";
 import { z } from "zod";
 import { parseParams } from "../api-validation";
 
 describe("parseParams", () => {
-  it("decodes encoded worktree names before validation", () => {
-    const parsed = parseParams({ name: "feature%2Fsearch" }, WorktreeNameParamsSchema);
+  it("decodes encoded path params before validation", () => {
+    const parsed = parseParams({ id: "wt%3A1%2Fa" }, WorktreeIdParamsSchema);
 
     expect(parsed).toEqual({
       ok: true,
-      data: { name: "feature/search" },
+      data: { id: "wt:1/a" },
     });
   });
 
@@ -28,7 +28,7 @@ describe("parseParams", () => {
   });
 
   it("returns a 400 response for malformed path encoding", async () => {
-    const parsed = parseParams({ name: "%E0%A4%A" }, WorktreeNameParamsSchema);
+    const parsed = parseParams({ id: "%E0%A4%A" }, WorktreeIdParamsSchema);
 
     expect(parsed.ok).toBe(false);
     if (parsed.ok) throw new Error("Expected malformed path parameters to fail");

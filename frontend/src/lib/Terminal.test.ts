@@ -63,6 +63,12 @@ vi.mock("@xterm/addon-web-links", () => ({
   WebLinksAddon: class MockWebLinksAddon {},
 }));
 
+vi.mock("./api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./api")>()),
+  uploadFiles: vi.fn(async () => ({ files: [{ path: "/tmp/webmux-uploads/shot.png" }] })),
+}));
+
+import { uploadFiles } from "./api";
 import Terminal from "./Terminal.svelte";
 
 class MockWebSocket {
@@ -239,5 +245,32 @@ describe("Terminal reconnect", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
 
     expect(onrefreshagentterminal).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Terminal uploads", () => {
+  beforeEach(() => {
+    MockWebSocket.instances = [];
+    globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+    globalThis.ResizeObserver = MockResizeObserver as typeof ResizeObserver;
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("uploads a dropped image to the worktree by its id", async () => {
+    const { container } = render(Terminal, { props: { project: "myproject", worktreeId: "wt-upload", terminalTheme: getTheme("github-dark").terminal } });
+    const dropZone = container.querySelector("div");
+    if (!dropZone) throw new Error("expected the terminal container");
+
+    await fireEvent.drop(dropZone, {
+      dataTransfer: {
+        files: [],
+        getData: (type: string) => type === "text/uri-list" ? "data:image/png;base64,iVBORw0KGgo=" : "",
+      },
+    });
+
+    await vi.waitFor(() => expect(uploadFiles).toHaveBeenCalledWith("myproject", "wt-upload", [expect.any(File)]));
   });
 });

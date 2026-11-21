@@ -22,11 +22,11 @@ describe("createProjectApi", () => {
     });
 
     await api.sendWorktreePrompt({
-      params: { id: "feature/search" },
+      params: { id: "wt/1 a" },
       body: { text: "Fix the failing tests" },
     });
 
-    expect(paths).toEqual(["https://example.com/api/projects/myproject/worktrees/feature%2Fsearch/send"]);
+    expect(paths).toEqual(["https://example.com/api/projects/myproject/worktrees/wt%2F1%20a/send"]);
   });
 
   it("addresses worktree content routes by worktree id", async () => {

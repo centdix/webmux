@@ -130,7 +130,7 @@ import { classifyAgentsTerminalWorktreeError } from "./services/agents-ui-action
 import { buildProjectSnapshot } from "./services/snapshot-service";
 import { hubReconcileOptions, listAllProjectWorktrees } from "./services/all-projects-worktrees-service";
 import type { ReconcileOptions } from "./services/reconciliation-service";
-import { resolveRouteWorktree as resolveRouteWorktreeWith } from "./services/worktree-id-resolver";
+import { resolveRouteWorktree as resolveRouteWorktreeWith, WorktreeBusyGuards } from "./services/worktree-id-resolver";
 import {
   ClaudeConversationService,
   isPendingClaudeConversationId,
@@ -268,8 +268,7 @@ const claudeConversationService = new ClaudeConversationService({
 const claudeConversationStreamService = new ClaudeConversationStreamService({
   claude: claudeCliClient,
 });
-const removingBranches = new Set<string>();
-const mutatingTabBranches = new Set<string>();
+const busyGuards = new WorktreeBusyGuards((worktreeId) => worktreeCreationTracker.has(worktreeId));
 const lifecycleService = runtime.lifecycleService;
 let linearAutoCreateEnabled = config.integrations.linear.autoCreateWorktrees;
 let stopLinearAutoCreate: (() => void) | null = null;
@@ -402,9 +401,9 @@ const autoRemoveDeps: AutoRemoveDependencies = {
   git,
   projectRoot: PROJECT_DIR,
   notifications: runtimeNotifications,
-  isRemoving: (branch: string) => removingBranches.has(branch),
-  markRemoving: (branch: string) => removingBranches.add(branch),
-  unmarkRemoving: (branch: string) => removingBranches.delete(branch),
+  isRemoving: (worktreeId: string) => busyGuards.isRemoving(worktreeId),
+  markRemoving: (worktreeId: string) => busyGuards.markRemoving(worktreeId),
+  unmarkRemoving: (worktreeId: string) => busyGuards.unmarkRemoving(worktreeId),
   getBranchPrStates: () =>
     fetchBranchPrStates(config.integrations.github.linkedRepos, PROJECT_DIR, prSyncState),
 };
@@ -544,61 +543,30 @@ function catching(label: string, fn: () => Promise<Response>): Promise<Response>
   });
 }
 
-function ensureBranchNotRemoving(branch: string): void {
-  if (removingBranches.has(branch)) {
-    throw new LifecycleError(`Worktree is being removed: ${branch}`, 409);
-  }
+const routeWorktreeResolverDeps = {
+  runtime: projectRuntime,
+  reconcile: () => reconciliationService.reconcile(PROJECT_DIR, { force: true }),
+  guards: busyGuards,
+};
+
+/** A route's worktree id, checked against the runtime, with its current branch. */
+async function resolveRouteWorktree(worktreeId: string): Promise<{ worktreeId: string; branch: string }> {
+  return await resolveRouteWorktreeWith(worktreeId, routeWorktreeResolverDeps, { requireIdle: false });
 }
 
-function ensureBranchNotCreating(branch: string): void {
+/** Like `resolveRouteWorktree`, and also 409 while the worktree is being created, removed, or has its tabs updated. */
+async function resolveIdleRouteWorktree(worktreeId: string): Promise<{ worktreeId: string; branch: string }> {
+  return await resolveRouteWorktreeWith(worktreeId, routeWorktreeResolverDeps, { requireIdle: true });
+}
+
+/** A create request names its target branch: 409 while another creation targets it, or while the
+ *  worktree currently on it is busy. */
+function ensureCreateTargetNotBusy(branch: string): void {
   if (worktreeCreationTracker.hasBranch(branch)) {
     throw new LifecycleError(`Worktree is being created: ${branch}`, 409);
   }
-}
-
-function ensureBranchNotMutatingTab(branch: string): void {
-  if (mutatingTabBranches.has(branch)) {
-    throw new LifecycleError(`Worktree tabs are being updated: ${branch}`, 409);
-  }
-}
-
-function ensureBranchNotBusy(branch: string): void {
-  ensureBranchNotRemoving(branch);
-  ensureBranchNotCreating(branch);
-  ensureBranchNotMutatingTab(branch);
-}
-
-async function withRemovingBranch<T>(branch: string, fn: () => Promise<T>): Promise<T> {
-  ensureBranchNotBusy(branch);
-  removingBranches.add(branch);
-  try {
-    return await fn();
-  } finally {
-    removingBranches.delete(branch);
-  }
-}
-
-// Tab create/select/delete each read-modify-write the worktree meta. Open and
-// agent-terminal refresh also rewrite the whole tabs array (via restoreWorktreeTabs).
-// Serialize them all per branch (and mutually exclude with remove/create) so concurrent
-// requests from the CLI or multiple clients can't clobber each other's tab bookkeeping.
-async function withMutatingTab<T>(branch: string, fn: () => Promise<T>): Promise<T> {
-  ensureBranchNotBusy(branch);
-  mutatingTabBranches.add(branch);
-  try {
-    return await fn();
-  } finally {
-    mutatingTabBranches.delete(branch);
-  }
-}
-
-/** A route's worktree id, checked against the runtime, with the branch its busy guards key on. */
-async function resolveRouteWorktree(worktreeId: string): Promise<{ worktreeId: string; branch: string }> {
-  return await resolveRouteWorktreeWith(worktreeId, {
-    runtime: projectRuntime,
-    reconcile: () => reconciliationService.reconcile(PROJECT_DIR, { force: true }),
-    isCreating: (id) => worktreeCreationTracker.has(id),
-  });
+  const existing = projectRuntime.getWorktreeByBranch(branch);
+  if (existing) busyGuards.ensureNotBusy(existing.worktreeId, branch);
 }
 
 async function resolveTerminalWorktree(worktreeId: string): Promise<{
@@ -614,7 +582,7 @@ async function resolveTerminalWorktree(worktreeId: string): Promise<{
   if (!state) {
     throw new Error(`Worktree not found: ${worktreeId}`);
   }
-  ensureBranchNotBusy(state.branch);
+  busyGuards.ensureNotBusy(state.worktreeId, state.branch);
   if (!state.session.exists || !state.session.sessionName) {
     throw new Error(`No open tmux window found for worktree: ${state.branch}`);
   }
@@ -655,8 +623,7 @@ async function resolveAgentsTerminalWorktree(worktreeId: string): Promise<{
 }
 
 async function apiGetNativeTerminalLaunch(id: string): Promise<Response> {
-  const { worktreeId, branch } = await resolveRouteWorktree(id);
-  ensureBranchNotBusy(branch);
+  const { worktreeId, branch } = await resolveIdleRouteWorktree(id);
   await reconciliationService.reconcile(PROJECT_DIR);
   const launch = buildNativeTerminalLaunch({
     branch,
@@ -1090,8 +1057,8 @@ async function apiInterruptAgentsWorktree(id: string): Promise<Response> {
 }
 
 async function apiRefreshWorktreeAgentTerminal(id: string): Promise<Response> {
-  const { worktreeId, branch } = await resolveRouteWorktree(id);
-  return withMutatingTab(branch, async () => {
+  const { worktreeId, branch } = await resolveIdleRouteWorktree(id);
+  return busyGuards.withMutatingTab(worktreeId, branch, async () => {
     await lifecycleService.refreshAgentTerminal(worktreeId);
     return jsonResponse({ ok: true });
   });
@@ -1416,7 +1383,7 @@ async function apiCreateWorktree(req: Request): Promise<Response> {
   if (resolvedBranch) {
     const targetBranches = buildCreateWorktreeTargets(resolvedBranch, selectedAgents.map((agent) => ({ agent }))).map((target) => target.branch);
     for (const targetBranch of targetBranches) {
-      ensureBranchNotBusy(targetBranch);
+      ensureCreateTargetNotBusy(targetBranch);
     }
 
     if (baseBranch && targetBranches.some((targetBranch) => targetBranch === baseBranch)) {
@@ -1449,8 +1416,8 @@ async function apiCreateWorktree(req: Request): Promise<Response> {
 }
 
 async function apiDeleteWorktree(id: string): Promise<Response> {
-  const { worktreeId, branch } = await resolveRouteWorktree(id);
-  return withRemovingBranch(branch, async () => {
+  const { worktreeId, branch } = await resolveIdleRouteWorktree(id);
+  return busyGuards.withRemoving(worktreeId, branch, async () => {
     log.info(`[worktree:rm] branch=${branch} worktreeId=${worktreeId}`);
     await lifecycleService.removeWorktree(worktreeId);
     log.debug(`[worktree:rm] done branch=${branch}`);
@@ -1459,8 +1426,7 @@ async function apiDeleteWorktree(id: string): Promise<Response> {
 }
 
 async function apiOpenWorktree(id: string, req: Request): Promise<Response> {
-  const { worktreeId, branch } = await resolveRouteWorktree(id);
-  ensureBranchNotBusy(branch);
+  const { worktreeId, branch } = await resolveIdleRouteWorktree(id);
   const parsed = await parseJsonBody(req, OpenWorktreeRequestSchema);
   if (!parsed.ok) return parsed.response;
   const prompt = parsed.data.prompt?.trim() ? parsed.data.prompt.trim() : undefined;
@@ -1469,7 +1435,7 @@ async function apiOpenWorktree(id: string, req: Request): Promise<Response> {
   // Intentionally NOT disarming here: opening a closed session is "let me peek
   // at the agent's progress", not "I'm taking over". The actual interaction
   // (terminal input, chat send, upload, etc.) is what fires disarm.
-  return withMutatingTab(branch, async () => {
+  return busyGuards.withMutatingTab(worktreeId, branch, async () => {
     const result = await lifecycleService.openWorktree(worktreeId, { prompt, ...(oneshot ? { oneshot } : {}) });
     log.debug(`[worktree:open] done branch=${branch} worktreeId=${result.worktreeId}`);
     return jsonResponse({ ok: true });
@@ -1477,8 +1443,7 @@ async function apiOpenWorktree(id: string, req: Request): Promise<Response> {
 }
 
 async function apiCloseWorktree(id: string): Promise<Response> {
-  const { worktreeId, branch } = await resolveRouteWorktree(id);
-  ensureBranchNotBusy(branch);
+  const { worktreeId, branch } = await resolveIdleRouteWorktree(id);
   log.info(`[worktree:close] branch=${branch}`);
   await disarmOneshotIfArmed(worktreeId, "close-worktree");
   await lifecycleService.closeWorktree(worktreeId);
@@ -1487,8 +1452,7 @@ async function apiCloseWorktree(id: string): Promise<Response> {
 }
 
 async function apiSetWorktreeArchived(id: string, req: Request): Promise<Response> {
-  const { worktreeId, branch } = await resolveRouteWorktree(id);
-  ensureBranchNotBusy(branch);
+  const { worktreeId, branch } = await resolveIdleRouteWorktree(id);
   const parsed = await parseJsonBody(req, SetWorktreeArchivedRequestSchema);
   if (!parsed.ok) return parsed.response;
   const body = parsed.data;
@@ -1501,8 +1465,8 @@ async function apiSetWorktreeArchived(id: string, req: Request): Promise<Respons
 }
 
 async function apiCreateWorktreeTab(id: string): Promise<Response> {
-  const { worktreeId, branch } = await resolveRouteWorktree(id);
-  return withMutatingTab(branch, async () => {
+  const { worktreeId, branch } = await resolveIdleRouteWorktree(id);
+  return busyGuards.withMutatingTab(worktreeId, branch, async () => {
     log.info(`[worktree:tab:create] branch=${branch}`);
     const result = await lifecycleService.createWorktreeTab(worktreeId);
     return jsonResponse({ tab: result.tab }, 201);
@@ -1510,8 +1474,8 @@ async function apiCreateWorktreeTab(id: string): Promise<Response> {
 }
 
 async function apiSelectWorktreeTab(id: string, tabId: string): Promise<Response> {
-  const { worktreeId, branch } = await resolveRouteWorktree(id);
-  return withMutatingTab(branch, async () => {
+  const { worktreeId, branch } = await resolveIdleRouteWorktree(id);
+  return busyGuards.withMutatingTab(worktreeId, branch, async () => {
     log.info(`[worktree:tab:select] branch=${branch} tab=${tabId}`);
     await lifecycleService.selectWorktreeTab(worktreeId, tabId);
     return jsonResponse({ ok: true });
@@ -1519,8 +1483,8 @@ async function apiSelectWorktreeTab(id: string, tabId: string): Promise<Response
 }
 
 async function apiDeleteWorktreeTab(id: string, tabId: string): Promise<Response> {
-  const { worktreeId, branch } = await resolveRouteWorktree(id);
-  return withMutatingTab(branch, async () => {
+  const { worktreeId, branch } = await resolveIdleRouteWorktree(id);
+  return busyGuards.withMutatingTab(worktreeId, branch, async () => {
     log.info(`[worktree:tab:delete] branch=${branch} tab=${tabId}`);
     await lifecycleService.deleteWorktreeTab(worktreeId, tabId);
     return jsonResponse({ ok: true });
@@ -1528,8 +1492,7 @@ async function apiDeleteWorktreeTab(id: string, tabId: string): Promise<Response
 }
 
 async function apiSetWorktreeLabel(id: string, req: Request): Promise<Response> {
-  const { worktreeId, branch } = await resolveRouteWorktree(id);
-  ensureBranchNotBusy(branch);
+  const { worktreeId, branch } = await resolveIdleRouteWorktree(id);
   const parsed = await parseJsonBody(req, SetWorktreeLabelRequestSchema);
   if (!parsed.ok) return parsed.response;
   const body = parsed.data;
@@ -1541,8 +1504,7 @@ async function apiSetWorktreeLabel(id: string, req: Request): Promise<Response> 
 }
 
 async function apiSetWorktreeProfile(id: string, req: Request): Promise<Response> {
-  const { worktreeId, branch } = await resolveRouteWorktree(id);
-  ensureBranchNotBusy(branch);
+  const { worktreeId, branch } = await resolveIdleRouteWorktree(id);
   const parsed = await parseJsonBody(req, SetWorktreeProfileRequestSchema);
   if (!parsed.ok) return parsed.response;
   const body = parsed.data;
@@ -1554,8 +1516,7 @@ async function apiSetWorktreeProfile(id: string, req: Request): Promise<Response
 }
 
 async function apiSendPrompt(id: string, req: Request): Promise<Response> {
-  const { worktreeId, branch } = await resolveRouteWorktree(id);
-  ensureBranchNotBusy(branch);
+  const { worktreeId, branch } = await resolveIdleRouteWorktree(id);
   const parsed = await parseJsonBody(req, SendWorktreePromptRequestSchema);
   if (!parsed.ok) return parsed.response;
   const body = parsed.data;
@@ -1578,8 +1539,7 @@ async function apiSendPrompt(id: string, req: Request): Promise<Response> {
 }
 
 async function apiMergeWorktree(id: string): Promise<Response> {
-  const { worktreeId, branch } = await resolveRouteWorktree(id);
-  ensureBranchNotBusy(branch);
+  const { worktreeId, branch } = await resolveIdleRouteWorktree(id);
   log.info(`[worktree:merge] branch=${branch}`);
   await disarmOneshotIfArmed(worktreeId, "merge-worktree");
   await lifecycleService.mergeWorktree(worktreeId);
@@ -1724,8 +1684,8 @@ async function apiPostWorktreeToLinear(id: string, req: Request): Promise<Respon
 }
 
 async function apiSyncWorktreePrs(id: string): Promise<Response> {
-  await syncPrStatus(getWorktreeGitDirs, config.integrations.github.linkedRepos, PROJECT_DIR, prSyncState);
   const { worktreeId } = await resolveRouteWorktree(id);
+  await syncPrStatus(getWorktreeGitDirs, config.integrations.github.linkedRepos, PROJECT_DIR, prSyncState);
   const snapshot = await readProjectSnapshot();
   const worktree = findSnapshotWorktree(snapshot, worktreeId);
   if (!worktree) return errorResponse(`Worktree not found: ${worktreeId}`, 404);

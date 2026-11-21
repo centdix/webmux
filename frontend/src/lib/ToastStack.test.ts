@@ -29,6 +29,7 @@ function createNotification(
   return {
     id: 1,
     project: "webmux",
+    worktreeId: "wt-toast-sizing",
     branch: "feature/toast-sizing",
     type: "runtime_error",
     message: "Notification text",

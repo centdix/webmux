@@ -341,6 +341,7 @@ export const AppNotificationSchema = z.object({
   id: z.number(),
   /** Prefix of the project that emitted it; ids are only unique per project. */
   project: z.string(),
+  worktreeId: z.string(),
   branch: z.string(),
   type: z.enum(["agent_stopped", "pr_opened", "runtime_error", "worktree_auto_removed"]),
   message: z.string(),
@@ -595,10 +596,6 @@ export const AppConfigSchema = z.object({
 
 export const CiLogsResponseSchema = z.object({
   logs: z.string(),
-});
-
-export const WorktreeNameParamsSchema = z.object({
-  name: z.string(),
 });
 
 export const WorktreeTabParamsSchema = z.object({
