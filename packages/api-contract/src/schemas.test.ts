@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { AllProjectWorktreesResponseSchema, ProjectSnapshotSchema, ProjectWorktreeSnapshotSchema } from "./schemas";
 
 const worktree = {
-  id: "unmanaged:/repo/__worktrees/feature-search",
+  id: "u-0123456789abcdef",
   branch: "feature/search",
   label: null,
   path: "/repo/__worktrees/feature-search",
@@ -28,7 +28,7 @@ const worktree = {
 
 describe("ProjectWorktreeSnapshotSchema", () => {
   it("carries the runtime worktree id", () => {
-    expect(ProjectWorktreeSnapshotSchema.parse(worktree).id).toBe("unmanaged:/repo/__worktrees/feature-search");
+    expect(ProjectWorktreeSnapshotSchema.parse(worktree).id).toBe("u-0123456789abcdef");
   });
 
   it("requires the id", () => {

@@ -14,7 +14,7 @@ import {
 } from "../adapters/tmux";
 import { writeWorktreeMeta, writeWorktreePrs } from "../adapters/fs";
 import { ProjectRuntime } from "../services/project-runtime";
-import { ReconciliationService } from "../services/reconciliation-service";
+import { makeUnmanagedWorktreeId, ReconciliationService } from "../services/reconciliation-service";
 
 interface Deferred {
   promise: Promise<void>;
@@ -677,7 +677,9 @@ describe("ReconciliationService", () => {
 
     const state = runtime.getWorktreeByBranch("feature/unmanaged");
     expect(state).not.toBeNull();
-    expect(state?.worktreeId.startsWith("unmanaged:")).toBe(true);
+    expect(state?.worktreeId).toMatch(/^u-[0-9a-f]{16}$/);
+    expect(state?.worktreeId).toBe(makeUnmanagedWorktreeId(`${unmanagedPath}/`));
+    expect(state?.worktreeId).not.toBe(makeUnmanagedWorktreeId("/repo/project/__worktrees/other"));
     expect(state?.profile).toBeNull();
     expect(state?.agentName).toBeNull();
     expect(state?.services).toEqual([]);
