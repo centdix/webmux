@@ -21,3 +21,10 @@ Out of scope for the 4-PR stack in `sandbox-rework-plan.md`. Each item says wher
 - **Stale agents in the tools volume:** the install is skipped once the binary is on the PATH. Self-updates now land in the volume (`NPM_CONFIG_PREFIX` is exported at runtime), but run without the lock. A forced refresh is `docker volume rm webmux-sandbox-tools`. Because tools come first on the PATH, a volume copy wins over a newer binary in the image.
 - **Custom installs with no binary** take the global tools lock on every launch.
 - **Forked tabs in docker worktrees:** `createWorktreeTab` builds the host command (no install step, no tools PATH, no `docker exec`), and forked-tab restore skips docker. Tabs in docker are out of scope per the plan.
+
+## Default image and e2e (PR 4)
+
+- **Old default images pile up:** each Dockerfile change creates a new `webmux-sandbox:<hash>` tag, and old tags are never pruned.
+- **Root-owned parents of mount targets outside `$HOME`:** docker creates them as root. A worktree under `/tmp/claude-<uid>/…` makes Claude Code refuse its temp dir (`/tmp/claude-<uid>` owned by uid 0). This was found in e2e because the test project lived in the session scratchpad. Real worktree roots are rarely there, but the entrypoint could hand over `/tmp/claude-$uid` when docker created it.
+- **`webmux close` keeps the container** and `open` reuses it (existing behavior). Credentials and mounts are therefore only refreshed by `remove` or a profile change.
+- **Dashboard-click resume:** resume was verified through the same lifecycle path via `webmux close` / `webmux open`, not by clicking in the dashboard.

@@ -1769,6 +1769,23 @@ describe("LifecycleService", () => {
     expect(state?.session.exists).toBe(true);
   });
 
+  it("launches a docker profile that sets no image (the default image is used)", async () => {
+    const repoRoot = await initRepo();
+    const tmux = new FakeTmuxGateway();
+    const docker = new FakeDockerGateway();
+    const { image: _image, ...sandboxWithoutImage } = TEST_CONFIG.profiles.sandbox!;
+    const lifecycle = makeLifecycleService(repoRoot, tmux, new ProjectRuntime(), docker, new FakeHookRunner(), {
+      ...TEST_CONFIG,
+      profiles: { ...TEST_CONFIG.profiles, sandbox: sandboxWithoutImage },
+    });
+
+    await lifecycle.createWorktree({ branch: "feature-sandbox-default-image", profile: "sandbox" });
+
+    expect(docker.launched).toHaveLength(1);
+    expect(docker.launched[0]?.sandboxConfig.image).toBeUndefined();
+    expect(tmux.createdWindows[0]?.command).toContain("docker exec -it");
+  });
+
   it("starts one-pane docker agent sessions without nesting docker exec inside the container shell", async () => {
     const repoRoot = await initRepo();
     const runtime = new ProjectRuntime();

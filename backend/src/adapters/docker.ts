@@ -11,6 +11,7 @@ import { type DockerProfileConfig } from "./config";
 import { webmuxRuntimeStateDir } from "./webmux-paths";
 import { log } from "../lib/log";
 import { AGENT_ADAPTERS } from "../agents";
+import { DEFAULT_SANDBOX_DOCKERFILE, defaultSandboxImageTag } from "./sandbox-image";
 import type { AgentSandboxSpec } from "../agents/types";
 
 const DOCKER_RUN_TIMEOUT_MS = 60_000;
@@ -415,15 +416,10 @@ export async function launchContainer(opts: LaunchContainerOpts): Promise<string
     await Bun.spawn(["docker", "rm", "-f", existing], { stdout: "ignore", stderr: "ignore" }).exited;
   }
 
-  if (!opts.sandboxConfig.image) {
-    throw new Error("sandboxConfig.image is required but was empty");
-  }
-
   const name = containerName(branch);
   const home = Bun.env.HOME ?? "/root";
 
-  const image = opts.sandboxConfig.image;
-  await ensureImage(image);
+  const image = await ensureSandboxImage(opts.sandboxConfig.image);
   const [webmuxCli, entrypointPath, credentials] = await Promise.all([
     prepareWebmuxCliMounts(),
     writeSandboxEntrypoint(),
@@ -452,7 +448,7 @@ export async function launchContainer(opts: LaunchContainerOpts): Promise<string
     log.warn("[docker] sandbox containers use host networking; on macOS enable it in Docker Desktop >= 4.34 (Settings > Resources > Network > Enable host networking) or use OrbStack");
   }
   log.info(`[docker] launching container: ${name}`);
-  const run = await runCommand(args, DOCKER_RUN_TIMEOUT_MS);
+  const run = await runCommand(args, { timeoutMs: DOCKER_RUN_TIMEOUT_MS });
   if (run.exitCode !== 0) {
     // Clean up any stopped container docker may have left behind.
     await Bun.spawn(["docker", "rm", "-f", name], { stdout: "ignore", stderr: "ignore" }).exited;
@@ -521,7 +517,7 @@ const GH_AUTH_TOKEN_TIMEOUT_MS = 5_000;
 /** Read a command's trimmed stdout, or null when it fails, times out or prints nothing. */
 async function readCommandOutput(argv: string[], cwd: string): Promise<string | null> {
   try {
-    const result = await runCommand(argv, GH_AUTH_TOKEN_TIMEOUT_MS, undefined, cwd);
+    const result = await runCommand(argv, { timeoutMs: GH_AUTH_TOKEN_TIMEOUT_MS, cwd });
     const value = result.stdout.trim();
     if (result.exitCode !== 0) log.debug(`[docker] ${argv.join(" ")} failed (${result.exitCode}): ${result.stderr.trim()}`);
     return result.exitCode === 0 && value ? value : null;
@@ -583,26 +579,33 @@ interface CommandResult {
   stderr: string;
 }
 
+interface RunCommandOptions {
+  timeoutMs: number;
+  cwd?: string;
+  /** Written to the command's stdin. */
+  stdin?: string;
+  /** Called with each output line (stdout and stderr) as it arrives. */
+  onOutputLine?: (line: string) => void;
+}
+
 /** Run a command and kill it after `timeoutMs`, so a hung daemon or a
  *  slow pull cannot block the server indefinitely. */
-async function runCommand(
-  argv: string[],
-  timeoutMs: number,
-  onStdoutLine?: (line: string) => void,
-  cwd?: string,
-): Promise<CommandResult> {
-  const proc = Bun.spawn(argv, { cwd, stdout: "pipe", stderr: "pipe" });
+async function runCommand(argv: string[], opts: RunCommandOptions): Promise<CommandResult> {
+  const proc = Bun.spawn(argv, {
+    cwd: opts.cwd,
+    stdin: opts.stdin === undefined ? "ignore" : new TextEncoder().encode(opts.stdin),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
     proc.kill();
     setTimeout(() => proc.kill("SIGKILL"), DOCKER_KILL_GRACE_MS).unref();
-  }, timeoutMs);
-  const [exitCode, stdout, stderr] = await Promise.all([
-    proc.exited,
-    onStdoutLine ? readLines(proc.stdout, onStdoutLine) : new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
+  }, opts.timeoutMs);
+  const read = (stream: ReadableStream<Uint8Array>): Promise<string> =>
+    opts.onOutputLine ? readLines(stream, opts.onOutputLine) : new Response(stream).text();
+  const [exitCode, stdout, stderr] = await Promise.all([proc.exited, read(proc.stdout), read(proc.stderr)]);
   clearTimeout(timer);
   return { exitCode: timedOut ? "timeout" : exitCode, stdout, stderr };
 }
@@ -623,25 +626,54 @@ async function readLines(stream: ReadableStream<Uint8Array>, onLine: (line: stri
   return all;
 }
 
-/** Make sure `image` is available locally, pulling it when missing. Kept apart
- *  from `docker run` so a slow first pull gets its own, longer timeout. */
-async function ensureImage(image: string): Promise<void> {
-  const inspect = await runCommand(["docker", "image", "inspect", "--format", "{{.Id}}", image], DOCKER_RUN_TIMEOUT_MS);
-  if (inspect.exitCode === 0) return;
+async function imageExists(image: string): Promise<boolean> {
+  const inspect = await runCommand(["docker", "image", "inspect", "--format", "{{.Id}}", image], { timeoutMs: DOCKER_RUN_TIMEOUT_MS });
+  return inspect.exitCode === 0;
+}
 
-  log.info(`[docker] pulling image ${image}`);
-  const pull = await runCommand(
-    ["docker", "pull", image],
-    DOCKER_IMAGE_PREPARE_TIMEOUT_MS,
-    (line) => log.info(`[docker] pull ${image}: ${line}`),
-  );
-  if (pull.exitCode === "timeout") {
-    throw new Error(`docker pull ${image} timed out after ${DOCKER_IMAGE_PREPARE_TIMEOUT_MS / 60_000} min`);
+/** Run an image preparation step (pull or build) with the long timeout and
+ *  its output streamed to the log. */
+async function prepareImage(label: string, argv: string[], stdin?: string): Promise<void> {
+  log.info(`[docker] ${label}`);
+  const result = await runCommand(argv, {
+    timeoutMs: DOCKER_IMAGE_PREPARE_TIMEOUT_MS,
+    stdin,
+    onOutputLine: (line) => log.info(`[docker] ${label}: ${line}`),
+  });
+  if (result.exitCode === "timeout") {
+    throw new Error(`${label} timed out after ${DOCKER_IMAGE_PREPARE_TIMEOUT_MS / 60_000} min`);
   }
-  if (pull.exitCode !== 0) {
-    throw new Error(`docker pull ${image} failed (exit ${pull.exitCode}): ${pull.stderr}`);
+  if (result.exitCode !== 0) {
+    throw new Error(`${label} failed (exit ${result.exitCode}): ${result.stderr.trim().split("\n").slice(-20).join("\n")}`);
   }
-  log.info(`[docker] pulled image ${image}`);
+  log.info(`[docker] ${label}: done`);
+}
+
+/** Resolve the image to run, making sure it exists locally: a configured image
+ *  is pulled when missing, and without one the default image is built from
+ *  the embedded Dockerfile. Kept apart from `docker run` so a slow first pull
+ *  or build gets its own, longer timeout. */
+async function ensureSandboxImage(configured: string | undefined): Promise<string> {
+  const image = configured ?? defaultSandboxImageTag();
+  // Concurrent first launches share one pull/build instead of racing.
+  let pending = preparingImages.get(image);
+  if (!pending) {
+    pending = prepareSandboxImage(image, configured).finally(() => preparingImages.delete(image));
+    preparingImages.set(image, pending);
+  }
+  return pending;
+}
+
+const preparingImages = new Map<string, Promise<string>>();
+
+async function prepareSandboxImage(image: string, configured: string | undefined): Promise<string> {
+  if (await imageExists(image)) return image;
+  if (configured) {
+    await prepareImage(`pulling image ${image}`, ["docker", "pull", image]);
+  } else {
+    await prepareImage(`building default image ${image}`, ["docker", "build", "-t", image, "-"], DEFAULT_SANDBOX_DOCKERFILE);
+  }
+  return image;
 }
 
 /** Poll for the entrypoint's ready marker. False on timeout or when the
@@ -651,7 +683,7 @@ async function isSandboxReady(name: string, timeoutMs: number): Promise<boolean>
   while (Date.now() < deadline) {
     const probe = await runCommand(
       ["docker", "exec", name, "test", "-f", CONTAINER_READY_MARKER],
-      Math.max(1000, deadline - Date.now()),
+      { timeoutMs: Math.max(1000, deadline - Date.now()) },
     );
     if (probe.exitCode === 0) return true;
     if (probe.stderr.includes("is not running")) return false;
@@ -664,7 +696,7 @@ async function isSandboxReady(name: string, timeoutMs: number): Promise<boolean>
  *  `docker exec -u` of a pane finds its home and sudoers in place. */
 async function waitForSandboxReady(name: string): Promise<void> {
   if (await isSandboxReady(name, SANDBOX_READY_TIMEOUT_MS)) return;
-  const logs = await runCommand(["docker", "logs", "--tail", "50", name], DOCKER_RUN_TIMEOUT_MS);
+  const logs = await runCommand(["docker", "logs", "--tail", "50", name], { timeoutMs: DOCKER_RUN_TIMEOUT_MS });
   throw new Error(`sandbox container ${name} did not become ready: ${(logs.stdout + logs.stderr).trim()}`);
 }
 
@@ -684,8 +716,9 @@ async function writeSandboxEntrypoint(): Promise<string> {
 }
 
 /** Resolve the host paths for the in-container `webmux` CLI and write its
- *  wrapper script. `WEBMUX_CLI_ENTRY` is set by `webmux serve` to its own JS
- *  bundle; it is absent when the backend runs from source (dev mode). */
+ *  wrapper script. `WEBMUX_CLI_ENTRY` is set by the bundled CLI process (and
+ *  inherited by the `serve` backend) to its own JS bundle; it is absent when
+ *  running from source (dev mode). */
 async function prepareWebmuxCliMounts(): Promise<WebmuxCliMounts | null> {
   const entryPath = Bun.env.WEBMUX_CLI_ENTRY;
   if (!entryPath || !(await pathExists(entryPath))) {

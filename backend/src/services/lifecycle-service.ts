@@ -16,7 +16,7 @@ import {
   writeRuntimeEnv,
   writeWorktreeMeta,
 } from "../adapters/fs";
-import { expandTemplate, getDefaultProfileName, isDockerProfile, type DockerProfileConfig } from "../adapters/config";
+import { expandTemplate, getDefaultProfileName, isDockerProfile } from "../adapters/config";
 import { hostSandboxUser, type DockerGateway } from "../adapters/docker";
 import { buildProjectSessionName, buildWorktreeParkingWindowName, buildWorktreeWindowName, type TmuxGateway } from "../adapters/tmux";
 import { captureNewSessionId, type SessionDiscoveryGateway } from "../adapters/session-discovery";
@@ -1122,13 +1122,12 @@ export class LifecycleService {
     source?: WorktreeSource;
     resumeConversationId?: string;
   }): Promise<void> {
-    if (input.profile.runtime === "docker") {
-      const dockerProfile = this.requireDockerProfile(input.profile);
+    if (isDockerProfile(input.profile)) {
       const containerName = await this.deps.docker.launchContainer({
         branch: input.branch,
         wtDir: input.worktreePath,
         mainRepoDir: this.deps.projectRoot,
-        sandboxConfig: dockerProfile,
+        sandboxConfig: input.profile,
         runtimeEnv: input.initialized.runtimeEnv,
       });
       ensureSessionLayout(this.deps.tmux, this.buildSessionLayout({
@@ -1245,13 +1244,6 @@ export class LifecycleService {
         },
       },
     );
-  }
-
-  private requireDockerProfile(profile: ProfileConfig): DockerProfileConfig {
-    if (!isDockerProfile(profile)) {
-      throw new LifecycleError("Docker profile is missing an image", 422);
-    }
-    return profile;
   }
 
   private async cleanupFailedCreate(

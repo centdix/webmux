@@ -87,10 +87,11 @@ profiles:
     runtime: docker
     yolo: true
 
-    # Required when `runtime: docker`.
-    # Custom images should expose `claude` or `codex` on the container PATH
-    # via the image itself, e.g. `ENV PATH=/your/tool/bin:$PATH`.
-    image: example-sandbox-image
+    # Optional. Without it, webmux builds and uses its default image
+    # (debian slim + git, gh, node 22, sudo). A custom image only needs `sh`,
+    # awk/find/stat (busybox is fine), `useradd` (or busybox `adduser`), git,
+    # and node/npm: agent CLIs and bun are installed on demand into a shared volume.
+    # image: example-sandbox-image
 
     envPassthrough:
       - AWS_ACCESS_KEY_ID
@@ -104,10 +105,10 @@ profiles:
     # Optional Docker mounts.
     mounts:
       # Host path to mount into the container.
-      - hostPath: ~/.codex
+      - hostPath: ~/datasets
 
         # Optional container path. Defaults to `hostPath` if omitted.
-        guestPath: /root/.codex
+        guestPath: /home/webmux/datasets
 
         # Optional write access. Omit or set false for read-only.
         writable: true

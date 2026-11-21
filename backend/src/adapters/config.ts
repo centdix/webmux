@@ -20,7 +20,7 @@ import type {
 } from "../domain/config";
 
 export type { LinkedRepoConfig, MountSpec, PaneTemplate, ProfileConfig, ProjectConfig };
-export type DockerProfileConfig = ProfileConfig & { runtime: "docker"; image: string };
+export type DockerProfileConfig = ProfileConfig & { runtime: "docker" };
 
 interface LoadConfigOptions {
   resolvedRoot?: boolean;
@@ -287,7 +287,7 @@ function parseLinkedRepos(raw: unknown): LinkedRepoConfig[] {
 }
 
 export function isDockerProfile(profile: ProfileConfig | undefined): profile is DockerProfileConfig {
-  return !!profile && profile.runtime === "docker" && typeof profile.image === "string" && profile.image.length > 0;
+  return !!profile && profile.runtime === "docker";
 }
 
 export function getDefaultProfileName(config: ProjectConfig): string {

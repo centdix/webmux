@@ -35,7 +35,23 @@ Track dev server ports across worktrees. Servers started with `PORT=$(webmux por
 ### Docker Sandbox Mode
 
 
-Run agents in isolated Docker containers for untrusted or experimental work. webmux manages the container lifecycle and volume mounts automatically.
+Run agents in Docker containers, so an agent's mistakes stay away from your machine. A profile needs only `runtime: docker`:
+
+```yaml
+profiles:
+  sandbox:
+    runtime: docker
+```
+
+webmux does the rest:
+
+- **Image:** without an `image`, webmux builds a slim default image (debian, git, gh, Node 22, sudo) the first time it is needed and tags it `webmux-sandbox:<hash>`. That first worktree waits a minute or two for the build, and the build output goes to the server log.
+- **Agents:** the worktree's agent (claude, codex, opencode, pi, or a custom agent with `sandboxInstall`) is installed on first launch into the `webmux-sandbox-tools` volume, which every sandbox shares. Your host config for each built-in agent (`~/.claude`, `~/.codex`, …) is mounted when it exists, along with auth env vars such as `ANTHROPIC_API_KEY`. To refresh the installed agents, run `docker volume rm webmux-sandbox-tools`.
+- **User:** the agent runs as a `webmux` user with your UID/GID and passwordless `sudo`. Files it writes in the worktree belong to you, and it can install anything.
+- **Git and GitHub:** webmux forwards your GitHub token (`GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth token`) and your git identity. `git push`, cloning private repos and `gh pr create` work, and SSH GitHub remotes are routed through the token. Your SSH agent is forwarded for other remotes. `~/.ssh` and `~/.gitconfig` are not mounted.
+- **Host protection:** the sandbox protects your machine from accidents; it is not meant to contain a hostile agent. The repo's `.git/hooks`, `.git/config` and the worktree's git link files are read-only inside the container, so nothing written in the sandbox runs on the host's next git command. Because `.git/config` is read-only, `git push -u` can't record an upstream. `push.autoSetupRemote` is enabled, so a plain `git push` still works.
+
+A custom `image` only needs `sh`, `awk`/`find`/`stat` (busybox is fine), `useradd` (or busybox `adduser`), git, and Node/npm. Node/npm is used to install agents and the `bun` that runs the in-container `webmux` CLI.
 
 Containers use host networking (`--network host`): a dev server in the container listens directly on the host, and the `webmux` CLI is mounted into the container so agents can run `webmux port <label>` there too. On macOS this needs Docker Desktop 4.34 or later with *Settings → Resources → Network → Enable host networking* turned on (signed in; not compatible with Enhanced Container Isolation), or OrbStack, which supports it natively. webmux can't detect the setting, so it logs a reminder when it launches a container on macOS.
 
@@ -154,24 +170,17 @@ profiles:
   sandbox:
     runtime: docker
     yolo: true
-    image: my-sandbox
+    # image: my-sandbox   # optional
     envPassthrough:
       - AWS_ACCESS_KEY_ID
       - AWS_SECRET_ACCESS_KEY
     mounts:
-      - hostPath: ~/.codex
-        guestPath: /root/.codex
-        writable: true
-      - hostPath: ~/.local/share/opencode
-        guestPath: /root/.local/share/opencode
-        writable: true
-      - hostPath: ~/.pi
-        guestPath: /root/.pi
-        writable: true
+      - hostPath: ~/datasets
+        guestPath: /home/webmux/datasets
     systemPrompt: >
       You are running inside a sandboxed container.
 
-Custom sandbox images should make `claude`, `codex`, `opencode`, or `pi` available on the container's normal `PATH` (for example with `ENV PATH=/your/tool/bin:$PATH`). webmux does not rely on login-shell dotfiles like `.bashrc` to discover agent binaries inside the container.
+Sandbox agents don't need to be in the image: webmux installs them into the shared tools volume on first launch. An agent already on the image's `PATH` is used as-is.
 
 integrations:
   github:
@@ -218,7 +227,7 @@ For fresh agents using a host profile, webmux automatically includes capture com
 | `profiles.<name>.panes[].workingDir` | string | no | Directory to `cd` into before running a command pane startup command |
 | `profiles.default.systemPrompt` | string | no | Agent system prompt; `${VAR}` placeholders expanded at runtime |
 | `profiles.default.envPassthrough` | string[] | no | Env vars passed to the agent process |
-| `profiles.sandbox.image` | string | yes (if used) | Docker image for containers |
+| `profiles.sandbox.image` | string | no | Docker image for containers (default: webmux's image, built locally) |
 | `profiles.sandbox.systemPrompt` | string | no | Agent system prompt for sandbox |
 | `profiles.sandbox.envPassthrough` | string[] | no | Host env vars forwarded into the container |
 | `profiles.sandbox.mounts[].hostPath` | string | yes | Host path to mount (`~` expands to `$HOME`) |
