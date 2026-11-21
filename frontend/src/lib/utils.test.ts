@@ -16,6 +16,7 @@ import {
   loadUseWebChatUi,
   makeIdeUrl,
   projectRepos,
+  randomUuid,
   resolveSelectedId,
   prBadgeClass,
   prStateTextClass,
@@ -238,5 +239,13 @@ describe("PR draft styling", () => {
   it("keeps merged and closed colors regardless of the draft flag", () => {
     expect(prBadgeClass(pr({ state: "merged", isDraft: true }))).toBe("bg-merged/20 text-merged");
     expect(prStateTextClass(pr({ state: "closed", isDraft: true }))).toBe("text-danger");
+  });
+});
+
+describe("randomUuid", () => {
+  it("returns distinct v4 UUIDs", () => {
+    const ids = new Set(Array.from({ length: 20 }, () => randomUuid()));
+    expect(ids.size).toBe(20);
+    for (const id of ids) expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
 });

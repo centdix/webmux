@@ -1284,6 +1284,10 @@ async function apiCreateWorktree(req: Request): Promise<Response> {
     return errorResponse("Invalid base branch name", 400);
   }
 
+  if (body.worktreeId && (projectRuntime.getWorktree(body.worktreeId) || worktreeCreationTracker.has(body.worktreeId))) {
+    return errorResponse(`Worktree already exists: ${body.worktreeId}`, 409);
+  }
+
   if (createLinearTicket && mode === "existing") {
     return errorResponse("Linear ticket creation is only supported for new branches", 400);
   }
@@ -1405,6 +1409,7 @@ async function apiCreateWorktree(req: Request): Promise<Response> {
     envOverrides,
     ...(body.source ? { source: body.source } : {}),
     ...(oneshot ? { oneshot } : {}),
+    ...(body.worktreeId ? { worktreeId: body.worktreeId } : {}),
   });
   log.debug(`[worktree:add] done branches=${result.branches.join(",")}`);
   return jsonResponse({

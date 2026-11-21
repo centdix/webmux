@@ -567,6 +567,24 @@ describe("LifecycleService", () => {
     ]);
   });
 
+  it("gives the primary worktree the id the caller chose, and generates the others", async () => {
+    const repoRoot = await initRepo();
+    const runtime = new ProjectRuntime();
+    const lifecycle = makeLifecycleService(repoRoot, new FakeTmuxGateway(), runtime);
+    const chosenId = "0c8f7e2a-1b3d-4c5e-9f60-7a8b9c0d1e2f";
+
+    const created = await lifecycle.createWorktrees({
+      branch: "feature/chosen",
+      agents: ["claude", "codex"],
+      worktreeId: chosenId,
+    });
+
+    expect(created.primaryWorktreeId).toBe(chosenId);
+    expect(runtime.getWorktreeByBranch("claude-feature/chosen")?.worktreeId).toBe(chosenId);
+    expect(created.worktreeIds[1]).not.toBe(chosenId);
+    expect(runtime.getWorktreeByBranch("codex-feature/chosen")?.worktreeId).toBe(created.worktreeIds[1]);
+  });
+
   it("rolls back the first paired worktree when the second branch cannot be created", async () => {
     const repoRoot = await initRepo();
     const runtime = new ProjectRuntime();

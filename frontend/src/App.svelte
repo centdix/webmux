@@ -41,6 +41,7 @@
     worktreeCreationPhaseLabel,
     loadSavedTheme,
     resolveSelectedId,
+    randomUuid,
     applyTheme,
     loadSavedSidebarWidth,
     saveSidebarWidth,
@@ -180,8 +181,8 @@
   let currentTheme = $state<ThemeKey>(loadSavedTheme());
   let useWebChatUi = $state(loadUseWebChatUi());
   let terminalTheme = $derived(getTheme(currentTheme).terminal);
-  /** Auto-select target of a create in flight: its id once the server answered, else the requested branch. */
-  let pendingCreate = $state<{ project: string; worktreeId: string | null; branchHint: string | null } | null>(null);
+  /** Auto-select target of a create in flight: the id this client chose for its primary worktree. */
+  let pendingCreate = $state<WorktreeRef | null>(null);
   let availableBranches = $state<AvailableBranch[]>([]);
   let availableBranchesLoading = $state(false);
   let availableBranchesError = $state<string | null>(null);
@@ -422,18 +423,8 @@
 
   $effect(() => {
     if (pendingCreateCount === 0 || latestAutoSelectCreateId === -1 || !pendingCreate) return;
-    const { project: createProject, worktreeId, branchHint } = pendingCreate;
-    const candidates = store.worktreesOf(createProject);
-    const creating = candidates.filter((w) => w.creating);
-    const target = worktreeId
-      ? candidates.find((w) => w.id === worktreeId)
-      : branchHint
-        ? candidates.find((w) => w.branch === branchHint)
-        : creating.length === 1
-          ? creating[0]
-          : undefined;
-    if (!target) return;
-    selectWorktree(target);
+    const target = store.find(pendingCreate);
+    if (target) selectWorktree(target);
   });
 
   $effect(() => {
@@ -586,19 +577,18 @@
       latestAutoSelectCreateId = requestId;
     }
     pendingCreateCount += expectedCreatedCount;
+    const created: WorktreeRef = { project: targetProject, id: randomUuid() };
     if (shouldAutoSelectCreatedWorktree) {
-      pendingCreate = {
-        project: targetProject,
-        worktreeId: null,
-        branchHint: expectedCreatedCount > 1 ? null : request.branch ?? null,
-      };
+      pendingCreate = created;
     }
     // When the dialog was opened from a LinearPanel click, route the create
     // through the `fromLinear` seed so the backend injects the issue header
     // and any prior webmux attachment as context.
-    const finalRequest: CreateWorktreeRequest = assignIssue
-      ? { ...request, fromLinear: { issueId: assignIssue.identifier } }
-      : request;
+    const finalRequest: CreateWorktreeRequest = {
+      ...request,
+      ...(assignIssue ? { fromLinear: { issueId: assignIssue.identifier } } : {}),
+      worktreeId: created.id,
+    };
     showCreateDialog = false;
     assignIssue = null;
     lockedBaseBranch = null;
@@ -606,17 +596,13 @@
     try {
       const createPromise = projectApi(targetProject).createWorktree({ body: finalRequest });
       void store.refresh();
-      const result = await createPromise;
-      if (shouldAutoSelectCreatedWorktree && requestId === latestAutoSelectCreateId) {
-        pendingCreate = { project: targetProject, worktreeId: result.primaryWorktreeId, branchHint: null };
-      }
+      await createPromise;
       invalidateBranchCaches();
       await store.refresh();
       if (request.createLinearTicket) {
         linear.invalidate(targetProject);
         linear.ensure(targetProject);
       }
-      const created: WorktreeRef = { project: targetProject, id: result.primaryWorktreeId };
       if (store.find(created) && shouldAutoSelectCreatedWorktree && requestId === latestAutoSelectCreateId) {
         selectWorktree(created);
       }
