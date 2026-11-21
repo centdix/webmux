@@ -1272,17 +1272,12 @@ describe("App create selection", () => {
     expect(screen.queryByTitle("feature/new")).not.toBeInTheDocument();
   });
 
-  it("selects the created worktree by its id even when its branch already changed", async () => {
+  it("selects the created worktree by the id it chose, while it is created and after", async () => {
     // Paired create: the primary's branch moved on by the time the list refreshes, and the
     // other agent's worktree sorts first, so only the id points at the primary.
-    const primaryWorktree = createWorktree("zzz-renamed", { id: "wt-primary" });
-    const secondWorktree = createWorktree("aaa-second", { id: "wt-second" });
     const createResult = deferred<CreateWorktreeResponse>();
 
-    vi.mocked(fetchWorktrees)
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([])
-      .mockResolvedValue([secondWorktree, primaryWorktree]);
+    vi.mocked(fetchWorktrees).mockResolvedValue([]);
     vi.mocked(api.createWorktree).mockReturnValueOnce(createResult.promise);
 
     renderApp();
@@ -1290,17 +1285,34 @@ describe("App create selection", () => {
     await screen.findByText("Select a worktree");
 
     await openCreateDialogAndSubmit("feature/new");
-    createResult.resolve({
-      primaryBranch: "claude-feature/new",
-      primaryWorktreeId: "wt-primary",
-      branches: ["claude-feature/new", "codex-feature/new"],
-      worktreeIds: ["wt-primary", "wt-second"],
-    });
+    // The client chose the primary's id: it follows that row while the create runs.
+    const primaryId = vi.mocked(api.createWorktree).mock.calls[0]?.[0]?.body?.worktreeId ?? "";
+    expect(primaryId).not.toBe("");
+    vi.mocked(fetchWorktrees).mockResolvedValue([
+      createWorktree("aaa-second", { id: "wt-second", creating: true, creationPhase: "creating_worktree" }),
+      createWorktree("zzz-renamed", { id: primaryId, creating: true, creationPhase: "creating_worktree" }),
+    ]);
+    document.dispatchEvent(new Event("visibilitychange"));
 
     await waitFor(() => {
       expect(window.location.hash).toBe(`#${PROJECT}/zzz-renamed`);
     });
-    expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("wt-primary");
+
+    vi.mocked(fetchWorktrees).mockResolvedValue([
+      createWorktree("aaa-second", { id: "wt-second" }),
+      createWorktree("zzz-renamed", { id: primaryId }),
+    ]);
+    createResult.resolve({
+      primaryBranch: "claude-feature/new",
+      primaryWorktreeId: primaryId,
+      branches: ["claude-feature/new", "codex-feature/new"],
+      worktreeIds: [primaryId, "wt-second"],
+    });
+
+    await waitFor(() => {
+      expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe(primaryId);
+    });
+    expect(window.location.hash).toBe(`#${PROJECT}/zzz-renamed`);
   });
 
   it("selects the new worktree when nothing was selected before creation", async () => {
@@ -2036,6 +2048,7 @@ describe("App create selection", () => {
           createLinearTicket: true,
           linearTeamKey: "ENG",
           linearTitle: "Ship Linear-backed worktree creation",
+          worktreeId: expect.any(String),
         },
       });
     });
@@ -2086,6 +2099,7 @@ describe("App create selection", () => {
           branch: "feature/new",
           profile: "default",
           agents: ["claude", "codex"],
+          worktreeId: expect.any(String),
         },
       });
     });
@@ -2108,6 +2122,7 @@ describe("App create selection", () => {
           baseBranch: "release/base",
           profile: "default",
           agents: ["claude"],
+          worktreeId: expect.any(String),
         },
       });
     });
