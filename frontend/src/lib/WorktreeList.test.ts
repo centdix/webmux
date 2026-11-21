@@ -379,7 +379,10 @@ describe("WorktreeList", () => {
       notified: new Set(["webmux:feature/unread"]),
     });
 
-    const attentions = screen.getAllByRole("button").map((button) => button.querySelector("[data-attention]")?.getAttribute("data-attention"));
+    const attentions = screen
+      .getAllByRole("button")
+      .filter((button) => !button.getAttribute("aria-label")?.startsWith("Actions for"))
+      .map((button) => button.querySelector("[data-attention]")?.getAttribute("data-attention"));
     expect(attentions).toEqual(["waiting", "unread", "closed", "creating"]);
   });
 
