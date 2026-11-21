@@ -88,3 +88,11 @@ describe("CreateWorktreeRequestSchema linearTeamKey", () => {
     if (parsed.success) expect(parsed.data.linearTeamKey).toBeUndefined();
   });
 });
+
+describe("CreateWorktreeRequestSchema worktreeId", () => {
+  it("accepts a UUID and rejects anything else", () => {
+    expect(CreateWorktreeRequestSchema.safeParse({ worktreeId: "0c8f7e2a-1b3d-4c5e-9f60-7a8b9c0d1e2f" }).success).toBe(true);
+    expect(CreateWorktreeRequestSchema.safeParse({ worktreeId: "u-0123456789abcdef" }).success).toBe(false);
+    expect(CreateWorktreeRequestSchema.safeParse({ worktreeId: "../escape" }).success).toBe(false);
+  });
+});

@@ -189,6 +189,8 @@ export interface CreateLifecycleWorktreeInput {
 export interface CreateLifecycleWorktreesInput extends Omit<CreateLifecycleWorktreeInput, "agent"> {
   agents?: AgentId[];
   agent?: AgentId;
+  /** Id of the primary worktree; generated when absent. */
+  worktreeId?: string;
 }
 
 export interface CreateLifecycleWorktreesResult {
@@ -237,7 +239,10 @@ export class LifecycleService {
       throw new LifecycleError("Creating multiple agents is only supported for new worktrees", 400);
     }
 
-    const pendingTargets = agentIds.map((agent) => ({ agent, worktreeId: randomUUID() }));
+    const pendingTargets = agentIds.map((agent, index) => ({
+      agent,
+      worktreeId: index === 0 && input.worktreeId ? input.worktreeId : randomUUID(),
+    }));
     const reported = new Set<string>();
     try {
       const branch = await this.resolveBranch(

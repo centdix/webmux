@@ -163,6 +163,8 @@ export const CreateWorktreeRequestSchema = z.object({
   fromLinear: FromLinearInputSchema.optional(),
   source: WorktreeSourceSchema.optional(),
   oneshot: OneshotConfigSchema.optional(),
+  /** Id for the primary worktree, chosen by the caller so it can follow the worktree while it is created. */
+  worktreeId: z.string().uuid().optional(),
 });
 
 export const OpenWorktreeRequestSchema = z.object({
