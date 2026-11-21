@@ -4,8 +4,9 @@
  * Runs sandbox containers directly for managed docker worktrees.
  */
 
+import { existsSync, statSync } from "node:fs";
 import { chmod, mkdir, rename, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { type DockerProfileConfig } from "./config";
 import { webmuxRuntimeStateDir } from "./webmux-paths";
 import { log } from "../lib/log";
@@ -175,6 +176,51 @@ export class BunDockerGateway implements DockerGateway {
   }
 }
 
+/** Host credentials forwarded into the sandbox, resolved at launch. */
+export interface SandboxCredentials {
+  /** GitHub token: `GH_TOKEN`, then `GITHUB_TOKEN`, then `gh auth token`. */
+  ghToken: string | null;
+  gitIdentity: { name: string; email: string } | null;
+  /** SSH agent socket to mount: the host path on Linux, Docker Desktop's
+   *  forwarded socket on macOS. */
+  sshAuthSock: string | null;
+}
+
+const MACOS_SSH_AUTH_SOCK = "/run/host-services/ssh-auth.sock";
+
+/** Git helper that answers github.com credential requests with `$GH_TOKEN`. */
+const GH_TOKEN_CREDENTIAL_HELPER = `!f() { test "$1" = get && echo username=x-access-token && echo "password=$GH_TOKEN"; }; f`;
+
+/** Git config injected through `GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`, in order. */
+export function buildSandboxGitConfig(
+  wtDir: string,
+  mainRepoDir: string,
+  credentials: SandboxCredentials,
+): Array<[string, string]> {
+  const entries: Array<[string, string]> = [
+    ["safe.directory", wtDir],
+    ["safe.directory", mainRepoDir],
+    // `.git/config` is read-only in the sandbox, so `git push -u` cannot record
+    // an upstream; this makes the next plain `git push` work anyway.
+    ["push.autoSetupRemote", "true"],
+  ];
+  if (credentials.ghToken) {
+    entries.push(
+      // Empty value resets helpers inherited from system config.
+      ["credential.https://github.com.helper", ""],
+      ["credential.https://github.com.helper", GH_TOKEN_CREDENTIAL_HELPER],
+      // Route SSH GitHub remotes through the token.
+      ["url.https://github.com/.insteadOf", "git@github.com:"],
+      ["url.https://github.com/.insteadOf", "ssh://git@github.com/"],
+    );
+  }
+  return entries;
+}
+
+function isReservedEnvKey(key: string, reservedKeys: ReadonlySet<string>): boolean {
+  return reservedKeys.has(key) || /^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/.test(key);
+}
+
 /** Everything `buildDockerRunArgs` needs that the caller resolves with I/O. */
 export interface DockerRunContext {
   /** Pre-generated container name. */
@@ -188,9 +234,12 @@ export interface DockerRunContext {
   entrypointPath: string;
   /** Host environment, read for `envPassthrough`. */
   hostEnv: Record<string, string | undefined>;
-  /** Host paths confirmed to exist; decides which credential mounts to add. */
-  existingPaths: Set<string>;
-  sshAuthSock: string | undefined;
+  credentials: SandboxCredentials;
+  /** Git files mounted read-only over the writable `.git` and worktree, so the
+   *  sandbox cannot make the host's next git command run code (hooks,
+   *  `core.fsmonitor`, a redirected gitfile or commondir). Empty when the repo
+   *  layout is not the standard `<repo>/.git` directory. */
+  protectedGitPaths: string[];
   /** Host paths for the in-container `webmux` CLI, or null when the running
    *  webmux has no JS bundle to mount. */
   webmuxCli: WebmuxCliMounts | null;
@@ -202,7 +251,7 @@ export interface DockerRunContext {
  */
 export function buildDockerRunArgs(opts: LaunchContainerOpts, ctx: DockerRunContext): string[] {
   const { wtDir, mainRepoDir, sandboxConfig, runtimeEnv } = opts;
-  const { home, existingPaths, sshAuthSock, webmuxCli } = ctx;
+  const { home, credentials, webmuxCli } = ctx;
 
   const args: string[] = [
     "docker", "run", "-d",
@@ -221,9 +270,8 @@ export function buildDockerRunArgs(opts: LaunchContainerOpts, ctx: DockerRunCont
 
   // Core env vars — defined first so passthrough cannot override them.
   const reservedKeys = new Set([
-    "HOME", "TERM", "IS_SANDBOX", "SSH_AUTH_SOCK", "WEBMUX_UID", "WEBMUX_GID",
-    "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
-    "GIT_CONFIG_KEY_1", "GIT_CONFIG_VALUE_1",
+    "HOME", "TERM", "IS_SANDBOX", "SSH_AUTH_SOCK", "WEBMUX_UID", "WEBMUX_GID", "GH_TOKEN",
+    "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
   ]);
   args.push("-e", `HOME=${SANDBOX_HOME}`);
   args.push("-e", `WEBMUX_UID=${ctx.user.uid}`);
@@ -231,12 +279,22 @@ export function buildDockerRunArgs(opts: LaunchContainerOpts, ctx: DockerRunCont
   args.push("-e", "TERM=xterm-256color");
   args.push("-e", "IS_SANDBOX=1");
 
-  // Git safe.directory config so git works in mounted worktrees.
-  args.push("-e", "GIT_CONFIG_COUNT=2");
-  args.push("-e", `GIT_CONFIG_KEY_0=safe.directory`);
-  args.push("-e", `GIT_CONFIG_VALUE_0=${wtDir}`);
-  args.push("-e", `GIT_CONFIG_KEY_1=safe.directory`);
-  args.push("-e", `GIT_CONFIG_VALUE_1=${mainRepoDir}`);
+  // Git config without mounting ~/.gitconfig: safe.directory, push defaults,
+  // and the GitHub token credential helper.
+  const gitConfig = buildSandboxGitConfig(wtDir, mainRepoDir, credentials);
+  args.push("-e", `GIT_CONFIG_COUNT=${gitConfig.length}`);
+  gitConfig.forEach(([key, value], i) => {
+    args.push("-e", `GIT_CONFIG_KEY_${i}=${key}`);
+    args.push("-e", `GIT_CONFIG_VALUE_${i}=${value}`);
+  });
+  if (credentials.ghToken) {
+    args.push("-e", `GH_TOKEN=${credentials.ghToken}`);
+  }
+  if (credentials.gitIdentity) {
+    const { name, email } = credentials.gitIdentity;
+    args.push("-e", `GIT_AUTHOR_NAME=${name}`, "-e", `GIT_AUTHOR_EMAIL=${email}`);
+    args.push("-e", `GIT_COMMITTER_NAME=${name}`, "-e", `GIT_COMMITTER_EMAIL=${email}`);
+  }
 
   // Pass through host env vars listed in the docker profile.
   if (sandboxConfig.envPassthrough) {
@@ -245,7 +303,7 @@ export function buildDockerRunArgs(opts: LaunchContainerOpts, ctx: DockerRunCont
         log.warn(`[docker] skipping invalid envPassthrough key: ${JSON.stringify(key)}`);
         continue;
       }
-      if (reservedKeys.has(key)) continue;
+      if (isReservedEnvKey(key, reservedKeys)) continue;
       const val = ctx.hostEnv[key];
       if (val !== undefined) {
         args.push("-e", `${key}=${val}`);
@@ -259,7 +317,7 @@ export function buildDockerRunArgs(opts: LaunchContainerOpts, ctx: DockerRunCont
       log.warn(`[docker] skipping invalid runtime env key: ${JSON.stringify(key)}`);
       continue;
     }
-    if (reservedKeys.has(key)) continue;
+    if (isReservedEnvKey(key, reservedKeys)) continue;
     args.push("-e", `${key}=${val}`);
   }
 
@@ -267,6 +325,9 @@ export function buildDockerRunArgs(opts: LaunchContainerOpts, ctx: DockerRunCont
   args.push("-v", `${wtDir}:${wtDir}`);
   args.push("-v", `${mainRepoDir}/.git:${mainRepoDir}/.git`);
   args.push("-v", `${mainRepoDir}:${mainRepoDir}:ro`);
+  for (const path of ctx.protectedGitPaths) {
+    args.push("-v", `${path}:${path}:ro`);
+  }
 
   // Agent config mounts.
   args.push("-v", `${home}/.claude:${SANDBOX_HOME}/.claude`);
@@ -280,37 +341,13 @@ export function buildDockerRunArgs(opts: LaunchContainerOpts, ctx: DockerRunCont
     args.push("-v", `${webmuxCli.instancesDir}:${SANDBOX_HOME}/.webmux/instances:ro`);
   }
 
-  // Compute which guest paths are already covered by configured mounts so
-  // credential mounts for the same path can be skipped (explicit mounts win).
-  const extraMountGuestPaths = new Set<string>();
-  if (sandboxConfig.mounts) {
-    for (const mount of sandboxConfig.mounts) {
-      const hostPath = mount.hostPath.replace(/^~/, home);
-      if (!hostPath.startsWith("/")) continue;
-      extraMountGuestPaths.add(mount.guestPath ?? hostPath);
-    }
-  }
-
-  // Git/GitHub credential mounts (read-only, only if they exist on host and
-  // are not overridden by a configured mount for the same guest path).
-  const credentialMounts = [
-    { hostPath: `${home}/.gitconfig`, guestPath: `${SANDBOX_HOME}/.gitconfig` },
-    { hostPath: `${home}/.ssh`, guestPath: `${SANDBOX_HOME}/.ssh` },
-    { hostPath: `${home}/.config/gh`, guestPath: `${SANDBOX_HOME}/.config/gh` },
-  ];
-  for (const { hostPath, guestPath } of credentialMounts) {
-    if (extraMountGuestPaths.has(guestPath)) continue;
-    if (existingPaths.has(hostPath)) {
-      args.push("-v", `${hostPath}:${guestPath}:ro`);
-    }
-  }
-
-  // SSH agent forwarding — mount the socket so git+ssh works with
-  // passphrase-protected keys and hardware tokens.  Use --mount instead
-  // of -v because Docker's -v tries to mkdir socket paths and fails.
-  if (sshAuthSock && existingPaths.has(sshAuthSock)) {
-    args.push("--mount", `type=bind,source=${sshAuthSock},target=${sshAuthSock}`);
-    args.push("-e", `SSH_AUTH_SOCK=${sshAuthSock}`);
+  // SSH agent forwarding for non-GitHub remotes. The sandbox user has the
+  // host UID, so it can use the socket. Use --mount instead of -v because
+  // Docker's -v tries to mkdir socket paths and fails.
+  if (credentials.sshAuthSock) {
+    const sock = credentials.sshAuthSock;
+    args.push("--mount", `type=bind,source=${sock},target=${sock}`);
+    args.push("-e", `SSH_AUTH_SOCK=${sock}`);
   }
 
   // Additional mounts from config; require absolute host paths after ~ expansion.
@@ -360,39 +397,14 @@ export async function launchContainer(opts: LaunchContainerOpts): Promise<string
   const name = containerName(branch);
   const home = Bun.env.HOME ?? "/root";
 
-  // Resolve which credential paths exist on the host before building args.
-  // Only forward SSH_AUTH_SOCK if the socket is world-accessible so the
-  // Docker daemon (separate process) can bind-mount it.
-  let sshAuthSock = Bun.env.SSH_AUTH_SOCK;
-  if (sshAuthSock) {
-    try {
-      const st = await stat(sshAuthSock);
-      // eslint-disable-next-line no-bitwise
-      if (!st.isSocket() || (st.mode & 0o007) === 0) {
-        log.debug(`[docker] skipping SSH_AUTH_SOCK (not world-accessible): ${sshAuthSock}`);
-        sshAuthSock = undefined;
-      }
-    } catch {
-      sshAuthSock = undefined;
-    }
-  }
-  const credentialHostPaths = [
-    `${home}/.gitconfig`,
-    `${home}/.ssh`,
-    `${home}/.config/gh`,
-    ...(sshAuthSock ? [sshAuthSock] : []),
-  ];
-  const existingPaths = new Set<string>();
-  await Promise.all(credentialHostPaths.map(async (p) => {
-    if (await pathExists(p)) existingPaths.add(p);
-  }));
-
   const image = opts.sandboxConfig.image;
   await ensureImage(image);
-  const [webmuxCli, entrypointPath] = await Promise.all([
+  const [webmuxCli, entrypointPath, credentials] = await Promise.all([
     prepareWebmuxCliMounts(),
     writeSandboxEntrypoint(),
+    resolveSandboxCredentials(opts.mainRepoDir),
   ]);
+  const protectedGitPaths = await resolveProtectedGitPaths(opts.mainRepoDir, opts.wtDir);
   const args = buildDockerRunArgs(opts, {
     name,
     home,
@@ -400,8 +412,8 @@ export async function launchContainer(opts: LaunchContainerOpts): Promise<string
     image,
     entrypointPath,
     hostEnv: Bun.env,
-    existingPaths,
-    sshAuthSock,
+    credentials,
+    protectedGitPaths,
     webmuxCli,
   });
 
@@ -409,7 +421,7 @@ export async function launchContainer(opts: LaunchContainerOpts): Promise<string
     log.warn("[docker] sandbox containers use host networking; on macOS enable it in Docker Desktop >= 4.34 (Settings > Resources > Network > Enable host networking) or use OrbStack");
   }
   log.info(`[docker] launching container: ${name}`);
-  const run = await runDocker(args, DOCKER_RUN_TIMEOUT_MS);
+  const run = await runCommand(args, DOCKER_RUN_TIMEOUT_MS);
   if (run.exitCode !== 0) {
     // Clean up any stopped container docker may have left behind.
     await Bun.spawn(["docker", "rm", "-f", name], { stdout: "ignore", stderr: "ignore" }).exited;
@@ -431,20 +443,124 @@ export async function launchContainer(opts: LaunchContainerOpts): Promise<string
   return name;
 }
 
-interface DockerCommandResult {
+/** GitHub token by precedence: `GH_TOKEN`, `GITHUB_TOKEN`, then `gh auth token`.
+ *  Empty values count as unset. */
+export function pickGhToken(
+  env: Record<string, string | undefined>,
+  ghAuthToken: string | null,
+): string | null {
+  return env.GH_TOKEN || env.GITHUB_TOKEN || ghAuthToken || null;
+}
+
+/** SSH agent socket to forward. Docker Desktop and OrbStack expose the host
+ *  agent at a fixed path on macOS; elsewhere the host socket is mounted as-is. */
+export function pickSshAuthSock(
+  platform: NodeJS.Platform,
+  env: Record<string, string | undefined>,
+  isSocket: (path: string) => boolean,
+): string | null {
+  const sock = env.SSH_AUTH_SOCK;
+  if (!sock) return null;
+  if (platform === "darwin") return MACOS_SSH_AUTH_SOCK;
+  return isSocket(sock) ? sock : null;
+}
+
+/** Git files that must stay read-only in the sandbox (see
+ *  `DockerRunContext.protectedGitPaths`), given which candidates exist. */
+export function buildProtectedGitPaths(
+  mainRepoDir: string,
+  wtDir: string,
+  worktreeAdminDir: string | null,
+  exists: (path: string) => boolean,
+): string[] {
+  const gitDir = join(mainRepoDir, ".git");
+  const candidates = [
+    join(gitDir, "hooks"),
+    join(gitDir, "config"),
+    join(wtDir, ".git"),
+    ...(worktreeAdminDir
+      ? ["commondir", "gitdir", "config.worktree"].map((file) => join(worktreeAdminDir, file))
+      : []),
+  ];
+  return candidates.filter(exists);
+}
+
+const GH_AUTH_TOKEN_TIMEOUT_MS = 5_000;
+
+/** Read a command's trimmed stdout, or null when it fails, times out or prints nothing. */
+async function readCommandOutput(argv: string[], cwd: string): Promise<string | null> {
+  try {
+    const result = await runCommand(argv, GH_AUTH_TOKEN_TIMEOUT_MS, undefined, cwd);
+    const value = result.stdout.trim();
+    if (result.exitCode !== 0) log.debug(`[docker] ${argv.join(" ")} failed (${result.exitCode}): ${result.stderr.trim()}`);
+    return result.exitCode === 0 && value ? value : null;
+  } catch (error) {
+    log.debug(`[docker] ${argv[0]} unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}
+
+function isSocketPath(path: string): boolean {
+  try {
+    return statSync(path).isSocket();
+  } catch {
+    return false;
+  }
+}
+
+/** Resolve the host's GitHub token, git identity and SSH agent socket. */
+async function resolveSandboxCredentials(repoDir: string): Promise<SandboxCredentials> {
+  const hasEnvToken = pickGhToken(Bun.env, null) !== null;
+  const [ghAuthToken, name, email] = await Promise.all([
+    hasEnvToken ? null : readCommandOutput(["gh", "auth", "token"], repoDir),
+    readCommandOutput(["git", "config", "--get", "user.name"], repoDir),
+    readCommandOutput(["git", "config", "--get", "user.email"], repoDir),
+  ]);
+  const ghToken = pickGhToken(Bun.env, ghAuthToken);
+  if (!ghToken) log.info("[docker] no GitHub token found (GH_TOKEN, GITHUB_TOKEN, `gh auth token`); GitHub auth unavailable in the sandbox");
+  return {
+    ghToken,
+    gitIdentity: name && email ? { name, email } : null,
+    sshAuthSock: pickSshAuthSock(process.platform, Bun.env, isSocketPath),
+  };
+}
+
+/** Resolve the read-only git paths for a standard `<repo>/.git` layout. With a
+ *  gitfile repo (`--separate-git-dir`, submodule) hardening is skipped. */
+async function resolveProtectedGitPaths(mainRepoDir: string, wtDir: string): Promise<string[]> {
+  const gitDir = join(mainRepoDir, ".git");
+  let isDir = false;
+  try {
+    isDir = (await stat(gitDir)).isDirectory();
+  } catch { /* handled below */ }
+  if (!isDir) {
+    log.warn(`[docker] ${gitDir} is not a directory; git hooks/config stay writable in the sandbox`);
+    return [];
+  }
+  // A missing hooks dir would make its read-only bind mount fail.
+  await mkdir(join(gitDir, "hooks"), { recursive: true });
+  const gitfile = await Bun.file(join(wtDir, ".git")).text().catch(() => "");
+  const gitdir = /^gitdir:\s*(.+)$/m.exec(gitfile)?.[1]?.trim();
+  // The gitdir may be relative (`worktree.useRelativePaths`).
+  const adminDir = gitdir ? resolve(wtDir, gitdir) : null;
+  return buildProtectedGitPaths(mainRepoDir, wtDir, adminDir, existsSync);
+}
+
+interface CommandResult {
   exitCode: number | "timeout";
   stdout: string;
   stderr: string;
 }
 
-/** Run a docker command and kill it after `timeoutMs`, so a hung daemon or a
+/** Run a command and kill it after `timeoutMs`, so a hung daemon or a
  *  slow pull cannot block the server indefinitely. */
-async function runDocker(
+async function runCommand(
   argv: string[],
   timeoutMs: number,
   onStdoutLine?: (line: string) => void,
-): Promise<DockerCommandResult> {
-  const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
+  cwd?: string,
+): Promise<CommandResult> {
+  const proc = Bun.spawn(argv, { cwd, stdout: "pipe", stderr: "pipe" });
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
@@ -479,11 +595,11 @@ async function readLines(stream: ReadableStream<Uint8Array>, onLine: (line: stri
 /** Make sure `image` is available locally, pulling it when missing. Kept apart
  *  from `docker run` so a slow first pull gets its own, longer timeout. */
 async function ensureImage(image: string): Promise<void> {
-  const inspect = await runDocker(["docker", "image", "inspect", "--format", "{{.Id}}", image], DOCKER_RUN_TIMEOUT_MS);
+  const inspect = await runCommand(["docker", "image", "inspect", "--format", "{{.Id}}", image], DOCKER_RUN_TIMEOUT_MS);
   if (inspect.exitCode === 0) return;
 
   log.info(`[docker] pulling image ${image}`);
-  const pull = await runDocker(
+  const pull = await runCommand(
     ["docker", "pull", image],
     DOCKER_IMAGE_PREPARE_TIMEOUT_MS,
     (line) => log.info(`[docker] pull ${image}: ${line}`),
@@ -502,7 +618,7 @@ async function ensureImage(image: string): Promise<void> {
 async function isSandboxReady(name: string, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const probe = await runDocker(
+    const probe = await runCommand(
       ["docker", "exec", name, "test", "-f", CONTAINER_READY_MARKER],
       Math.max(1000, deadline - Date.now()),
     );
@@ -517,7 +633,7 @@ async function isSandboxReady(name: string, timeoutMs: number): Promise<boolean>
  *  `docker exec -u` of a pane finds its home and sudoers in place. */
 async function waitForSandboxReady(name: string): Promise<void> {
   if (await isSandboxReady(name, SANDBOX_READY_TIMEOUT_MS)) return;
-  const logs = await runDocker(["docker", "logs", "--tail", "50", name], DOCKER_RUN_TIMEOUT_MS);
+  const logs = await runCommand(["docker", "logs", "--tail", "50", name], DOCKER_RUN_TIMEOUT_MS);
   throw new Error(`sandbox container ${name} did not become ready: ${(logs.stdout + logs.stderr).trim()}`);
 }
 
