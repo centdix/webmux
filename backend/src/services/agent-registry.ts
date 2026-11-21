@@ -135,5 +135,6 @@ export function listAgentDetails(customAgents: CustomAgents): AgentDetails[] {
     capabilities: cloneCapabilities(agent.capabilities),
     startCommand: agent.kind === "custom" ? agent.implementation.config.startCommand : null,
     resumeCommand: agent.kind === "custom" ? agent.implementation.config.resumeCommand ?? null : null,
+    sandboxInstall: agent.kind === "custom" ? agent.implementation.config.sandboxInstall ?? null : null,
   }));
 }

@@ -317,6 +317,11 @@ export const codexAdapter: AgentAdapter = {
   id: "codex",
   label: "Codex",
   binary: "codex",
+  sandbox: {
+    install: "npm i -g @openai/codex",
+    homeMounts: [".codex"],
+    authEnv: ["OPENAI_API_KEY"],
+  },
   capabilities: {
     terminal: true,
     inAppChat: true,

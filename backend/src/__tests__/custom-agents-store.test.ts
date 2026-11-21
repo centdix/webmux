@@ -51,11 +51,21 @@ describe("CustomAgentsStore", () => {
         capabilities: { terminal: true, inAppChat: false, conversationHistory: false, interrupt: false, resume: false },
         startCommand: "gemini",
         resumeCommand: null,
+        sandboxInstall: null,
       },
     });
     expect(writes).toEqual([{ "gemini-cli": { label: "Gemini CLI", startCommand: "gemini" } }]);
     expect(store.list()).toEqual({ "gemini-cli": { label: "Gemini CLI", startCommand: "gemini" } });
     expect(store.details().map((agent) => agent.id)).toEqual(["claude", "codex", "opencode", "pi", "gemini-cli"]);
+  });
+
+  it("persists a trimmed sandboxInstall and exposes it in the details", async () => {
+    const { store, writes } = makeStore();
+
+    const result = await store.create({ label: "Gemini", startCommand: "gemini", sandboxInstall: "  npm i -g @google/gemini-cli " });
+
+    expect(result.ok && result.data.sandboxInstall).toBe("npm i -g @google/gemini-cli");
+    expect(writes).toEqual([{ gemini: { label: "Gemini", startCommand: "gemini", sandboxInstall: "npm i -g @google/gemini-cli" } }]);
   });
 
   it("rejects creating an agent that collides with a built-in or existing id", async () => {

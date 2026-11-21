@@ -54,6 +54,18 @@ export interface InitAgentStreamState {
   lastStatus: string | null;
 }
 
+/** How a docker sandbox provides the agent: installed on demand into the shared
+ *  tools volume, with its host config and auth forwarded. */
+export interface AgentSandboxSpec {
+  /** Shell run in the container when `binary` is not on the PATH. Env provided:
+   *  NPM_CONFIG_PREFIX=/opt/webmux/tools, BUN_INSTALL=/opt/webmux/tools/bun. */
+  install: string;
+  /** Paths relative to $HOME, mounted rw from the host to /home/webmux/<path> when they exist. */
+  homeMounts: readonly string[];
+  /** Host env vars forwarded when set (agent auth). */
+  authEnv: readonly string[];
+}
+
 /** Everything that differs between built-in agents lives behind this interface, one
  *  implementation per file in this directory. Register a new one in `./index.ts`. */
 export interface AgentAdapter {
@@ -61,6 +73,7 @@ export interface AgentAdapter {
   label: string;
   /** Executable name, used to detect whether the agent is installed. */
   binary: string;
+  sandbox: AgentSandboxSpec;
   capabilities: AgentCapabilities;
   /** Conversation backend the dashboard chat runs on, or null when the agent has none. */
   chatProvider: "claude" | "codex" | null;

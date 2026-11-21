@@ -93,6 +93,7 @@ export const AgentDetailsSchema = z.object({
   capabilities: AgentCapabilitiesSchema,
   startCommand: z.string().nullable(),
   resumeCommand: z.string().nullable(),
+  sandboxInstall: z.string().nullable(),
 });
 
 export const AgentListResponseSchema = z.object({
@@ -103,6 +104,7 @@ export const UpsertCustomAgentRequestSchema = z.object({
   label: z.string().trim().min(1),
   startCommand: z.string().trim().min(1),
   resumeCommand: z.string().trim().optional(),
+  sandboxInstall: z.string().trim().optional(),
 });
 
 export const AgentResponseSchema = z.object({

@@ -15,6 +15,7 @@ import {
   type WebmuxCliMounts,
 } from "../adapters/docker";
 import type { DockerProfileConfig } from "../adapters/config";
+import { AGENT_ADAPTERS } from "../agents";
 
 const HOME = "/home/testuser";
 const UID = 1000;
@@ -43,6 +44,7 @@ function makeOpts(overrides: Partial<LaunchContainerOpts> = {}): LaunchContainer
   };
 }
 
+const AGENT_SPECS = Object.values(AGENT_ADAPTERS).map((adapter) => adapter.sandbox);
 const NO_CREDENTIALS: SandboxCredentials = { ghToken: null, gitIdentity: null, sshAuthSock: null };
 const PROTECTED = ["/repos/main/.git/hooks", "/repos/main/.git/config", "/repos/my-branch/.git"];
 
@@ -53,6 +55,7 @@ function build(
   credentials: SandboxCredentials = NO_CREDENTIALS,
   webmuxCli: WebmuxCliMounts | null = null,
   hostEnv: Record<string, string | undefined> = {},
+  existingPaths: ReadonlySet<string> = new Set(),
 ): string[] {
   return buildDockerRunArgs(opts, {
     name: "wm-test-123",
@@ -63,6 +66,8 @@ function build(
     hostEnv,
     credentials,
     protectedGitPaths: PROTECTED,
+    agentSpecs: AGENT_SPECS,
+    existingPaths,
     webmuxCli,
   });
 }
@@ -119,17 +124,42 @@ describe("buildDockerRunArgs — sandbox user", () => {
     expect(args.at(-1)).toBe("my-image:latest");
   });
 
-  it("mounts agent config under /home/webmux", () => {
-    const m = mounts(build(makeOpts()));
-    expect(m).toContain(`${HOME}/.claude:/home/webmux/.claude`);
-    expect(m).toContain(`${HOME}/.claude.json:/home/webmux/.claude.json`);
-    expect(m).toContain(`${HOME}/.codex:/home/webmux/.codex`);
-    expect(m.some((v) => v.includes(":/root/"))).toBe(false);
-  });
-
   it("WEBMUX_UID from runtime env cannot override the host UID", () => {
     const flags = envFlags(build(makeOpts({ runtimeEnv: { WEBMUX_UID: "0" } })));
     expect(flags.filter((f) => f.startsWith("WEBMUX_UID="))).toEqual([`WEBMUX_UID=${UID}`]);
+  });
+});
+
+describe("buildDockerRunArgs — agent harnesses", () => {
+  it("mounts the shared tools volume", () => {
+    expect(mounts(build(makeOpts()))).toContain("webmux-sandbox-tools:/opt/webmux/tools");
+  });
+
+  it("mounts the home config of every built-in agent that exists on the host, rw, under /home/webmux", () => {
+    const existing = new Set([`${HOME}/.claude`, `${HOME}/.claude.json`, `${HOME}/.config/opencode`, `${HOME}/.pi`]);
+    const m = mounts(build(makeOpts(), NO_CREDENTIALS, null, {}, existing));
+    expect(m).toContain(`${HOME}/.claude:/home/webmux/.claude`);
+    expect(m).toContain(`${HOME}/.claude.json:/home/webmux/.claude.json`);
+    expect(m).toContain(`${HOME}/.config/opencode:/home/webmux/.config/opencode`);
+    expect(m).toContain(`${HOME}/.pi:/home/webmux/.pi`);
+    expect(m.some((v) => v.includes(".codex") || v.includes(".local/share/opencode"))).toBe(false);
+  });
+
+  it("mounts no agent config when none exists on the host", () => {
+    const m = mounts(build(makeOpts()));
+    expect(m.some((v) => v.includes("/home/webmux/."))).toBe(false);
+  });
+
+  it("forwards the agents' auth env that is set on the host", () => {
+    const flags = envFlags(build(makeOpts(), NO_CREDENTIALS, null, {
+      ANTHROPIC_API_KEY: "sk-ant",
+      OPENAI_API_KEY: "sk-oai",
+      UNRELATED: "x",
+    }));
+    expect(flags).toContain("ANTHROPIC_API_KEY=sk-ant");
+    expect(flags).toContain("OPENAI_API_KEY=sk-oai");
+    expect(flags.some((f) => f.startsWith("CLAUDE_CODE_OAUTH_TOKEN="))).toBe(false);
+    expect(flags.some((f) => f.startsWith("UNRELATED="))).toBe(false);
   });
 });
 

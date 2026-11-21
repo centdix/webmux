@@ -26,6 +26,7 @@ const GEMINI: AgentDetails = {
   capabilities: CAPABILITIES,
   startCommand: 'gemini --prompt "${PROMPT}"',
   resumeCommand: 'gemini resume --branch "${BRANCH}"',
+  sandboxInstall: null,
 };
 
 const GEMINI_SUMMARY: AgentSummary = { id: "gemini", label: "Gemini CLI", kind: "custom", capabilities: CAPABILITIES };
@@ -37,6 +38,7 @@ const BUILTIN_CLAUDE: AgentDetails = {
   capabilities: { terminal: true, inAppChat: true, conversationHistory: true, interrupt: true, resume: true },
   startCommand: null,
   resumeCommand: null,
+  sandboxInstall: null,
 };
 
 function createConfig(agents: AgentSummary[]): AppConfig {
@@ -176,6 +178,32 @@ describe("CustomAgentsSection", () => {
         label: "Gemini CLI",
         startCommand: "gemini2",
         resumeCommand: 'gemini resume --branch "${BRANCH}"',
+      });
+    });
+  });
+
+  it("shows an agent's sandbox install and saves an edited one", async () => {
+    const withInstall: AgentDetails = { ...GEMINI, sandboxInstall: "npm i -g @google/gemini-cli" };
+    vi.mocked(fetchAgents).mockResolvedValue([withInstall]);
+    vi.mocked(updateAgent).mockResolvedValue({ agent: withInstall });
+
+    renderSection();
+
+    expect(await screen.findByText("Sandbox install: npm i -g @google/gemini-cli")).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const field = screen.getByLabelText(/Docker sandbox install/);
+    expect(field).toHaveValue("npm i -g @google/gemini-cli");
+    await fireEvent.input(field, { target: { value: "  npm i -g gemini-next " } });
+    const editor = screen.getByLabelText("Agent name").closest("dialog");
+    if (!editor) throw new Error("agent editor not open");
+    await fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(updateAgent).toHaveBeenCalledWith("gemini", {
+        label: "Gemini CLI",
+        startCommand: 'gemini --prompt "${PROMPT}"',
+        resumeCommand: 'gemini resume --branch "${BRANCH}"',
+        sandboxInstall: "npm i -g gemini-next",
       });
     });
   });

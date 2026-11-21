@@ -10,6 +10,8 @@ import { join, resolve } from "node:path";
 import { type DockerProfileConfig } from "./config";
 import { webmuxRuntimeStateDir } from "./webmux-paths";
 import { log } from "../lib/log";
+import { AGENT_ADAPTERS } from "../agents";
+import type { AgentSandboxSpec } from "../agents/types";
 
 const DOCKER_RUN_TIMEOUT_MS = 60_000;
 const DOCKER_IMAGE_PREPARE_TIMEOUT_MS = 10 * 60_000;
@@ -24,6 +26,8 @@ const CONTAINER_WEBMUX_DIR = "/opt/webmux";
 const CONTAINER_ENTRYPOINT = `${CONTAINER_WEBMUX_DIR}/entrypoint.sh`;
 const CONTAINER_READY_MARKER = `${CONTAINER_WEBMUX_DIR}/.ready`;
 export const CONTAINER_TOOLS_DIR = `${CONTAINER_WEBMUX_DIR}/tools`;
+/** Named volume shared by every sandbox: agent CLIs and bun installed once. */
+const SANDBOX_TOOLS_VOLUME = "webmux-sandbox-tools";
 
 /** Host UID/GID the sandbox user is created with and every `docker exec` runs as. */
 export interface SandboxUser {
@@ -221,6 +225,10 @@ function isReservedEnvKey(key: string, reservedKeys: ReadonlySet<string>): boole
   return reservedKeys.has(key) || /^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/.test(key);
 }
 
+function agentHomeMountPaths(specs: readonly AgentSandboxSpec[]): string[] {
+  return [...new Set(specs.flatMap((spec) => spec.homeMounts))];
+}
+
 /** Everything `buildDockerRunArgs` needs that the caller resolves with I/O. */
 export interface DockerRunContext {
   /** Pre-generated container name. */
@@ -240,6 +248,12 @@ export interface DockerRunContext {
    *  `core.fsmonitor`, a redirected gitfile or commondir). Empty when the repo
    *  layout is not the standard `<repo>/.git` directory. */
   protectedGitPaths: string[];
+  /** Sandbox specs of every built-in agent: their existing home config is
+   *  mounted and their auth env forwarded, so the worktree can switch agents
+   *  without a new container. */
+  agentSpecs: readonly AgentSandboxSpec[];
+  /** Host paths confirmed to exist; decides which agent home mounts to add. */
+  existingPaths: ReadonlySet<string>;
   /** Host paths for the in-container `webmux` CLI, or null when the running
    *  webmux has no JS bundle to mount. */
   webmuxCli: WebmuxCliMounts | null;
@@ -311,6 +325,12 @@ export function buildDockerRunArgs(opts: LaunchContainerOpts, ctx: DockerRunCont
     }
   }
 
+  // Agent auth env, when set on the host.
+  for (const key of new Set(ctx.agentSpecs.flatMap((spec) => spec.authEnv))) {
+    const val = ctx.hostEnv[key];
+    if (val !== undefined && !isReservedEnvKey(key, reservedKeys)) args.push("-e", `${key}=${val}`);
+  }
+
   // Pass through generated runtime env; skip reserved keys and invalid key names.
   for (const [key, val] of Object.entries(runtimeEnv)) {
     if (!isValidEnvKey(key)) {
@@ -329,10 +349,15 @@ export function buildDockerRunArgs(opts: LaunchContainerOpts, ctx: DockerRunCont
     args.push("-v", `${path}:${path}:ro`);
   }
 
-  // Agent config mounts.
-  args.push("-v", `${home}/.claude:${SANDBOX_HOME}/.claude`);
-  args.push("-v", `${home}/.claude.json:${SANDBOX_HOME}/.claude.json`);
-  args.push("-v", `${home}/.codex:${SANDBOX_HOME}/.codex`);
+  // Shared tools volume: agent CLIs and bun, installed on first use.
+  args.push("-v", `${SANDBOX_TOOLS_VOLUME}:${CONTAINER_TOOLS_DIR}`);
+
+  // Agent config mounts (rw, only what exists on the host). Session discovery
+  // reads these same host dirs, which works because the cwd is identical.
+  for (const path of agentHomeMountPaths(ctx.agentSpecs)) {
+    const hostPath = join(home, path);
+    if (ctx.existingPaths.has(hostPath)) args.push("-v", `${hostPath}:${SANDBOX_HOME}/${path}`);
+  }
 
   // The running webmux's CLI, so agents can call `webmux port` in the container.
   if (webmuxCli) {
@@ -405,6 +430,10 @@ export async function launchContainer(opts: LaunchContainerOpts): Promise<string
     resolveSandboxCredentials(opts.mainRepoDir),
   ]);
   const protectedGitPaths = await resolveProtectedGitPaths(opts.mainRepoDir, opts.wtDir);
+  const agentSpecs = Object.values(AGENT_ADAPTERS).map((adapter) => adapter.sandbox);
+  const existingPaths = new Set(
+    agentHomeMountPaths(agentSpecs).map((path) => join(home, path)).filter((path) => existsSync(path)),
+  );
   const args = buildDockerRunArgs(opts, {
     name,
     home,
@@ -414,6 +443,8 @@ export async function launchContainer(opts: LaunchContainerOpts): Promise<string
     hostEnv: Bun.env,
     credentials,
     protectedGitPaths,
+    agentSpecs,
+    existingPaths,
     webmuxCli,
   });
 

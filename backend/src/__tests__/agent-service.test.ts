@@ -5,6 +5,7 @@ import {
   buildDockerAgentPaneCommand,
   buildDockerShellCommand,
   buildManagedShellCommand,
+  buildSandboxInstallCommand,
 } from "../services/agent-service";
 
 const BUILT_IN_LABELS = { claude: "Claude", codex: "Codex", opencode: "opencode", pi: "pi" } as const;
@@ -33,6 +34,7 @@ function customAgent(overrides: {
   label?: string;
   startCommand: string;
   resumeCommand?: string;
+  sandboxInstall?: string;
 }): AgentDefinition {
   return {
     id: overrides.id ?? "gemini",
@@ -51,10 +53,38 @@ function customAgent(overrides: {
         label: overrides.label ?? "Gemini CLI",
         startCommand: overrides.startCommand,
         ...(overrides.resumeCommand ? { resumeCommand: overrides.resumeCommand } : {}),
+        ...(overrides.sandboxInstall ? { sandboxInstall: overrides.sandboxInstall } : {}),
       },
     },
   };
 }
+
+describe("buildSandboxInstallCommand", () => {
+  it("skips the install when the binary is on PATH, else installs under the tools lock with the tools prefix", () => {
+    const cmd = buildSandboxInstallCommand("npm i -g @openai/codex", "codex");
+    expect(cmd.startsWith("command -v codex >/dev/null 2>&1 || {")).toBe(true);
+    expect(cmd).toContain("NPM_CONFIG_PREFIX=/opt/webmux/tools BUN_INSTALL=/opt/webmux/tools/bun flock /opt/webmux/tools/.lock sh -c");
+    expect(cmd).toContain("npm i -g @openai/codex");
+    // Re-checked under the lock so a concurrent installer is not repeated.
+    expect(cmd.match(/command -v codex/g)?.length).toBe(3);
+  });
+
+  it("falls back to an unlocked install when flock is missing", () => {
+    expect(buildSandboxInstallCommand("x", "y")).toContain("else NPM_CONFIG_PREFIX=/opt/webmux/tools BUN_INSTALL=/opt/webmux/tools/bun sh -c");
+  });
+
+  it("without a binary, always runs the install", () => {
+    const cmd = buildSandboxInstallCommand("npm i -g @google/gemini-cli");
+    expect(cmd.startsWith("if command -v flock")).toBe(true);
+    expect(cmd).not.toContain("|| {");
+  });
+
+  it("is valid sh", () => {
+    for (const cmd of [buildSandboxInstallCommand("npm i -g a", "a"), buildSandboxInstallCommand("echo 'b'")]) {
+      expect(Bun.spawnSync(["sh", "-n", "-c", cmd]).exitCode).toBe(0);
+    }
+  });
+});
 
 describe("agent-service command builders", () => {
   it("builds a managed shell command that sources runtime.env", () => {
@@ -328,11 +358,61 @@ describe("agent-service command builders", () => {
 
     expect(shell).toContain("docker exec -it -u 1000:1001 -e HOME='/home/webmux' -w '/repos/feature' 'wm-feature-container' /bin/sh -c");
     expect(shell).toContain("/bin/zsh");
-    expect(shell).toContain('export PATH="$PATH:/home/webmux/.local/bin:/usr/local/bin:/home/webmux/.bun/bin:/home/webmux/.cargo/bin"');
+    expect(shell).toContain('export PATH="/opt/webmux/tools/bin:/opt/webmux/tools/bun/bin:$PATH:/home/webmux/.local/bin:/usr/local/bin:/home/webmux/.bun/bin:/home/webmux/.cargo/bin"');
     expect(agent).toContain("codex --enable hooks --yolo");
     expect(agent).toContain("ship the fix");
-    expect(agent).toContain('export PATH="$PATH:/home/webmux/.local/bin:/usr/local/bin:/home/webmux/.bun/bin:/home/webmux/.cargo/bin"');
+    expect(agent).toContain('export PATH="/opt/webmux/tools/bin:/opt/webmux/tools/bun/bin:$PATH:/home/webmux/.local/bin:/usr/local/bin:/home/webmux/.bun/bin:/home/webmux/.cargo/bin"');
     expect(agent).not.toContain("docker exec");
+  });
+
+  it("installs the worktree's built-in agent and bun before launching it in docker", () => {
+    const agent = buildDockerAgentPaneCommand({
+      agent: builtInAgent("claude"),
+      runtimeEnvPath: "/repos/main/.git/worktrees/feature/webmux/runtime.env",
+      repoRoot: "/repos/main",
+      worktreePath: "/repos/feature",
+      branch: "feature",
+      profileName: "default",
+    });
+    const install = buildSandboxInstallCommand("npm i -g @anthropic-ai/claude-code", "claude");
+    const bun = buildSandboxInstallCommand("npm i -g bun", "bun");
+    expect(agent).toContain(install);
+    expect(agent).toContain(`if command -v webmux >/dev/null 2>&1; then ${bun}; fi`);
+    // PATH first, then bun, then the agent install, then the agent itself.
+    expect(agent.indexOf("export PATH=")).toBeLessThan(agent.indexOf(bun));
+    expect(agent.indexOf(bun)).toBeLessThan(agent.indexOf(install));
+    expect(agent.indexOf(install)).toBeLessThan(agent.lastIndexOf("claude "));
+    expect(agent).not.toContain("@openai/codex");
+  });
+
+  it("runs a custom agent's sandboxInstall in docker, and nothing without one", () => {
+    const base = {
+      runtimeEnvPath: "/r/runtime.env",
+      repoRoot: "/repos/main",
+      worktreePath: "/repos/feature",
+      branch: "feature",
+      profileName: "default",
+    };
+    const withInstall = buildDockerAgentPaneCommand({
+      ...base,
+      agent: customAgent({ startCommand: "gemini", sandboxInstall: "npm i -g @google/gemini-cli" }),
+    });
+    expect(withInstall).toContain(buildSandboxInstallCommand("npm i -g @google/gemini-cli"));
+    const without = buildDockerAgentPaneCommand({ ...base, agent: customAgent({ startCommand: "gemini" }) });
+    expect(without).not.toContain("running the agent's sandbox install");
+  });
+
+  it("host agent commands carry no sandbox install", () => {
+    const command = buildAgentPaneCommand({
+      agent: customAgent({ startCommand: "gemini", sandboxInstall: "npm i -g x" }),
+      runtimeEnvPath: "/r/runtime.env",
+      repoRoot: "/repo",
+      worktreePath: "/repo/wt",
+      branch: "feature",
+      profileName: "default",
+    });
+    expect(command).not.toContain("npm i -g");
+    expect(command).not.toContain("flock");
   });
 
   it("defaults docker shell commands to /bin/bash instead of the host shell path", () => {
@@ -345,7 +425,7 @@ describe("agent-service command builders", () => {
 
     expect(shell).toContain("/bin/bash");
     expect(shell).not.toContain(" /bin/sh -lc ");
-    expect(shell).toContain('export PATH="$PATH:/home/webmux/.local/bin:/usr/local/bin:/home/webmux/.bun/bin:/home/webmux/.cargo/bin"');
+    expect(shell).toContain('export PATH="/opt/webmux/tools/bin:/opt/webmux/tools/bun/bin:$PATH:/home/webmux/.local/bin:/usr/local/bin:/home/webmux/.bun/bin:/home/webmux/.cargo/bin"');
   });
 
   it("falls back to /bin/sh when the preferred docker shell is unavailable", () => {

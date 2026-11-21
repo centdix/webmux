@@ -248,9 +248,12 @@ agents:
     label: Gemini CLI
     startCommand: gemini --prompt "${PROMPT}"
     resumeCommand: gemini --resume latest   # optional
+    sandboxInstall: command -v gemini || npm i -g @google/gemini-cli   # optional, Docker sandboxes only
 ```
 
 `startCommand` and `resumeCommand` can reference `${PROMPT}`, `${SYSTEM_PROMPT}`, `${WORKTREE_PATH}`, `${REPO_PATH}`, `${BRANCH}`, and `${PROFILE}`. Without a `resumeCommand`, reopening a worktree restarts the agent fresh. An `agents:` section in `.webmux.yaml` or `.webmux.local.yaml` is ignored — move it to the global file. Worktrees started on a former project-local custom agent fail to open with `Unknown agent` until you recreate that agent globally under the same id.
+
+`sandboxInstall` runs inside a Docker sandbox right before the agent starts, so an image doesn't have to ship the agent. It runs on every launch, so make it idempotent. `npm i -g` and bun installs land in the `webmux-sandbox-tools` volume, which every sandbox shares, so the first sandbox installs the agent and the rest reuse it. Built-in agents don't need this: webmux installs them automatically.
 
 ### Dev server ports
 

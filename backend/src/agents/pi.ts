@@ -185,6 +185,11 @@ export const piAdapter: AgentAdapter = {
   id: "pi",
   label: "pi",
   binary: "pi",
+  sandbox: {
+    install: "npm i -g @earendil-works/pi-coding-agent",
+    homeMounts: [".pi"],
+    authEnv: [],
+  },
   capabilities: {
     terminal: true,
     // pi's session files aren't parsed into dashboard conversations yet — the terminal is the surface.
