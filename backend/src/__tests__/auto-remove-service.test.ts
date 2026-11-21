@@ -5,6 +5,7 @@ import {
   runAutoRemove,
   type AutoRemoveDependencies,
 } from "../services/auto-remove-service";
+import { makeUnmanagedWorktreeId } from "../services/reconciliation-service";
 
 const ROOT = "/repo";
 
@@ -12,7 +13,7 @@ function worktree(branch: string): GitWorktreeEntry {
   return { path: `/repo__wt/${branch}`, branch, bare: false } as GitWorktreeEntry;
 }
 
-/** Builds deps with fakes; records which branches got removed. */
+/** Builds deps with fakes; records which worktree ids got removed. */
 function makeDeps(opts: {
   worktrees: GitWorktreeEntry[];
   states: Map<string, PrEntry["state"][]> | null;
@@ -24,6 +25,7 @@ function makeDeps(opts: {
 
   const git = {
     listLiveWorktrees: () => [{ path: ROOT, branch: "main", bare: false }, ...opts.worktrees],
+    resolveWorktreeGitDir: (path: string) => path,
     readWorktreeStatus: (path: string) => ({
       dirty: dirty.has(path),
       aheadCount: 0,
@@ -35,8 +37,8 @@ function makeDeps(opts: {
     git,
     projectRoot: ROOT,
     lifecycleService: {
-      removeWorktree: async (branch: string) => {
-        removed.push(branch);
+      removeWorktree: async (worktreeId: string) => {
+        removed.push(worktreeId);
       },
     } as unknown as AutoRemoveDependencies["lifecycleService"],
     notifications: { notify: () => {} } as unknown as AutoRemoveDependencies["notifications"],
@@ -56,7 +58,7 @@ describe("runAutoRemove", () => {
       states: new Map([["feature", ["merged"]]]),
     });
     await runAutoRemove(deps);
-    expect(removed).toEqual(["feature"]);
+    expect(removed).toEqual([makeUnmanagedWorktreeId(wt.path)]);
   });
 
   it("keeps a worktree whose PR is still open", async () => {

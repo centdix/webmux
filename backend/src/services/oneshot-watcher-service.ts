@@ -15,7 +15,7 @@ export interface OneshotWatcherDependencies {
   /** Only the methods the watcher actually uses — narrowed so tests can mock
    *  precisely instead of casting through `unknown as LifecycleService`. */
   lifecycleService: Pick<LifecycleService, "closeWorktree" | "disarmOneshot">;
-  postToLinear: (branch: string, target: OneshotPostTarget) => Promise<void>;
+  postToLinear: (worktreeId: string, target: OneshotPostTarget) => Promise<void>;
   /** Override for tests. Defaults to the real filesystem adapter. */
   readWorktreeMeta?: (path: string) => Promise<WorktreeMeta | null>;
   /** Override for tests. Defaults to {@link POLL_INTERVAL_MS}. */
@@ -43,6 +43,7 @@ function getState(branch: string): WatchState {
 }
 
 async function processWorktree(
+  worktreeId: string,
   branch: string,
   path: string,
   agentLifecycle: string,
@@ -93,7 +94,7 @@ async function processWorktree(
 
     if (meta.oneshot.postToLinearOnDone) {
       try {
-        await deps.postToLinear(branch, meta.oneshot.postToLinearOnDone);
+        await deps.postToLinear(worktreeId, meta.oneshot.postToLinearOnDone);
         log.info(`[oneshot-watcher] ${branch}: posted conversation to Linear`);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
@@ -110,7 +111,7 @@ async function processWorktree(
         return;
       }
       try {
-        await deps.lifecycleService.closeWorktree(branch);
+        await deps.lifecycleService.closeWorktree(worktreeId);
         log.info(`[oneshot-watcher] ${branch}: closed session`);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
@@ -121,13 +122,12 @@ async function processWorktree(
     // Disarm so the watcher doesn't re-trigger on the next poll, even if close
     // didn't fully succeed (e.g. user reopens manually — that interaction would
     // disarm anyway, but the explicit clear here removes the race).
-    await deps.lifecycleService.disarmOneshot(branch);
+    await deps.lifecycleService.disarmOneshot(worktreeId);
     // Mirror to in-memory runtime so snapshots reflect the disarm immediately,
     // without waiting for a reconcile pass. The CLI's "user took over" detector
     // reads from the snapshot, and when autoCloseOnDone=false no close-driven
     // reconcile fires — without this mirror, snapshot.oneshot would stay armed.
-    const runtimeState = deps.projectRuntime.getWorktreeByBranch(branch);
-    if (runtimeState) deps.projectRuntime.setOneshot(runtimeState.worktreeId, null);
+    if (deps.projectRuntime.getWorktree(worktreeId)) deps.projectRuntime.setOneshot(worktreeId, null);
   } finally {
     states.delete(branch);
   }
@@ -140,7 +140,7 @@ export async function runOneshotWatch(deps: OneshotWatcherDependencies): Promise
   for (const wt of worktrees) {
     if (wt.source !== "oneshot") continue;
     const hasPr = wt.prs.length > 0;
-    await processWorktree(wt.branch, wt.path, wt.agent.lifecycle, hasPr, deps);
+    await processWorktree(wt.worktreeId, wt.branch, wt.path, wt.agent.lifecycle, hasPr, deps);
   }
 }
 

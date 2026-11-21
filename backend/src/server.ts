@@ -130,6 +130,7 @@ import { classifyAgentsTerminalWorktreeError } from "./services/agents-ui-action
 import { buildProjectSnapshot } from "./services/snapshot-service";
 import { hubReconcileOptions, listAllProjectWorktrees } from "./services/all-projects-worktrees-service";
 import type { ReconcileOptions } from "./services/reconciliation-service";
+import { resolveWorktreeIdByName as resolveWorktreeIdByNameWith } from "./services/worktree-name-resolver";
 import {
   ClaudeConversationService,
   isPendingClaudeConversationId,
@@ -379,16 +380,15 @@ function normalizeOneshotConfig(input: OneshotConfig | undefined): OneshotMeta |
  *  the in-memory runtime state so the next snapshot reflects the disarm without
  *  waiting for a reconciliation pass — the CLI relies on that for its
  *  user-took-over exit path. */
-async function disarmOneshotIfArmed(branch: string, reason: string): Promise<void> {
+async function disarmOneshotIfArmed(worktreeId: string, reason: string): Promise<void> {
   try {
-    const disarmed = await lifecycleService.disarmOneshot(branch);
+    const disarmed = await lifecycleService.disarmOneshot(worktreeId);
     if (!disarmed) return;
-    log.info(`[oneshot-watcher] ${branch}: disarmed by ${reason}`);
-    const state = projectRuntime.getWorktreeByBranch(branch);
-    if (state) projectRuntime.setOneshot(state.worktreeId, null);
+    log.info(`[oneshot-watcher] ${worktreeId}: disarmed by ${reason}`);
+    if (projectRuntime.getWorktree(worktreeId)) projectRuntime.setOneshot(worktreeId, null);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    log.warn(`[oneshot-watcher] disarm failed for ${branch} (${reason}): ${msg}`);
+    log.warn(`[oneshot-watcher] disarm failed for ${worktreeId} (${reason}): ${msg}`);
   }
 }
 
@@ -594,22 +594,29 @@ async function withMutatingTab<T>(branch: string, fn: () => Promise<T>): Promise
   }
 }
 
-async function resolveTerminalWorktree(branch: string): Promise<{
+async function resolveWorktreeIdByName(name: string): Promise<string> {
+  return await resolveWorktreeIdByNameWith(name, {
+    runtime: projectRuntime,
+    reconcile: () => reconciliationService.reconcile(PROJECT_DIR, { force: true }),
+  });
+}
+
+async function resolveTerminalWorktree(worktreeId: string): Promise<{
   worktreeId: string;
   attachTarget: TerminalAttachTarget;
   agentName: WorktreeSnapshot["agentName"];
 }> {
-  ensureBranchNotBusy(branch);
-  let state = projectRuntime.getWorktreeByBranch(branch);
+  let state = projectRuntime.getWorktree(worktreeId);
   if (!state || !state.session.exists || !state.session.sessionName) {
     await reconciliationService.reconcile(PROJECT_DIR);
-    state = projectRuntime.getWorktreeByBranch(branch);
+    state = projectRuntime.getWorktree(worktreeId);
   }
   if (!state) {
-    throw new Error(`Worktree not found: ${branch}`);
+    throw new Error(`Worktree not found: ${worktreeId}`);
   }
+  ensureBranchNotBusy(state.branch);
   if (!state.session.exists || !state.session.sessionName) {
-    throw new Error(`No open tmux window found for worktree: ${branch}`);
+    throw new Error(`No open tmux window found for worktree: ${state.branch}`);
   }
 
   return {
@@ -622,7 +629,7 @@ async function resolveTerminalWorktree(branch: string): Promise<{
   };
 }
 
-async function resolveAgentsTerminalWorktree(branch: string): Promise<{
+async function resolveAgentsTerminalWorktree(worktreeId: string): Promise<{
   ok: true;
   data: {
     worktreeId: string;
@@ -635,7 +642,7 @@ async function resolveAgentsTerminalWorktree(branch: string): Promise<{
   try {
     return {
       ok: true,
-      data: await resolveTerminalWorktree(branch),
+      data: await resolveTerminalWorktree(worktreeId),
     };
   } catch (error) {
     const classified = classifyAgentsTerminalWorktreeError(error);
@@ -649,10 +656,11 @@ async function resolveAgentsTerminalWorktree(branch: string): Promise<{
 
 async function apiGetNativeTerminalLaunch(branch: string): Promise<Response> {
   ensureBranchNotBusy(branch);
+  const worktreeId = await resolveWorktreeIdByName(branch);
   await reconciliationService.reconcile(PROJECT_DIR);
   const launch = buildNativeTerminalLaunch({
     branch,
-    state: projectRuntime.getWorktreeByBranch(branch),
+    state: projectRuntime.getWorktree(worktreeId),
     tmuxCommand: buildNativeTerminalTmuxCommand(Bun.env),
     sessionPrefix: `wm-native-${PORT}-`,
   });
@@ -751,11 +759,11 @@ async function apiGetWorktrees(): Promise<Response> {
   return jsonResponse({ worktrees: (await readWorktrees()).worktrees });
 }
 
-function findSnapshotWorktree(snapshot: ProjectSnapshot, branch: string): WorktreeSnapshot | null {
-  return snapshot.worktrees.find((worktree) => worktree.branch === branch) ?? null;
+function findSnapshotWorktree(snapshot: ProjectSnapshot, worktreeId: string): WorktreeSnapshot | null {
+  return snapshot.worktrees.find((worktree) => worktree.id === worktreeId) ?? null;
 }
 
-async function resolveAgentsWorktree(branch: string): Promise<{
+async function resolveAgentsWorktree(worktreeId: string): Promise<{
   ok: true;
   worktree: WorktreeSnapshot;
 } | {
@@ -763,11 +771,11 @@ async function resolveAgentsWorktree(branch: string): Promise<{
   response: Response;
 }> {
   const snapshot = await readProjectSnapshot();
-  const worktree = findSnapshotWorktree(snapshot, branch);
+  const worktree = findSnapshotWorktree(snapshot, worktreeId);
   if (!worktree) {
     return {
       ok: false,
-      response: errorResponse(`Worktree not found: ${branch}`, 404),
+      response: errorResponse(`Worktree not found: ${worktreeId}`, 404),
     };
   }
 
@@ -831,11 +839,10 @@ async function setAgentTerminalStale(worktree: WorktreeSnapshot, stale: boolean)
  *  gate blocks the next web message even though nothing is running. The owned
  *  run's start/settle is authoritative, so we set it directly. */
 function setWorktreeAgentLifecycle(worktree: WorktreeSnapshot, lifecycle: "running" | "stopped"): void {
-  const state = projectRuntime.getWorktreeByBranch(worktree.branch);
-  if (!state) return;
+  if (!projectRuntime.getWorktree(worktree.id)) return;
   projectRuntime.applyEvent({
     type: "agent_status_changed",
-    worktreeId: state.worktreeId,
+    worktreeId: worktree.id,
     lifecycle,
   });
 }
@@ -930,7 +937,7 @@ async function sendClaudeStreamingMessage(input: {
 }
 
 async function apiAttachAgentsWorktree(branch: string): Promise<Response> {
-  const resolved = await resolveAgentsWorktree(branch);
+  const resolved = await resolveAgentsWorktree(await resolveWorktreeIdByName(branch));
   if (!resolved.ok) return resolved.response;
 
   const chatSupport = resolveWorktreeAgentChatSupport(resolved.worktree, "chat");
@@ -947,7 +954,7 @@ async function apiAttachAgentsWorktree(branch: string): Promise<Response> {
 }
 
 async function apiGetAgentsWorktreeHistory(branch: string): Promise<Response> {
-  const resolved = await resolveAgentsWorktree(branch);
+  const resolved = await resolveAgentsWorktree(await resolveWorktreeIdByName(branch));
   if (!resolved.ok) return resolved.response;
 
   const chatSupport = resolveWorktreeAgentChatSupport(resolved.worktree, "chat");
@@ -964,11 +971,12 @@ async function apiGetAgentsWorktreeHistory(branch: string): Promise<Response> {
 }
 
 async function apiSendAgentsWorktreeMessage(branch: string, req: Request): Promise<Response> {
-  await disarmOneshotIfArmed(branch, "agents-send-message");
+  const worktreeId = await resolveWorktreeIdByName(branch);
+  await disarmOneshotIfArmed(worktreeId, "agents-send-message");
   const parsed = await parseJsonBody(req, AgentsSendMessageRequestSchema);
   if (!parsed.ok) return parsed.response;
 
-  const resolved = await resolveAgentsWorktree(branch);
+  const resolved = await resolveAgentsWorktree(worktreeId);
   if (!resolved.ok) return resolved.response;
   if (!resolved.worktree.mux) {
     return errorResponse("Open this worktree in the main dashboard before sending messages here", 409);
@@ -1003,7 +1011,7 @@ async function apiSendAgentsWorktreeMessage(branch: string, req: Request): Promi
   });
   if (streamingResponse) return streamingResponse;
 
-  const terminalWorktree = await resolveAgentsTerminalWorktree(branch);
+  const terminalWorktree = await resolveAgentsTerminalWorktree(worktreeId);
   if (!terminalWorktree.ok) return terminalWorktree.response;
   const sendResult = await sendTerminalPrompt(
     terminalWorktree.data.worktreeId,
@@ -1027,8 +1035,9 @@ async function apiSendAgentsWorktreeMessage(branch: string, req: Request): Promi
 }
 
 async function apiInterruptAgentsWorktree(branch: string): Promise<Response> {
-  await disarmOneshotIfArmed(branch, "agents-interrupt");
-  const resolved = await resolveAgentsWorktree(branch);
+  const worktreeId = await resolveWorktreeIdByName(branch);
+  await disarmOneshotIfArmed(worktreeId, "agents-interrupt");
+  const resolved = await resolveAgentsWorktree(worktreeId);
   if (!resolved.ok) return resolved.response;
   if (!resolved.worktree.mux) {
     return errorResponse("Open this worktree in the main dashboard before interrupting it here", 409);
@@ -1063,7 +1072,7 @@ async function apiInterruptAgentsWorktree(branch: string): Promise<Response> {
     });
   }
 
-  const terminalWorktree = await resolveAgentsTerminalWorktree(branch);
+  const terminalWorktree = await resolveAgentsTerminalWorktree(worktreeId);
   if (!terminalWorktree.ok) return terminalWorktree.response;
   const interruptResult = await interruptPrompt(terminalWorktree.data.attachTarget, 0);
   if (!interruptResult.ok) {
@@ -1080,7 +1089,7 @@ async function apiInterruptAgentsWorktree(branch: string): Promise<Response> {
 
 async function apiRefreshWorktreeAgentTerminal(branch: string): Promise<Response> {
   return withMutatingTab(branch, async () => {
-    await lifecycleService.refreshAgentTerminal(branch);
+    await lifecycleService.refreshAgentTerminal(await resolveWorktreeIdByName(branch));
     return jsonResponse({ ok: true });
   });
 }
@@ -1094,7 +1103,13 @@ async function loadAgentsConversationInitialState(
   ok: false;
   message: string;
 }> {
-  const resolved = await resolveAgentsWorktree(branch);
+  let worktreeId: string;
+  try {
+    worktreeId = await resolveWorktreeIdByName(branch);
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  }
+  const resolved = await resolveAgentsWorktree(worktreeId);
   if (!resolved.ok) {
     return {
       ok: false,
@@ -1431,7 +1446,7 @@ async function apiCreateWorktree(req: Request): Promise<Response> {
 async function apiDeleteWorktree(name: string): Promise<Response> {
   return withRemovingBranch(name, async () => {
     log.info(`[worktree:rm] name=${name}`);
-    await lifecycleService.removeWorktree(name);
+    await lifecycleService.removeWorktree(await resolveWorktreeIdByName(name));
     log.debug(`[worktree:rm] done name=${name}`);
     return jsonResponse({ ok: true });
   });
@@ -1448,7 +1463,8 @@ async function apiOpenWorktree(name: string, req: Request): Promise<Response> {
   // at the agent's progress", not "I'm taking over". The actual interaction
   // (terminal input, chat send, upload, etc.) is what fires disarm.
   return withMutatingTab(name, async () => {
-    const result = await lifecycleService.openWorktree(name, { prompt, ...(oneshot ? { oneshot } : {}) });
+    const worktreeId = await resolveWorktreeIdByName(name);
+    const result = await lifecycleService.openWorktree(worktreeId, { prompt, ...(oneshot ? { oneshot } : {}) });
     log.debug(`[worktree:open] done name=${name} worktreeId=${result.worktreeId}`);
     return jsonResponse({ ok: true });
   });
@@ -1457,8 +1473,9 @@ async function apiOpenWorktree(name: string, req: Request): Promise<Response> {
 async function apiCloseWorktree(name: string): Promise<Response> {
   ensureBranchNotBusy(name);
   log.info(`[worktree:close] name=${name}`);
-  await disarmOneshotIfArmed(name, "close-worktree");
-  await lifecycleService.closeWorktree(name);
+  const worktreeId = await resolveWorktreeIdByName(name);
+  await disarmOneshotIfArmed(worktreeId, "close-worktree");
+  await lifecycleService.closeWorktree(worktreeId);
   log.debug(`[worktree:close] done name=${name}`);
   return jsonResponse({ ok: true });
 }
@@ -1470,8 +1487,9 @@ async function apiSetWorktreeArchived(name: string, req: Request): Promise<Respo
   const body = parsed.data;
 
   log.info(`[worktree:archive] name=${name} archived=${body.archived}`);
-  await disarmOneshotIfArmed(name, "archive-worktree");
-  await lifecycleService.setWorktreeArchived(name, body.archived);
+  const worktreeId = await resolveWorktreeIdByName(name);
+  await disarmOneshotIfArmed(worktreeId, "archive-worktree");
+  await lifecycleService.setWorktreeArchived(worktreeId, body.archived);
   log.debug(`[worktree:archive] done name=${name} archived=${body.archived}`);
   return jsonResponse({ ok: true, archived: body.archived });
 }
@@ -1479,7 +1497,7 @@ async function apiSetWorktreeArchived(name: string, req: Request): Promise<Respo
 async function apiCreateWorktreeTab(name: string): Promise<Response> {
   return withMutatingTab(name, async () => {
     log.info(`[worktree:tab:create] name=${name}`);
-    const result = await lifecycleService.createWorktreeTab(name);
+    const result = await lifecycleService.createWorktreeTab(await resolveWorktreeIdByName(name));
     return jsonResponse({ tab: result.tab }, 201);
   });
 }
@@ -1487,7 +1505,7 @@ async function apiCreateWorktreeTab(name: string): Promise<Response> {
 async function apiSelectWorktreeTab(name: string, tabId: string): Promise<Response> {
   return withMutatingTab(name, async () => {
     log.info(`[worktree:tab:select] name=${name} tab=${tabId}`);
-    await lifecycleService.selectWorktreeTab(name, tabId);
+    await lifecycleService.selectWorktreeTab(await resolveWorktreeIdByName(name), tabId);
     return jsonResponse({ ok: true });
   });
 }
@@ -1495,7 +1513,7 @@ async function apiSelectWorktreeTab(name: string, tabId: string): Promise<Respon
 async function apiDeleteWorktreeTab(name: string, tabId: string): Promise<Response> {
   return withMutatingTab(name, async () => {
     log.info(`[worktree:tab:delete] name=${name} tab=${tabId}`);
-    await lifecycleService.deleteWorktreeTab(name, tabId);
+    await lifecycleService.deleteWorktreeTab(await resolveWorktreeIdByName(name), tabId);
     return jsonResponse({ ok: true });
   });
 }
@@ -1507,7 +1525,7 @@ async function apiSetWorktreeLabel(name: string, req: Request): Promise<Response
   const body = parsed.data;
 
   log.info(`[worktree:label] name=${name} label=${body.label ? JSON.stringify(body.label) : "null"}`);
-  const result = await lifecycleService.setWorktreeLabel(name, body.label);
+  const result = await lifecycleService.setWorktreeLabel(await resolveWorktreeIdByName(name), body.label);
   log.debug(`[worktree:label] done name=${name} label=${result.label ? JSON.stringify(result.label) : "null"}`);
   return jsonResponse({ ok: true, label: result.label });
 }
@@ -1519,7 +1537,7 @@ async function apiSetWorktreeProfile(name: string, req: Request): Promise<Respon
   const body = parsed.data;
 
   log.info(`[worktree:profile] name=${name} profile=${body.profile}`);
-  const result = await lifecycleService.setWorktreeProfile(name, body.profile);
+  const result = await lifecycleService.setWorktreeProfile(await resolveWorktreeIdByName(name), body.profile);
   log.debug(`[worktree:profile] done name=${name} profile=${result.profile} restarted=${result.restarted}`);
   return jsonResponse({ ok: true, profile: result.profile, restarted: result.restarted });
 }
@@ -1532,8 +1550,9 @@ async function apiSendPrompt(name: string, req: Request): Promise<Response> {
   const text = body.text;
   const preamble = body.preamble;
   log.info(`[worktree:send] name=${name} text="${text.slice(0, 80)}"`);
-  await disarmOneshotIfArmed(name, "send-prompt");
-  const terminalWorktree = await resolveTerminalWorktree(name);
+  const worktreeId = await resolveWorktreeIdByName(name);
+  await disarmOneshotIfArmed(worktreeId, "send-prompt");
+  const terminalWorktree = await resolveTerminalWorktree(worktreeId);
   const submitDelayMs = resolveWorktreeTerminalSubmitDelayMs(terminalWorktree.agentName);
   const result = await sendTerminalPrompt(
     terminalWorktree.worktreeId,
@@ -1550,8 +1569,9 @@ async function apiSendPrompt(name: string, req: Request): Promise<Response> {
 async function apiMergeWorktree(name: string): Promise<Response> {
   ensureBranchNotBusy(name);
   log.info(`[worktree:merge] name=${name}`);
-  await disarmOneshotIfArmed(name, "merge-worktree");
-  await lifecycleService.mergeWorktree(name);
+  const worktreeId = await resolveWorktreeIdByName(name);
+  await disarmOneshotIfArmed(worktreeId, "merge-worktree");
+  await lifecycleService.mergeWorktree(worktreeId);
   log.debug(`[worktree:merge] done name=${name}`);
   return jsonResponse({ ok: true });
 }
@@ -1625,7 +1645,7 @@ type WorktreePostToLinearOutcome =
 /** Shared between the HTTP handler and the server-side oneshot watcher. Resolves
  *  the worktree's conversation and exports it via `exportConversationToLinear`. */
 async function postWorktreeConversationToLinear(
-  branch: string,
+  worktreeId: string,
   target: PostWorktreeToLinearTarget,
 ): Promise<WorktreePostToLinearOutcome> {
   if (!config.integrations.linear.enabled) {
@@ -1637,12 +1657,12 @@ async function postWorktreeConversationToLinear(
   }
 
   await reconciliationService.reconcile(PROJECT_DIR);
-  const state = projectRuntime.getWorktreeByBranch(branch);
-  if (!state) return { ok: false, error: `Worktree not found: ${branch}`, status: 404 };
+  const state = projectRuntime.getWorktree(worktreeId);
+  if (!state) return { ok: false, error: `Worktree not found: ${worktreeId}`, status: 404 };
 
-  const resolved = await resolveAgentsWorktree(branch);
+  const resolved = await resolveAgentsWorktree(worktreeId);
   if (!resolved.ok) {
-    return { ok: false, error: `Worktree not found: ${branch}`, status: 404 };
+    return { ok: false, error: `Worktree not found: ${worktreeId}`, status: 404 };
   }
 
   const chatSupport = resolveWorktreeAgentChatSupport(resolved.worktree, "chat");
@@ -1657,7 +1677,7 @@ async function postWorktreeConversationToLinear(
 
   const exportInput: ExportConversationInput = {
     target,
-    branch,
+    branch: state.branch,
     baseBranch: state.baseBranch ?? null,
     agent: resolved.worktree.agentName ?? null,
     prUrl,
@@ -1680,7 +1700,7 @@ async function postWorktreeConversationToLinear(
 async function apiPostWorktreeToLinear(name: string, req: Request): Promise<Response> {
   const parsed = await parseJsonBody(req, PostWorktreeToLinearRequestSchema);
   if (!parsed.ok) return parsed.response;
-  const outcome = await postWorktreeConversationToLinear(name, parsed.data.target);
+  const outcome = await postWorktreeConversationToLinear(await resolveWorktreeIdByName(name), parsed.data.target);
   if (!outcome.ok) return errorResponse(outcome.error, outcome.status);
   return jsonResponse({
     ok: true,
@@ -1693,8 +1713,9 @@ async function apiPostWorktreeToLinear(name: string, req: Request): Promise<Resp
 
 async function apiSyncWorktreePrs(name: string): Promise<Response> {
   await syncPrStatus(getWorktreeGitDirs, config.integrations.github.linkedRepos, PROJECT_DIR, prSyncState);
+  const worktreeId = await resolveWorktreeIdByName(name);
   const snapshot = await readProjectSnapshot();
-  const worktree = snapshot.worktrees.find((w) => w.branch === name);
+  const worktree = findSnapshotWorktree(snapshot, worktreeId);
   if (!worktree) return errorResponse(`Worktree not found: ${name}`, 404);
   return jsonResponse(worktree);
 }
@@ -1739,8 +1760,9 @@ async function apiRegisterWorktreePort(ref: WorktreeRef, req: Request): Promise<
 const MAX_DIFF_BYTES = 200 * 1024;
 
 async function apiGetWorktreeDiff(name: string): Promise<Response> {
+  const worktreeId = await resolveWorktreeIdByName(name);
   await reconciliationService.reconcile(PROJECT_DIR);
-  const state = projectRuntime.getWorktreeByBranch(name);
+  const state = projectRuntime.getWorktree(worktreeId);
   if (!state) return errorResponse(`Worktree not found: ${name}`, 404);
 
   const uncommitted = git.readDiff(state.path);
@@ -1785,9 +1807,8 @@ function sanitizeFilename(name: string): string {
 }
 
 async function apiUploadFiles(name: string, req: Request): Promise<Response> {
-  const state = projectRuntime.getWorktreeByBranch(name);
-  if (!state) return errorResponse(`Worktree not found: ${name}`, 404);
-  await disarmOneshotIfArmed(name, "upload-files");
+  const worktreeId = await resolveWorktreeIdByName(name);
+  await disarmOneshotIfArmed(worktreeId, "upload-files");
 
   let formData: FormData;
   try {
@@ -2225,8 +2246,8 @@ function parseNotificationIdParam(params: Record<string, string>):
           if (!attachId) return;
           // Cheap path: in-memory check first — disk read + write only when
           // actually armed. Survives a re-arm on the same WS (no stale cache).
-          if (projectRuntime.getWorktreeByBranch(branch)?.oneshot) {
-            void disarmOneshotIfArmed(branch, "terminal-ws-input");
+          if (data.worktreeId && projectRuntime.getWorktree(data.worktreeId)?.oneshot) {
+            void disarmOneshotIfArmed(data.worktreeId, "terminal-ws-input");
           }
           write(attachId, msg.data);
           break;
@@ -2234,8 +2255,8 @@ function parseNotificationIdParam(params: Record<string, string>):
         case "sendKeys": {
           const attachId = getAttachedSessionId(data, ws);
           if (!attachId) return;
-          if (projectRuntime.getWorktreeByBranch(branch)?.oneshot) {
-            void disarmOneshotIfArmed(branch, "terminal-ws-send-keys");
+          if (data.worktreeId && projectRuntime.getWorktree(data.worktreeId)?.oneshot) {
+            void disarmOneshotIfArmed(data.worktreeId, "terminal-ws-send-keys");
           }
           await sendKeys(attachId, msg.hexBytes);
           break;
@@ -2257,7 +2278,8 @@ function parseNotificationIdParam(params: Record<string, string>):
               if (msg.initialPane !== undefined) {
                 log.debug(`[ws] initialPane=${msg.initialPane} branch=${branch}`);
               }
-              const terminalWorktree = await resolveTerminalWorktree(branch);
+              ensureBranchNotBusy(branch);
+              const terminalWorktree = await resolveTerminalWorktree(await resolveWorktreeIdByName(branch));
               const attachId = `${terminalWorktree.worktreeId}:${randomUUID()}`;
               data.worktreeId = terminalWorktree.worktreeId;
               data.attachId = attachId;
@@ -2345,8 +2367,8 @@ function parseNotificationIdParam(params: Record<string, string>):
     stopOneshotWatcher = startOneshotWatcher({
       projectRuntime,
       lifecycleService,
-      postToLinear: async (branch, target) => {
-        const outcome = await postWorktreeConversationToLinear(branch, target);
+      postToLinear: async (worktreeId, target) => {
+        const outcome = await postWorktreeConversationToLinear(worktreeId, target);
         if (!outcome.ok) throw new Error(outcome.error);
       },
     });

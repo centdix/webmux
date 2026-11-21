@@ -68,8 +68,8 @@ function makeRuntime(worktrees: ManagedWorktreeRuntimeState[]): ProjectRuntime {
   // place so a follow-up listWorktrees() reflects the disarm.
   return {
     listWorktrees: () => worktrees,
-    getWorktreeByBranch: (branch: string) =>
-      worktrees.find((wt) => wt.branch === branch) ?? null,
+    getWorktree: (worktreeId: string) =>
+      worktrees.find((wt) => wt.worktreeId === worktreeId) ?? null,
     setOneshot: (worktreeId: string, oneshot: ManagedWorktreeRuntimeState["oneshot"]) => {
       const target = worktrees.find((wt) => wt.worktreeId === worktreeId);
       if (target) target.oneshot = oneshot;
@@ -86,11 +86,11 @@ function makeLifecycle(): {
   const closeCalls: string[] = [];
   const disarmCalls: string[] = [];
   const service: OneshotLifecycleMock = {
-    closeWorktree: mock(async (branch: string) => {
-      closeCalls.push(branch);
+    closeWorktree: mock(async (worktreeId: string) => {
+      closeCalls.push(worktreeId);
     }),
-    disarmOneshot: mock(async (branch: string) => {
-      disarmCalls.push(branch);
+    disarmOneshot: mock(async (worktreeId: string) => {
+      disarmCalls.push(worktreeId);
       return true;
     }),
   };
@@ -162,8 +162,8 @@ describe("oneshot-watcher-service", () => {
     expect(lc.closeCalls).toEqual([]);
     nowMs += 5_000;
     await runOneshotWatch(deps);
-    expect(lc.closeCalls).toEqual(["feat/a"]);
-    expect(lc.disarmCalls).toEqual(["feat/a"]);
+    expect(lc.closeCalls).toEqual(["id-feat/a"]);
+    expect(lc.disarmCalls).toEqual(["id-feat/a"]);
   });
 
   it("fires immediately on stopped without waiting for grace", async () => {
@@ -176,17 +176,17 @@ describe("oneshot-watcher-service", () => {
       idleGraceMs: 60_000,
       now: () => 0,
     });
-    expect(lc.closeCalls).toEqual(["feat/a"]);
+    expect(lc.closeCalls).toEqual(["id-feat/a"]);
   });
 
   it("posts to Linear before closing when target is set", async () => {
     const lc = makeLifecycle();
     const calls: string[] = [];
-    lc.service.closeWorktree = mock(async (branch: string) => {
-      calls.push(`close:${branch}`);
+    lc.service.closeWorktree = mock(async (worktreeId: string) => {
+      calls.push(`close:${worktreeId}`);
     });
-    const postToLinear = mock(async (branch: string) => {
-      calls.push(`post:${branch}`);
+    const postToLinear = mock(async (worktreeId: string) => {
+      calls.push(`post:${worktreeId}`);
     });
     await runOneshotWatch({
       projectRuntime: makeRuntime([makeWorktree({ branch: "feat/a", lifecycle: "stopped" })]),
@@ -197,7 +197,7 @@ describe("oneshot-watcher-service", () => {
       idleGraceMs: 0,
       now: () => 0,
     });
-    expect(calls).toEqual(["post:feat/a", "close:feat/a"]);
+    expect(calls).toEqual(["post:id-feat/a", "close:id-feat/a"]);
   });
 
   it("respects autoCloseOnDone=false but still posts to Linear", async () => {
@@ -214,7 +214,7 @@ describe("oneshot-watcher-service", () => {
     });
     expect(postToLinear).toHaveBeenCalledTimes(1);
     expect(lc.closeCalls).toEqual([]);
-    expect(lc.disarmCalls).toEqual(["feat/a"]);
+    expect(lc.disarmCalls).toEqual(["id-feat/a"]);
   });
 
   it("still closes + disarms when postToLinear fails", async () => {
@@ -230,8 +230,8 @@ describe("oneshot-watcher-service", () => {
       now: () => 0,
     });
     expect(postToLinear).toHaveBeenCalledTimes(1);
-    expect(lc.closeCalls).toEqual(["feat/a"]);
-    expect(lc.disarmCalls).toEqual(["feat/a"]);
+    expect(lc.closeCalls).toEqual(["id-feat/a"]);
+    expect(lc.disarmCalls).toEqual(["id-feat/a"]);
   });
 
   it("bails on close + disarm when meta is disarmed during postToLinear", async () => {
@@ -271,7 +271,7 @@ describe("oneshot-watcher-service", () => {
       idleGraceMs: 0,
       now: () => 0,
     });
-    expect(lc.disarmCalls).toEqual(["feat/a"]);
+    expect(lc.disarmCalls).toEqual(["id-feat/a"]);
   });
 
   it("does not immediately fire on a freshly upserted closed worktree (cold-start guard)", async () => {
@@ -306,8 +306,8 @@ describe("oneshot-watcher-service", () => {
     expect(lc.closeCalls).toEqual([]);
     nowMs += 6_000;
     await runOneshotWatch(deps);
-    expect(lc.closeCalls).toEqual(["feat/a"]);
-    expect(lc.disarmCalls).toEqual(["feat/a"]);
+    expect(lc.closeCalls).toEqual(["id-feat/a"]);
+    expect(lc.disarmCalls).toEqual(["id-feat/a"]);
   });
 
 });

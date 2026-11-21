@@ -24,6 +24,16 @@ export function makeUnmanagedWorktreeId(path: string): string {
   return `u-${new Bun.CryptoHasher("sha256").update(resolve(path)).digest("hex").slice(0, 16)}`;
 }
 
+/** The id of the worktree at `path`: its meta's id, else the unmanaged id derived from the path. */
+export function resolveWorktreeId(meta: { worktreeId: string } | null, path: string): string {
+  return meta?.worktreeId ?? makeUnmanagedWorktreeId(path);
+}
+
+/** Read the id of the worktree checked out at `path` (see {@link resolveWorktreeId}). */
+export async function readWorktreeIdAt(git: Pick<GitGateway, "resolveWorktreeGitDir">, path: string): Promise<string> {
+  return resolveWorktreeId(await readWorktreeMeta(git.resolveWorktreeGitDir(path)), path);
+}
+
 async function buildServiceStates(
   deps: Pick<ReconciliationServiceDependencies, "portProbe" | "portRegistrations">,
   repoRoot: string,
@@ -43,7 +53,7 @@ async function buildServiceStates(
  *  windows created before the anchor existed (they get backfilled by healWindowNames). Matching on
  *  the anchor is what survives an in-worktree `git checkout -b`, which changes the branch — and so
  *  the expected window name — while the live window keeps the name it was born with. */
-function findWindow(
+export function findWindow(
   windows: TmuxWindowSummary[],
   sessionName: string,
   worktreeId: string,
@@ -181,7 +191,7 @@ export class ReconciliationService {
       const gitDir = this.deps.git.resolveWorktreeGitDir(entry.path);
       const meta = await readWorktreeMeta(gitDir);
       const branch = resolveBranch(entry, meta?.branch ?? null);
-      const worktreeId = meta?.worktreeId ?? makeUnmanagedWorktreeId(entry.path);
+      const worktreeId = resolveWorktreeId(meta, entry.path);
       const gitStatus = this.deps.git.readWorktreeStatus(entry.path);
       const window = findWindow(windows, sessionName, worktreeId, branch);
       const parkingWindow = findWindow(windows, sessionName, worktreeId, branch, "parking");

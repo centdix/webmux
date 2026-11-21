@@ -3,6 +3,7 @@ import type { PrEntry } from "../domain/model";
 import { log } from "../lib/log";
 import type { LifecycleService } from "./lifecycle-service";
 import type { NotificationService } from "./notification-service";
+import { readWorktreeIdAt } from "./reconciliation-service";
 
 export interface AutoRemoveDependencies {
   lifecycleService: LifecycleService;
@@ -48,7 +49,7 @@ export async function runAutoRemove(deps: AutoRemoveDependencies): Promise<void>
     deps.markRemoving(branch);
     try {
       log.info(`[auto-remove] removing merged worktree: ${branch}`);
-      await deps.lifecycleService.removeWorktree(branch);
+      await deps.lifecycleService.removeWorktree(await readWorktreeIdAt(deps.git, entry.path));
       deps.notifications.notify({
         branch,
         type: "worktree_auto_removed",

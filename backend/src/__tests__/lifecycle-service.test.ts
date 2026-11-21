@@ -22,7 +22,7 @@ import type { AutoNameConfig } from "../domain/config";
 import { ProjectRuntime } from "../services/project-runtime";
 import { ArchiveStateService } from "../services/archive-state-service";
 import type { AutoNameGenerator } from "../services/auto-name-service";
-import { makeUnmanagedWorktreeId, ReconciliationService } from "../services/reconciliation-service";
+import { makeUnmanagedWorktreeId, readWorktreeIdAt, ReconciliationService } from "../services/reconciliation-service";
 import {
   buildCreateWorktreeTargets,
   LifecycleError,
@@ -386,6 +386,14 @@ function makeLifecycleService(
     onCreateProgress: createCallbacks.onProgress,
     onCreateFinished: createCallbacks.onFinished,
   });
+}
+
+/** The id the lifecycle service addresses the worktree checked out on `branch` by. */
+async function worktreeIdOf(repoRoot: string, branch: string): Promise<string> {
+  const git = new BunGitGateway();
+  const entry = git.listWorktrees(repoRoot).find((candidate) => candidate.branch === branch);
+  if (!entry) throw new Error(`No worktree for ${branch}`);
+  return await readWorktreeIdAt(git, entry.path);
 }
 
 describe("LifecycleService", () => {
@@ -803,8 +811,8 @@ describe("LifecycleService", () => {
     expect(agentCommand).toContain('gemini --task "$WEBMUX_AGENT_PROMPT" --cwd "$WEBMUX_AGENT_WORKTREE_PATH" --repo "$WEBMUX_AGENT_REPO_PATH" --branch "$WEBMUX_AGENT_BRANCH" --profile "$WEBMUX_AGENT_PROFILE"');
 
     tmux.commands.length = 0;
-    await lifecycle.closeWorktree("feature/custom-agent");
-    await lifecycle.openWorktree("feature/custom-agent");
+    await lifecycle.closeWorktree(await worktreeIdOf(repoRoot, "feature/custom-agent"));
+    await lifecycle.openWorktree(await worktreeIdOf(repoRoot, "feature/custom-agent"));
 
     const reopenCommand = tmux.commands.at(-1)?.command;
     expect(reopenCommand).toContain('gemini resume --branch "$WEBMUX_AGENT_BRANCH"');
@@ -851,8 +859,8 @@ describe("LifecycleService", () => {
     });
 
     tmux.commands.length = 0;
-    await lifecycle.closeWorktree("feature/custom-fresh-reopen");
-    await lifecycle.openWorktree("feature/custom-fresh-reopen");
+    await lifecycle.closeWorktree(await worktreeIdOf(repoRoot, "feature/custom-fresh-reopen"));
+    await lifecycle.openWorktree(await worktreeIdOf(repoRoot, "feature/custom-fresh-reopen"));
 
     const reopenCommand = tmux.commands.at(-1)?.command;
     expect(reopenCommand).toContain('gemini --system "$WEBMUX_AGENT_SYSTEM_PROMPT" --task "$WEBMUX_AGENT_PROMPT" --branch "$WEBMUX_AGENT_BRANCH"');
@@ -1137,7 +1145,7 @@ describe("LifecycleService", () => {
       baseBranch: "main",
     });
 
-    const opened = await lifecycle.openWorktree("feature-open");
+    const opened = await lifecycle.openWorktree(await worktreeIdOf(repoRoot, "feature-open"));
     const gitDir = git.resolveWorktreeGitDir(worktreePath);
     const meta = await readWorktreeMeta(gitDir);
 
@@ -1175,7 +1183,7 @@ describe("LifecycleService", () => {
     const unmanagedId = makeUnmanagedWorktreeId(worktreePath);
     expect(runtime.getWorktreeByBranch("feature-adopt")?.worktreeId).toBe(unmanagedId);
 
-    const opened = await lifecycle.openWorktree("feature-adopt");
+    const opened = await lifecycle.openWorktree(await worktreeIdOf(repoRoot, "feature-adopt"));
     const meta = await readWorktreeMeta(git.resolveWorktreeGitDir(worktreePath));
 
     expect(opened.worktreeId).toBe(unmanagedId);
@@ -1283,8 +1291,8 @@ describe("LifecycleService", () => {
     });
 
     tmux.commands.length = 0;
-    await lifecycle.closeWorktree("feature-continue");
-    await lifecycle.openWorktree("feature-continue");
+    await lifecycle.closeWorktree(await worktreeIdOf(repoRoot, "feature-continue"));
+    await lifecycle.openWorktree(await worktreeIdOf(repoRoot, "feature-continue"));
 
     const agentCommand = tmux.commands.at(-1)?.command;
 
@@ -1327,8 +1335,8 @@ describe("LifecycleService", () => {
     });
 
     tmux.commands.length = 0;
-    await lifecycle.closeWorktree("feature-codex-resume");
-    await lifecycle.openWorktree("feature-codex-resume");
+    await lifecycle.closeWorktree(await worktreeIdOf(repoRoot, "feature-codex-resume"));
+    await lifecycle.openWorktree(await worktreeIdOf(repoRoot, "feature-codex-resume"));
 
     const agentCommand = tmux.commands.at(-1)?.command;
 
@@ -1350,8 +1358,8 @@ describe("LifecycleService", () => {
     });
 
     tmux.commands.length = 0;
-    await lifecycle.closeWorktree("feature-follow-up");
-    await lifecycle.openWorktree("feature-follow-up", { prompt: "now do the follow-up" });
+    await lifecycle.closeWorktree(await worktreeIdOf(repoRoot, "feature-follow-up"));
+    await lifecycle.openWorktree(await worktreeIdOf(repoRoot, "feature-follow-up"), { prompt: "now do the follow-up" });
 
     const agentCommand = tmux.commands.at(-1)?.command;
 
@@ -1411,8 +1419,8 @@ describe("LifecycleService", () => {
     });
 
     tmux.commands.length = 0;
-    await lifecycle.closeWorktree("feature-codex-open-refresh");
-    await lifecycle.openWorktree("feature-codex-open-refresh");
+    await lifecycle.closeWorktree(await worktreeIdOf(repoRoot, "feature-codex-open-refresh"));
+    await lifecycle.openWorktree(await worktreeIdOf(repoRoot, "feature-codex-open-refresh"));
 
     const agentCommand = tmux.commands.at(-1)?.command;
     expect(agentCommand).toContain("codex --enable hooks --yolo resume 'thread-open-refresh'");
@@ -1471,7 +1479,7 @@ describe("LifecycleService", () => {
     });
 
     tmux.commands.length = 0;
-    await lifecycle.refreshAgentTerminal("feature-codex-refresh");
+    await lifecycle.refreshAgentTerminal(await worktreeIdOf(repoRoot, "feature-codex-refresh"));
 
     const agentCommand = tmux.commands.at(-1)?.command;
     expect(agentCommand).toContain("codex --enable hooks --yolo resume 'thread-refresh'");
@@ -1526,7 +1534,7 @@ describe("LifecycleService", () => {
     });
 
     tmux.commands.length = 0;
-    await lifecycle.refreshAgentTerminal("feature-claude-refresh");
+    await lifecycle.refreshAgentTerminal(await worktreeIdOf(repoRoot, "feature-claude-refresh"));
 
     const agentCommand = tmux.commands.at(-1)?.command;
     expect(agentCommand).toContain("claude --dangerously-skip-permissions --resume 'session-refresh'");
@@ -1544,7 +1552,7 @@ describe("LifecycleService", () => {
     const lifecycle = makeLifecycleService(repoRoot, tmux, runtime);
 
     await lifecycle.createWorktree({ branch: "feature-close" });
-    await lifecycle.closeWorktree("feature-close");
+    await lifecycle.closeWorktree(await worktreeIdOf(repoRoot, "feature-close"));
 
     expect(tmux.listWindows()).toEqual([]);
     expect(new BunGitGateway().listWorktrees(repoRoot).some((entry) => entry.branch === "feature-close")).toBe(true);
@@ -1559,7 +1567,7 @@ describe("LifecycleService", () => {
     const lifecycle = makeLifecycleService(repoRoot, tmux, runtime);
 
     await lifecycle.createWorktree({ branch: "feature-archive" });
-    await lifecycle.setWorktreeArchived("feature-archive", true);
+    await lifecycle.setWorktreeArchived(await worktreeIdOf(repoRoot, "feature-archive"), true);
 
     expect(tmux.listWindows()).toEqual([]);
     expect(runtime.getWorktreeByBranch("feature-archive")?.session.exists).toBe(false);
@@ -1568,6 +1576,44 @@ describe("LifecycleService", () => {
 
     expect(archiveState.entries).toHaveLength(1);
     expect(archiveState.entries[0]?.path).toBe(join(repoRoot, "__worktrees", "feature-archive"));
+  });
+
+  it("addresses a worktree by its id after its branch is renamed", async () => {
+    const repoRoot = await initRepo();
+    const runtime = new ProjectRuntime();
+    const tmux = new FakeTmuxGateway();
+    const lifecycle = makeLifecycleService(repoRoot, tmux, runtime);
+    const { worktreeId } = await lifecycle.createWorktree({ branch: "feature-before-rename" });
+    const worktreePath = join(repoRoot, "__worktrees", "feature-before-rename");
+    run(["git", "branch", "-m", "feature-after-rename"], worktreePath);
+
+    expect(tmux.listWindows().map((window) => window.worktreeId)).toContain(worktreeId);
+    await lifecycle.closeWorktree(worktreeId);
+    await lifecycle.setWorktreeLabel(worktreeId, "Renamed");
+
+    expect(tmux.listWindows()).toEqual([]);
+    expect((await readWorktreeMeta(new BunGitGateway().resolveWorktreeGitDir(worktreePath)))?.label).toBe("Renamed");
+    expect(runtime.getWorktree(worktreeId)?.branch).toBe("feature-after-rename");
+    expect(runtime.getWorktree(worktreeId)?.session.exists).toBe(false);
+    await expect(lifecycle.closeWorktree("no-such-id")).rejects.toMatchObject({
+      status: 404,
+      message: "Worktree not found: no-such-id",
+    });
+  });
+
+  it("kills a worktree's windows on remove after its branch is renamed", async () => {
+    const repoRoot = await initRepo();
+    const runtime = new ProjectRuntime();
+    const tmux = new FakeTmuxGateway();
+    const lifecycle = makeLifecycleService(repoRoot, tmux, runtime);
+    const { worktreeId } = await lifecycle.createWorktree({ branch: "feature-remove-before-rename" });
+    const worktreePath = join(repoRoot, "__worktrees", "feature-remove-before-rename");
+    run(["git", "branch", "-m", "feature-remove-after-rename"], worktreePath);
+    expect(tmux.listWindows().map((window) => window.worktreeId)).toContain(worktreeId);
+
+    await lifecycle.removeWorktree(worktreeId);
+
+    expect(tmux.listWindows()).toEqual([]);
   });
 
   it("updates and clears a worktree label in metadata and runtime state", async () => {
@@ -1582,7 +1628,7 @@ describe("LifecycleService", () => {
     const paths = getWorktreeStoragePaths(gitDir);
     await Bun.write(paths.runtimeEnvPath, "runtime-marker\n");
     await Bun.write(paths.controlEnvPath, "control-marker\n");
-    const labeled = await lifecycle.setWorktreeLabel("feature-label", "  Search ranking  ");
+    const labeled = await lifecycle.setWorktreeLabel(await worktreeIdOf(repoRoot, "feature-label"), "  Search ranking  ");
 
     expect(labeled).toEqual({ label: "Search ranking" });
     expect((await readWorktreeMeta(gitDir))?.label).toBe("Search ranking");
@@ -1590,7 +1636,7 @@ describe("LifecycleService", () => {
     expect(await Bun.file(paths.runtimeEnvPath).text()).toBe("runtime-marker\n");
     expect(await Bun.file(paths.controlEnvPath).text()).toBe("control-marker\n");
 
-    const cleared = await lifecycle.setWorktreeLabel("feature-label", "");
+    const cleared = await lifecycle.setWorktreeLabel(await worktreeIdOf(repoRoot, "feature-label"), "");
 
     expect(cleared).toEqual({ label: null });
     expect((await readWorktreeMeta(gitDir))?.label).toBeUndefined();
@@ -1617,7 +1663,7 @@ describe("LifecycleService", () => {
     const gitDir = git.resolveWorktreeGitDir(worktreePath);
     const paths = getWorktreeStoragePaths(gitDir);
 
-    await expect(lifecycle.setWorktreeLabel("feature-unmanaged-label", "Search ranking"))
+    await expect(lifecycle.setWorktreeLabel(await worktreeIdOf(repoRoot, "feature-unmanaged-label"), "Search ranking"))
       .rejects.toMatchObject({
         status: 409,
         message: "Worktree feature-unmanaged-label has no managed metadata to label",
@@ -1643,7 +1689,7 @@ describe("LifecycleService", () => {
     await lifecycle.createWorktree({ branch: "feature-profile", profile: "default" });
     tmux.commands.length = 0;
 
-    const result = await lifecycle.setWorktreeProfile("feature-profile", "full");
+    const result = await lifecycle.setWorktreeProfile(await worktreeIdOf(repoRoot, "feature-profile"), "full");
 
     expect(result).toEqual({ profile: "full", restarted: true });
 
@@ -1681,15 +1727,15 @@ describe("LifecycleService", () => {
     );
 
     await lifecycle.createWorktree({ branch: "feature-profile-closed", profile: "default" });
-    await lifecycle.closeWorktree("feature-profile-closed");
+    await lifecycle.closeWorktree(await worktreeIdOf(repoRoot, "feature-profile-closed"));
 
-    const result = await lifecycle.setWorktreeProfile("feature-profile-closed", "full");
+    const result = await lifecycle.setWorktreeProfile(await worktreeIdOf(repoRoot, "feature-profile-closed"), "full");
 
     expect(result).toEqual({ profile: "full", restarted: false });
     expect(tmux.listWindows()).toEqual([]);
 
     tmux.commands.length = 0;
-    await lifecycle.openWorktree("feature-profile-closed");
+    await lifecycle.openWorktree(await worktreeIdOf(repoRoot, "feature-profile-closed"));
 
     expect(tmux.listWindows()[0]?.paneCount).toBe(2);
     expect(tmux.commands.map((entry) => entry.command)).toContainEqual("bun run dev");
@@ -1711,7 +1757,7 @@ describe("LifecycleService", () => {
 
     await lifecycle.createWorktree({ branch: "feature-profile-docker", profile: "sandbox" });
 
-    const result = await lifecycle.setWorktreeProfile("feature-profile-docker", "full");
+    const result = await lifecycle.setWorktreeProfile(await worktreeIdOf(repoRoot, "feature-profile-docker"), "full");
 
     expect(result).toEqual({ profile: "full", restarted: true });
     expect(docker.removed).toEqual(["feature-profile-docker"]);
@@ -1741,7 +1787,7 @@ describe("LifecycleService", () => {
     tmux.commands.length = 0;
     tmux.createdWindows.length = 0;
 
-    const result = await lifecycle.setWorktreeProfile("feature-profile-same", "default");
+    const result = await lifecycle.setWorktreeProfile(await worktreeIdOf(repoRoot, "feature-profile-same"), "default");
 
     expect(result).toEqual({ profile: "default", restarted: false });
     expect(tmux.createdWindows).toEqual([]);
@@ -1756,7 +1802,7 @@ describe("LifecycleService", () => {
 
     await lifecycle.createWorktree({ branch: "feature-profile-unknown" });
 
-    await expect(lifecycle.setWorktreeProfile("feature-profile-unknown", "nope"))
+    await expect(lifecycle.setWorktreeProfile(await worktreeIdOf(repoRoot, "feature-profile-unknown"), "nope"))
       .rejects.toMatchObject({ status: 400, message: "Unknown profile: nope" });
 
     const worktreePath = join(repoRoot, "__worktrees", "feature-profile-unknown");
@@ -1884,8 +1930,8 @@ describe("LifecycleService", () => {
     );
     await Bun.write(paths.controlEnvPath, staleControlEnvText);
 
-    await lifecycle.closeWorktree("feature-sandbox-reopen");
-    await lifecycle.openWorktree("feature-sandbox-reopen");
+    await lifecycle.closeWorktree(await worktreeIdOf(repoRoot, "feature-sandbox-reopen"));
+    await lifecycle.openWorktree(await worktreeIdOf(repoRoot, "feature-sandbox-reopen"));
 
     const refreshedControlEnvText = await Bun.file(paths.controlEnvPath).text();
 
@@ -2311,7 +2357,7 @@ describe("LifecycleService", () => {
     const worktreePath = join(repoRoot, "__worktrees", "feature-dirty");
     await Bun.write(join(worktreePath, "README.md"), "# dirty\n");
 
-    await lifecycle.removeWorktree("feature-dirty");
+    await lifecycle.removeWorktree(await worktreeIdOf(repoRoot, "feature-dirty"));
 
     expect(hooks.calls.filter((call) => call.name === "preRemove")).toHaveLength(1);
     expect(new BunGitGateway().listWorktrees(repoRoot).some((entry) => entry.path === worktreePath)).toBe(false);
@@ -2350,7 +2396,7 @@ describe("LifecycleService", () => {
     portRegistrations.register({ projectDir, worktreeId: removed.worktreeId, label: "api" });
     portRegistrations.register({ projectDir, worktreeId: kept.worktreeId, label: "web" });
 
-    await lifecycle.removeWorktree("feature-ports-remove");
+    await lifecycle.removeWorktree(await worktreeIdOf(repoRoot, "feature-ports-remove"));
 
     expect(portRegistrations.list(projectDir, removed.worktreeId)).toEqual([]);
     expect(portRegistrations.list(projectDir, kept.worktreeId)).toEqual([{ label: "web", port: 4102, keep: false }]);
@@ -2374,7 +2420,7 @@ describe("LifecycleService", () => {
 
     await lifecycle.createWorktree({ branch: "feature-ahead" });
 
-    await lifecycle.removeWorktree("feature-ahead");
+    await lifecycle.removeWorktree(await worktreeIdOf(repoRoot, "feature-ahead"));
 
     expect(hooks.calls.filter((call) => call.name === "preRemove")).toHaveLength(1);
     expect(run(["git", "branch", "--list", "feature-ahead"], repoRoot)).toBe("");
@@ -2391,7 +2437,7 @@ describe("LifecycleService", () => {
     await lifecycle.createWorktree({ branch: "feature-prune-host" });
     await lifecycle.createWorktree({ branch: "feature-prune-docker", profile: "sandbox" });
     // feature-prune-host is closed (no tmux window); feature-prune-docker stays open.
-    await lifecycle.closeWorktree("feature-prune-host");
+    await lifecycle.closeWorktree(await worktreeIdOf(repoRoot, "feature-prune-host"));
 
     const result = await lifecycle.pruneWorktrees();
 
@@ -2437,7 +2483,7 @@ describe("LifecycleService", () => {
       profile: "sandbox",
     });
 
-    await lifecycle.removeWorktree("feature-remove-docker");
+    await lifecycle.removeWorktree(await worktreeIdOf(repoRoot, "feature-remove-docker"));
 
     expect(hooks.calls.some((call) =>
       call.name === "preRemove"
@@ -2477,7 +2523,7 @@ describe("LifecycleService", () => {
       baseBranch: "main",
     });
 
-    await lifecycle.openWorktree("feature-no-default-open");
+    await lifecycle.openWorktree(await worktreeIdOf(repoRoot, "feature-no-default-open"));
 
     const openedGitDir = new BunGitGateway().resolveWorktreeGitDir(unmanagedPath);
     expect((await readWorktreeMeta(openedGitDir))?.profile).toBe("slim");
@@ -2496,7 +2542,7 @@ describe("LifecycleService", () => {
     run(["git", "add", "README.md"], worktreePath);
     run(["git", "commit", "-m", "feature change"], worktreePath);
 
-    await lifecycle.mergeWorktree("feature-merge");
+    await lifecycle.mergeWorktree(await worktreeIdOf(repoRoot, "feature-merge"));
 
     expect(new BunGitGateway().listWorktrees(repoRoot).some((entry) => entry.path === worktreePath)).toBe(false);
     expect(run(["git", "branch", "--list", "feature-merge"], repoRoot)).toBe("");
@@ -2526,7 +2572,7 @@ describe("LifecycleService", () => {
     run(["git", "add", "README.md"], worktreePath);
     run(["git", "commit", "-m", "feature ahead change"], worktreePath);
 
-    await lifecycle.mergeWorktree("feature-merge-ahead");
+    await lifecycle.mergeWorktree(await worktreeIdOf(repoRoot, "feature-merge-ahead"));
 
     expect(hooks.calls.some((call) => call.name === "preRemove" && call.cwd === worktreePath)).toBe(true);
     expect(new BunGitGateway().listWorktrees(repoRoot).some((entry) => entry.path === worktreePath)).toBe(false);
@@ -2557,7 +2603,7 @@ describe("LifecycleService", () => {
     });
     expect((await readWorktreeMeta(gitDir))?.oneshot).toBeDefined();
 
-    const disarmed = await lifecycle.disarmOneshot("feature/disarm");
+    const disarmed = await lifecycle.disarmOneshot(await worktreeIdOf(repoRoot, "feature/disarm"));
 
     expect(disarmed).toBe(true);
     const after = await readWorktreeMeta(gitDir);
@@ -2567,7 +2613,7 @@ describe("LifecycleService", () => {
     expect(after?.startupEnvValues).toEqual(baseMeta.startupEnvValues);
 
     // Idempotent: a second call returns false because there is nothing to clear.
-    expect(await lifecycle.disarmOneshot("feature/disarm")).toBe(false);
+    expect(await lifecycle.disarmOneshot(await worktreeIdOf(repoRoot, "feature/disarm"))).toBe(false);
   });
 
   function makeTabLifecycle(
@@ -2597,7 +2643,7 @@ describe("LifecycleService", () => {
     const lifecycle = makeTabLifecycle(repoRoot, tmux, runtime);
 
     await lifecycle.createWorktree({ branch: "feature-fork" });
-    const { tab } = await lifecycle.createWorktreeTab("feature-fork");
+    const { tab } = await lifecycle.createWorktreeTab(await worktreeIdOf(repoRoot, "feature-fork"));
 
     expect(tab.kind).toBe("fork");
     expect(tab.tabId).toBe("fork-1");
@@ -2629,14 +2675,14 @@ describe("LifecycleService", () => {
     const lifecycle = makeTabLifecycle(repoRoot, tmux, runtime);
 
     await lifecycle.createWorktree({ branch: "feature-select" });
-    await lifecycle.createWorktreeTab("feature-select");
+    await lifecycle.createWorktreeTab(await worktreeIdOf(repoRoot, "feature-select"));
 
     const gitDir = new BunGitGateway().resolveWorktreeGitDir(join(repoRoot, "__worktrees", "feature-select"));
     const beforeRootPaneId = (await readWorktreeMeta(gitDir))?.tabs?.find((entry) => entry.tabId === "root")?.paneId;
     if (!beforeRootPaneId) throw new Error("expected root pane id after fork");
 
     tmux.swaps.length = 0;
-    await lifecycle.selectWorktreeTab("feature-select", "root");
+    await lifecycle.selectWorktreeTab(await worktreeIdOf(repoRoot, "feature-select"), "root");
 
     expect(tmux.swaps).toHaveLength(1);
     expect(tmux.swaps[0]?.source).toBe(beforeRootPaneId);
@@ -2652,7 +2698,7 @@ describe("LifecycleService", () => {
     const lifecycle = makeTabLifecycle(repoRoot, tmux, runtime);
 
     await lifecycle.createWorktree({ branch: "feature-del" });
-    const { tab } = await lifecycle.createWorktreeTab("feature-del");
+    const { tab } = await lifecycle.createWorktreeTab(await worktreeIdOf(repoRoot, "feature-del"));
     if (!tab.paneId) throw new Error("expected fork pane id");
 
     const gitDir = new BunGitGateway().resolveWorktreeGitDir(join(repoRoot, "__worktrees", "feature-del"));
@@ -2660,7 +2706,7 @@ describe("LifecycleService", () => {
     if (!rootPaneId) throw new Error("expected root pane id after fork");
 
     tmux.swaps.length = 0;
-    await lifecycle.deleteWorktreeTab("feature-del", "fork-1");
+    await lifecycle.deleteWorktreeTab(await worktreeIdOf(repoRoot, "feature-del"), "fork-1");
 
     // The deleted fork was active/on-screen, so the root is swapped back before its pane is killed.
     expect(tmux.swaps).toHaveLength(1);
@@ -2680,7 +2726,7 @@ describe("LifecycleService", () => {
 
     await lifecycle.createWorktree({ branch: "feature-root-del" });
 
-    await expect(lifecycle.deleteWorktreeTab("feature-root-del", "root")).rejects.toMatchObject({
+    await expect(lifecycle.deleteWorktreeTab(await worktreeIdOf(repoRoot, "feature-root-del"), "root")).rejects.toMatchObject({
       status: 400,
       message: "The root tab cannot be deleted",
     });
@@ -2693,17 +2739,17 @@ describe("LifecycleService", () => {
     const lifecycle = makeTabLifecycle(repoRoot, tmux, runtime);
 
     await lifecycle.createWorktree({ branch: "feature-restore" });
-    await lifecycle.createWorktreeTab("feature-restore");
+    await lifecycle.createWorktreeTab(await worktreeIdOf(repoRoot, "feature-restore"));
 
     const session = buildProjectSessionName(repoRoot);
     const parkingWindow = buildWorktreeParkingWindowName("feature-restore");
 
-    await lifecycle.closeWorktree("feature-restore");
+    await lifecycle.closeWorktree(await worktreeIdOf(repoRoot, "feature-restore"));
     // Closing must tear down the parking window, not just the main agent window.
     expect(tmux.hasWindow(session, parkingWindow)).toBe(false);
 
     tmux.swaps.length = 0;
-    await lifecycle.openWorktree("feature-restore");
+    await lifecycle.openWorktree(await worktreeIdOf(repoRoot, "feature-restore"));
 
     // The parking window is rebuilt and the previously active fork is restored on-screen.
     expect(tmux.hasWindow(session, parkingWindow)).toBe(true);
@@ -2753,7 +2799,7 @@ describe("LifecycleService", () => {
     );
 
     await lifecycle.createWorktree({ branch: "feature-codex-tab-refresh" });
-    await lifecycle.createWorktreeTab("feature-codex-tab-refresh");
+    await lifecycle.createWorktreeTab(await worktreeIdOf(repoRoot, "feature-codex-tab-refresh"));
 
     const session = buildProjectSessionName(repoRoot);
     const parkingWindow = buildWorktreeParkingWindowName("feature-codex-tab-refresh");
@@ -2781,7 +2827,7 @@ describe("LifecycleService", () => {
 
     tmux.swaps.length = 0;
     tmux.commands.length = 0;
-    await lifecycle.refreshAgentTerminal("feature-codex-tab-refresh");
+    await lifecycle.refreshAgentTerminal(await worktreeIdOf(repoRoot, "feature-codex-tab-refresh"));
 
     // The parking window is rebuilt from a clean slate — exactly one fork pane, not a
     // duplicate stacked on top of the pre-refresh pane.
@@ -2803,7 +2849,7 @@ describe("LifecycleService", () => {
     // The previously active fork is brought back on-screen, and a subsequent select against
     // the refreshed (live) pane ids resolves instead of throwing on a stale pane.
     expect(tmux.swaps.length).toBeGreaterThan(0);
-    await lifecycle.selectWorktreeTab("feature-codex-tab-refresh", "root");
+    await lifecycle.selectWorktreeTab(await worktreeIdOf(repoRoot, "feature-codex-tab-refresh"), "root");
     expect((await readWorktreeMeta(gitDir))?.activeTabId).toBe("root");
   });
 
@@ -2814,12 +2860,12 @@ describe("LifecycleService", () => {
     const lifecycle = makeTabLifecycle(repoRoot, tmux, runtime);
 
     await lifecycle.createWorktree({ branch: "feature-remove" });
-    await lifecycle.createWorktreeTab("feature-remove");
+    await lifecycle.createWorktreeTab(await worktreeIdOf(repoRoot, "feature-remove"));
 
     const session = buildProjectSessionName(repoRoot);
     expect(tmux.hasWindow(session, buildWorktreeParkingWindowName("feature-remove"))).toBe(true);
 
-    await lifecycle.removeWorktree("feature-remove");
+    await lifecycle.removeWorktree(await worktreeIdOf(repoRoot, "feature-remove"));
 
     // Both the main agent window and the parking window must be gone — no orphaned panes left
     // running against the deleted worktree directory.
