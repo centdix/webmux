@@ -41,8 +41,8 @@ describe("project-scoped network calls", () => {
     await api.projectApi("alpha").fetchWorktrees();
     await api.projectApi("beta").fetchWorktrees();
     await api.projectApi("alpha").fetchWorktrees();
-    api.connectWorktreeConversationStream("beta", "feat/x", { onEvent: () => {}, onError: () => {} });
-    api.connectWorktreeConversationStream("alpha", "feat/x", { onEvent: () => {}, onError: () => {} });
+    api.connectWorktreeConversationStream("beta", "wt-1", { onEvent: () => {}, onError: () => {} });
+    api.connectWorktreeConversationStream("alpha", "wt-1", { onEvent: () => {}, onError: () => {} });
 
     expect(fetchMock.mock.calls.map(([input]) => urlOf(input))).toEqual([
       "/api/projects/alpha/worktrees",
@@ -50,8 +50,8 @@ describe("project-scoped network calls", () => {
       "/api/projects/alpha/worktrees",
     ]);
     expect(urls).toEqual([
-      `ws://${window.location.host}/api/projects/beta/ws/agents/worktrees/feat%2Fx`,
-      `ws://${window.location.host}/api/projects/alpha/ws/agents/worktrees/feat%2Fx`,
+      `ws://${window.location.host}/api/projects/beta/ws/agents/worktrees/wt-1`,
+      `ws://${window.location.host}/api/projects/alpha/ws/agents/worktrees/wt-1`,
     ]);
     expect(api.projectApi("alpha")).toBe(api.projectApi("alpha"));
     expect(api.projectApi("alpha")).not.toBe(api.projectApi("beta"));
@@ -68,11 +68,11 @@ describe("project-scoped network calls", () => {
     expect(fetchMock.mock.calls.map(([input]) => urlOf(input))).toEqual(["/api/agents"]);
   });
 
-  it("terminalSocketUrl points at the project's terminal socket", async () => {
+  it("terminalSocketUrl points at the project's terminal socket for the worktree id", async () => {
     const api = await loadApi();
 
-    expect(api.terminalSocketUrl("myproject", "feat/x")).toBe(
-      `ws://${window.location.host}/api/projects/myproject/ws/feat%2Fx`,
+    expect(api.terminalSocketUrl("myproject", "wt-1")).toBe(
+      `ws://${window.location.host}/api/projects/myproject/ws/wt-1`,
     );
   });
 
@@ -85,12 +85,39 @@ describe("project-scoped network calls", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const api = await loadApi();
-    await api.uploadFiles("myproject", "feat/x", [new File(["a"], "a.txt")]);
+    await api.uploadFiles("myproject", "wt-1", [new File(["a"], "a.txt")]);
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/projects/myproject/worktrees/feat%2Fx/upload",
+      "/api/projects/myproject/worktrees/wt-1/upload",
       expect.objectContaining({ method: "POST" }),
     );
+  });
+
+  it("addresses tab and agents conversation calls by worktree id", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) =>
+      urlOf(input).endsWith("/tabs") ? new Response(JSON.stringify({ tab: {} }), { status: 201, headers: { "content-type": "application/json" } }) : jsonResponse({ ok: true })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const api = await loadApi();
+    await api.createWorktreeTab("myproject", "wt-1");
+    await api.selectWorktreeTab("myproject", "wt-1", "fork-1");
+    await api.deleteWorktreeTab("myproject", "wt-1", "fork-1");
+    await api.attachWorktreeConversation("myproject", "wt-1");
+    await api.fetchWorktreeConversationHistory("myproject", "wt-1");
+    await api.sendWorktreeConversationMessage("myproject", "wt-1", { text: "hi" });
+    await api.interruptWorktreeConversation("myproject", "wt-1");
+
+    const base = "/api/projects/myproject";
+    expect(fetchMock.mock.calls.map(([input]) => urlOf(input))).toEqual([
+      `${base}/worktrees/wt-1/tabs`,
+      `${base}/worktrees/wt-1/tabs/fork-1/select`,
+      `${base}/worktrees/wt-1/tabs/fork-1`,
+      `${base}/agents/worktrees/wt-1/attach`,
+      `${base}/agents/worktrees/wt-1/history`,
+      `${base}/agents/worktrees/wt-1/messages`,
+      `${base}/agents/worktrees/wt-1/interrupt`,
+    ]);
   });
 });
 

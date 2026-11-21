@@ -11,6 +11,7 @@
 
   let {
     project,
+    worktreeId,
     branch,
     ideUrl = null,
     onclose,
@@ -26,7 +27,7 @@
   $effect(() => {
     loading = true;
     error = "";
-    projectApi(project).fetchWorktreeDiff({ params: { name: branch } })
+    projectApi(project).fetchWorktreeDiff({ params: { id: worktreeId } })
       .then((res) => {
         uncommitted = res.uncommitted;
         uncommittedTruncated = res.uncommittedTruncated;

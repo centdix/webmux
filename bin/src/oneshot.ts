@@ -437,7 +437,7 @@ const MAX_CONSECUTIVE_RECONNECTS = 30;
 const RECONNECT_WARN_AT: readonly [number, number] = [3, 15];
 
 function streamConversation(
-  branch: string,
+  worktreeId: string,
   port: number,
   state: ConversationPrintState,
   stderr: (line: string) => void,
@@ -450,7 +450,7 @@ function streamConversation(
 
   const connect = (): void => {
     if (closed) return;
-    const url = `ws://localhost:${port}${projectApiBasePath(requireOneshotProject())}${projectApiPaths.streamAgentsWorktreeConversation.replace(":name", encodeURIComponent(branch))}`;
+    const url = `ws://localhost:${port}${projectApiBasePath(requireOneshotProject())}${projectApiPaths.streamAgentsWorktreeConversation.replace(":id", encodeURIComponent(worktreeId))}`;
     const ws = new WebSocket(url);
     socket = ws;
     ws.addEventListener("open", () => {
@@ -701,7 +701,7 @@ function printConversationHistory(
  * deltas.
  */
 function pollConversationHistory(
-  branch: string,
+  worktreeId: string,
   port: number,
   state: ConversationPrintState,
 ): { stop: () => void } {
@@ -712,7 +712,7 @@ function pollConversationHistory(
   const tick = async (): Promise<void> => {
     if (stopped) return;
     try {
-      const response = await api.fetchAgentsWorktreeConversationHistory({ params: { name: branch } });
+      const response = await api.fetchAgentsWorktreeConversationHistory({ params: { id: worktreeId } });
       printNewMessages(state, response.conversation.messages);
     } catch {
       // History may briefly 4xx during initialization — keep polling.
@@ -995,7 +995,7 @@ export async function runOneshot(parsed: ParsedOneshotCommand, port: number): Pr
   // Print initial history once before opening the WS so the user sees their prompt right away.
   if (streamsConversation) {
     try {
-      const initial = await api.fetchAgentsWorktreeConversationHistory({ params: { name: branch } });
+      const initial = await api.fetchAgentsWorktreeConversationHistory({ params: { id: worktreeId } });
       printConversationHistory(initial, conversationState);
     } catch {
       // History may not exist yet on a fresh worktree — fall through to streaming.
@@ -1021,7 +1021,7 @@ export async function runOneshot(parsed: ParsedOneshotCommand, port: number): Pr
   };
 
   if (streamsConversation) {
-    stream = streamConversation(branch, port, conversationState, stderr, (reason) => {
+    stream = streamConversation(worktreeId, port, conversationState, stderr, (reason) => {
       stderr(`[${timestamp()}] [fatal] ${reason}`);
       finalize(1);
     });
@@ -1030,7 +1030,7 @@ export async function runOneshot(parsed: ParsedOneshotCommand, port: number): Pr
   // so polling there just spams the server every 2s for no benefit. Claude also
   // streams over WS now, but polling remains a fallback for terminal-routed runs.
   if (ready.worktree.agentName === "claude") {
-    historyPoller = pollConversationHistory(branch, port, conversationState);
+    historyPoller = pollConversationHistory(worktreeId, port, conversationState);
   }
 
   const pollState: PollState = {

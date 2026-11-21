@@ -2726,6 +2726,38 @@ describe("LifecycleService", () => {
     expect(meta?.activeTabId).toBe("root");
   });
 
+  it("finds a worktree's windows for tab operations after its branch is renamed", async () => {
+    const repoRoot = await initRepo();
+    const runtime = new ProjectRuntime();
+    const tmux = new FakeTmuxGateway();
+    const lifecycle = makeTabLifecycle(repoRoot, tmux, runtime);
+    const { worktreeId } = await lifecycle.createWorktree({ branch: "feature-tab-a" });
+    const worktreePath = join(repoRoot, "__worktrees", "feature-tab-a");
+    const session = buildProjectSessionName(repoRoot);
+    const slotOf = (branch: string): string => `${session}:${buildWorktreeWindowName(branch)}.0`;
+    const parkingWindows = (): TmuxWindowSummary[] =>
+      tmux.listWindows().filter((window) => window.worktreeId === worktreeId && window.role === "parking");
+
+    // Each operation runs before a reconcile heals the window names to the new branch.
+    run(["git", "branch", "-m", "feature-tab-b"], worktreePath);
+    const { tab } = await lifecycle.createWorktreeTab(worktreeId);
+    expect(tmux.swaps.at(-1)).toEqual({ source: tab.paneId ?? "", destination: slotOf("feature-tab-a") });
+
+    run(["git", "branch", "-m", "feature-tab-c"], worktreePath);
+    await lifecycle.selectWorktreeTab(worktreeId, "root");
+    expect(tmux.swaps.at(-1)?.destination).toBe(slotOf("feature-tab-b"));
+
+    run(["git", "branch", "-m", "feature-tab-d"], worktreePath);
+    await lifecycle.createWorktreeTab(worktreeId);
+    expect(parkingWindows()).toHaveLength(1);
+
+    run(["git", "branch", "-m", "feature-tab-e"], worktreePath);
+    await lifecycle.deleteWorktreeTab(worktreeId, "fork-2");
+    expect(tmux.swaps.at(-1)?.destination).toBe(slotOf("feature-tab-d"));
+    const meta = await readWorktreeMeta(new BunGitGateway().resolveWorktreeGitDir(worktreePath));
+    expect(meta?.tabs?.map((entry) => entry.tabId)).toEqual(["root", "fork-1"]);
+  });
+
   it("rejects deleting the root tab", async () => {
     const repoRoot = await initRepo();
     const runtime = new ProjectRuntime();

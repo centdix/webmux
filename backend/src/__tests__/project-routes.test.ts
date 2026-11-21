@@ -18,8 +18,8 @@ describe("mountProjectRoutes", () => {
 
     expect(mounted).toEqual({
       "/api/projects/webmux/worktrees": "worktrees",
-      "/api/projects/webmux/ws/:worktree": "terminal-ws",
-      "/api/projects/webmux/ws/agents/worktrees/:name": "agents-ws",
+      "/api/projects/webmux/ws/:id": "terminal-ws",
+      "/api/projects/webmux/ws/agents/worktrees/:id": "agents-ws",
     });
   });
 

@@ -131,15 +131,15 @@ export class WorktreeActions {
   }
 
   createTab(ref: WorktreeRef): Promise<void> {
-    return this.#tabAction("create tab", () => createWorktreeTab(ref.project, this.#deps.store.branchOf(ref)));
+    return this.#tabAction("create tab", () => createWorktreeTab(ref.project, ref.id));
   }
 
   selectTab(ref: WorktreeRef, tabId: string): Promise<void> {
-    return this.#tabAction("switch tab", () => selectWorktreeTab(ref.project, this.#deps.store.branchOf(ref), tabId));
+    return this.#tabAction("switch tab", () => selectWorktreeTab(ref.project, ref.id, tabId));
   }
 
   deleteTab(ref: WorktreeRef, tabId: string): Promise<void> {
-    return this.#tabAction("delete tab", () => deleteWorktreeTab(ref.project, this.#deps.store.branchOf(ref), tabId));
+    return this.#tabAction("delete tab", () => deleteWorktreeTab(ref.project, ref.id, tabId));
   }
 
   /** Throws so the Linear post dialog can show the error. */

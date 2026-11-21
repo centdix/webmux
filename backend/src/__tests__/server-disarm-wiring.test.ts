@@ -43,20 +43,21 @@ describe("server.ts disarm-on-interaction wiring", () => {
   });
 });
 
-/** Source-level regression test: a worktree being created or removed is missing from (or about
- *  to leave) the runtime, so the name → id translation would answer 404. The busy guard must run
- *  first so those requests keep getting a 409. */
-describe("server.ts busy guard before name resolution", () => {
+/** Source-level regression test: a worktree being created is missing from the runtime, so the
+ *  terminal WebSocket must check its id with `resolveRouteWorktree` (409 while being created) and
+ *  then `resolveTerminalWorktree` (409 while removed / tabs mutating) before attaching. */
+describe("server.ts terminal WebSocket attaches by id", () => {
   const serverPath = join(import.meta.dir, "..", "server.ts");
 
-  it("checks the branch is not busy before resolving a terminal attach", async () => {
+  it("upgrades the terminal and agents WebSockets with the worktree id from the route", async () => {
     const source = await Bun.file(serverPath).text();
-    expect(source).toMatch(/ensureBranchNotBusy\(branch\);\s*const terminalWorktree = await resolveTerminalWorktree\(await resolveWorktreeIdByName\(branch\)\)/);
+    expect(source).toMatch(/\[projectApiPaths\.streamTerminal\]: \(req, server\) => \{\s*const parsed = parseParams\(req\.params, WorktreeIdParamsSchema\);[\s\S]*?data: \{ kind: "terminal", prefix: instancePrefix, worktreeId,/);
+    expect(source).toMatch(/\[projectApiPaths\.streamAgentsWorktreeConversation\]: \(req, server\) => \{\s*const parsed = parseParams\(req\.params, WorktreeIdParamsSchema\);[\s\S]*?data: \{ kind: "agents", prefix: instancePrefix, worktreeId,/);
   });
 
-  it("checks the branch is not busy before resolving a sent prompt", async () => {
+  it("resolves the route id before resolving the terminal attach target", async () => {
     const source = await Bun.file(serverPath).text();
-    expect(source).toMatch(/async function apiSendPrompt\(name: string, req: Request\): Promise<Response> \{\s*ensureBranchNotBusy\(name\);[\s\S]*?resolveWorktreeIdByName\(name\)/);
+    expect(source).toMatch(/const terminalWorktree = await resolveTerminalWorktree\(\(await resolveRouteWorktree\(worktreeId\)\)\.worktreeId\)/);
   });
 });
 
@@ -75,19 +76,32 @@ describe("server.ts id routes resolve the worktree first", () => {
     "apiSetWorktreeLabel",
     "apiSetWorktreeProfile",
     "apiMergeWorktree",
+    "apiSendPrompt",
+    "apiCreateWorktreeTab",
+    "apiSelectWorktreeTab",
+    "apiDeleteWorktreeTab",
   ];
 
   it.each(expected)("%s resolves the id, then guards its branch", async (fn) => {
     const source = await Bun.file(serverPath).text();
     const pattern = new RegExp(
-      `async function ${fn}\\(id: string(, req: Request)?\\): Promise<Response> \\{\\s*`
+      `async function ${fn}\\(id: string(, req: Request|, tabId: string)?\\): Promise<Response> \\{\\s*`
         + `const \\{ worktreeId, branch \\} = await resolveRouteWorktree\\(id\\);\\s*`
         + `(ensureBranchNotBusy|return withMutatingTab|return withRemovingBranch)\\(branch`,
     );
     expect(source).toMatch(pattern);
   });
 
-  it.each(["apiPostWorktreeToLinear", "apiSyncWorktreePrs"])("%s resolves the id", async (fn) => {
+  it.each([
+    "apiPostWorktreeToLinear",
+    "apiSyncWorktreePrs",
+    "apiGetWorktreeDiff",
+    "apiUploadFiles",
+    "apiAttachAgentsWorktree",
+    "apiGetAgentsWorktreeHistory",
+    "apiSendAgentsWorktreeMessage",
+    "apiInterruptAgentsWorktree",
+  ])("%s resolves the id", async (fn) => {
     const source = await Bun.file(serverPath).text();
     expect(source).toMatch(new RegExp(`async function ${fn}\\(id: string[^)]*\\): Promise<Response> \\{[\\s\\S]*?await resolveRouteWorktree\\(id\\)`));
   });

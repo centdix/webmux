@@ -1078,7 +1078,7 @@
       {#key selectedTerminalKey}
         <Terminal
           project={activeProject}
-          worktree={selectedWorktree!.branch}
+          worktreeId={selectedWorktree!.id}
           {isMobile}
           initialPane={isMobile ? activePane : undefined}
           {terminalTheme}
@@ -1275,7 +1275,7 @@
   <CiDetailsDialog
     project={activeProject}
     pr={ciDetailsPr}
-    branch={selectedWorktree?.branch ?? ""}
+    worktreeId={selectedWorktree?.id ?? ""}
     onclose={() => (ciDetailsPr = null)}
     onfixsuccess={() => {
       ciDetailsPr = null;
@@ -1287,7 +1287,7 @@
   <CommentReviewDialog
     project={activeProject}
     pr={commentReviewPr}
-    branch={selectedWorktree?.branch ?? ""}
+    worktreeId={selectedWorktree?.id ?? ""}
     onclose={() => (commentReviewPr = null)}
     onsendsuccess={() => {
       commentReviewPr = null;
@@ -1298,6 +1298,7 @@
 {#if showDiffDialog && selectedWorktree && DiffDialogComponent}
   <DiffDialogComponent
     project={activeProject}
+    worktreeId={selectedWorktree.id}
     branch={selectedWorktree.branch}
     ideUrl={makeIdeUrl(selectedWorktree?.dir, sshHost, config.ide)}
     onclose={() => (showDiffDialog = false)}

@@ -142,11 +142,11 @@ describe("Terminal reconnect", () => {
   });
 
   it("reconnects immediately after a visible-tab socket close", () => {
-    render(Terminal, { props: { project: "myproject", worktree: "feature/reconnect", terminalTheme: getTheme("github-dark").terminal } });
+    render(Terminal, { props: { project: "myproject", worktreeId: "wt-reconnect", terminalTheme: getTheme("github-dark").terminal } });
 
     expect(MockWebSocket.instances).toHaveLength(1);
     const firstSocket = MockWebSocket.instances[0]!;
-    expect(firstSocket.url).toBe(`ws://${location.host}/api/projects/myproject/ws/feature%2Freconnect`);
+    expect(firstSocket.url).toBe(`ws://${location.host}/api/projects/myproject/ws/wt-reconnect`);
     firstSocket.emitOpen();
     firstSocket.emitMessage({ type: "attached" });
 
@@ -156,6 +156,8 @@ describe("Terminal reconnect", () => {
 
     expect(MockWebSocket.instances).toHaveLength(2);
     const secondSocket = MockWebSocket.instances[1]!;
+    // Reconnects to the same worktree by id, whatever its branch is now.
+    expect(secondSocket.url).toBe(firstSocket.url);
     secondSocket.emitOpen();
     secondSocket.emitMessage({ type: "attached" });
 
@@ -165,7 +167,7 @@ describe("Terminal reconnect", () => {
   });
 
   it("only retries once automatically for a visible-tab close", () => {
-    render(Terminal, { props: { project: "myproject", worktree: "feature/retry-once", terminalTheme: getTheme("github-dark").terminal } });
+    render(Terminal, { props: { project: "myproject", worktreeId: "wt-retry-once", terminalTheme: getTheme("github-dark").terminal } });
 
     const firstSocket = MockWebSocket.instances[0]!;
     firstSocket.emitOpen();
@@ -182,7 +184,7 @@ describe("Terminal reconnect", () => {
   });
 
   it("waits for the tab to become visible before reconnecting hidden closes", () => {
-    render(Terminal, { props: { project: "myproject", worktree: "feature/visible", terminalTheme: getTheme("github-dark").terminal } });
+    render(Terminal, { props: { project: "myproject", worktreeId: "wt-visible", terminalTheme: getTheme("github-dark").terminal } });
 
     const firstSocket = MockWebSocket.instances[0]!;
     firstSocket.emitOpen();
@@ -204,7 +206,7 @@ describe("Terminal reconnect", () => {
     const rendered = render(Terminal, {
       props: {
         project: "myproject",
-        worktree: "feature/theme",
+        worktreeId: "wt-theme",
         terminalTheme: initialTheme,
       },
     });
@@ -213,7 +215,7 @@ describe("Terminal reconnect", () => {
     expect(terminal.options.theme).toBe(initialTheme);
 
     await rendered.rerender({
-      worktree: "feature/theme",
+      worktreeId: "wt-theme",
       terminalTheme: nextTheme,
     });
 
@@ -225,7 +227,7 @@ describe("Terminal reconnect", () => {
     render(Terminal, {
       props: {
         project: "myproject",
-        worktree: "feature/stale",
+        worktreeId: "wt-stale",
         terminalTheme: getTheme("github-dark").terminal,
         agentTerminalStale: true,
         onrefreshagentterminal,

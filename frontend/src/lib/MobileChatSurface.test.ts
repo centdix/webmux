@@ -144,12 +144,12 @@ describe("MobileChatSurface", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     await waitFor(() => {
-      expect(sendWorktreeConversationMessage).toHaveBeenCalledWith("myproject", "feature/mobile-chat", { text: "Ship it" });
+      expect(sendWorktreeConversationMessage).toHaveBeenCalledWith("myproject", "wt-mobile-chat", { text: "Ship it" });
     });
     await waitFor(() => {
       expect(connectWorktreeConversationStream).toHaveBeenCalledWith(
         "myproject",
-        "feature/mobile-chat",
+        "wt-mobile-chat",
         expect.any(Object),
       );
     });
@@ -261,12 +261,12 @@ describe("MobileChatSurface", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     await waitFor(() => {
-      expect(sendWorktreeConversationMessage).toHaveBeenCalledWith("myproject", "feature/mobile-chat", { text: "Ship it" });
+      expect(sendWorktreeConversationMessage).toHaveBeenCalledWith("myproject", "wt-mobile-chat", { text: "Ship it" });
     });
     await vi.advanceTimersByTimeAsync(1000);
 
     await waitFor(() => {
-      expect(fetchWorktreeConversationHistory).toHaveBeenCalledWith("myproject", "feature/mobile-chat");
+      expect(fetchWorktreeConversationHistory).toHaveBeenCalledWith("myproject", "wt-mobile-chat");
     });
     await screen.findByText("Done from terminal");
   });
@@ -299,7 +299,7 @@ describe("MobileChatSurface", () => {
     await waitFor(() => {
       expect(connectWorktreeConversationStream).toHaveBeenCalledWith(
         "myproject",
-        "feature/mobile-chat",
+        "wt-mobile-chat",
         expect.any(Object),
       );
     });
@@ -340,7 +340,7 @@ describe("MobileChatSurface", () => {
     await waitFor(() => {
       expect(connectWorktreeConversationStream).toHaveBeenCalledWith(
         "myproject",
-        "feature/mobile-chat",
+        "wt-mobile-chat",
         expect.any(Object),
       );
     });
@@ -372,7 +372,7 @@ describe("MobileChatSurface", () => {
     await waitFor(() => {
       expect(connectWorktreeConversationStream).toHaveBeenCalledWith(
         "myproject",
-        "feature/mobile-chat",
+        "wt-mobile-chat",
         expect.any(Object),
       );
     });
@@ -415,7 +415,7 @@ describe("MobileChatSurface", () => {
     await waitFor(() => {
       expect(connectWorktreeConversationStream).toHaveBeenCalledWith(
         "myproject",
-        "feature/mobile-chat",
+        "wt-mobile-chat",
         expect.any(Object),
       );
     });
@@ -450,7 +450,7 @@ describe("MobileChatSurface", () => {
     await waitFor(() => {
       expect(connectWorktreeConversationStream).toHaveBeenCalledWith(
         "myproject",
-        "feature/mobile-chat",
+        "wt-mobile-chat",
         expect.any(Object),
       );
     });
@@ -500,7 +500,7 @@ describe("MobileChatSurface", () => {
     await waitFor(() => {
       expect(connectWorktreeConversationStream).toHaveBeenCalledWith(
         "myproject",
-        "feature/mobile-chat",
+        "wt-mobile-chat",
         expect.any(Object),
       );
     });
@@ -606,7 +606,7 @@ describe("MobileChatSurface", () => {
     // Polling surfaces the terminal claude's flushed response live.
     await vi.advanceTimersByTimeAsync(1000);
     await waitFor(() => {
-      expect(fetchWorktreeConversationHistory).toHaveBeenCalledWith("myproject", "feature/mobile-chat");
+      expect(fetchWorktreeConversationHistory).toHaveBeenCalledWith("myproject", "wt-mobile-chat");
     });
     await screen.findByText("Done from terminal");
 

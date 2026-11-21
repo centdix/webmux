@@ -13,13 +13,13 @@
   let {
     project,
     pr,
-    branch,
+    worktreeId,
     onclose,
     onsendsuccess,
   }: {
     project: string;
     pr: PrEntry;
-    branch: string;
+    worktreeId: string;
     onclose: () => void;
     onsendsuccess: () => void;
   } = $props();
@@ -73,7 +73,7 @@
   }
 
   async function handleSend(): Promise<void> {
-    if (!branch || noneSelected) return;
+    if (!worktreeId || noneSelected) return;
     sending = true;
     sendError = "";
     const preamble =
@@ -89,7 +89,7 @@
       .join("\n\n");
     try {
       await projectApi(project).sendWorktreePrompt({
-        params: { name: branch },
+        params: { id: worktreeId },
         body: {
           text: normalizeTextForPrompt(content, 20000),
           preamble,

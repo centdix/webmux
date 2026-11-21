@@ -22,33 +22,57 @@ describe("createProjectApi", () => {
     });
 
     await api.sendWorktreePrompt({
-      params: { name: "feature/search" },
+      params: { id: "feature/search" },
       body: { text: "Fix the failing tests" },
     });
 
     expect(paths).toEqual(["https://example.com/api/projects/myproject/worktrees/feature%2Fsearch/send"]);
   });
 
-  it("addresses worktree ports by id under /worktree-ids, apart from the branch routes", async () => {
+  it("addresses worktree content routes by worktree id", async () => {
     const calls: string[] = [];
     const api = createProjectApi("myproject", {
       origin: "https://example.com",
       api: async ({ path, method }) => {
         calls.push(`${method} ${path}`);
-        if (method === "GET") return success({ ports: [] });
-        if (method === "DELETE") return success({ ok: true });
-        return success({ label: "web", port: 4101, keep: false });
+        return path.endsWith("/tabs") ? { ...success({ tab: {} }), status: 201 } : success({ ok: true });
       },
     });
+    const params = { id: "wt_1" };
 
-    await api.registerWorktreePortById({ params: { id: "wt_1" }, body: { label: "web" } });
-    await api.fetchWorktreePortsById({ params: { id: "wt_1" } });
-    await api.deleteWorktreePortById({ params: { id: "wt_1", label: "web" } });
+    await api.sendWorktreePrompt({ params, body: { text: "hi" } });
+    await api.createWorktreeTab({ params });
+    await api.selectWorktreeTab({ params: { id: "wt_1", tabId: "fork-1" } });
+    await api.deleteWorktreeTab({ params: { id: "wt_1", tabId: "fork-1" } });
+    await api.registerWorktreePort({ params, body: { label: "web" } });
+    await api.fetchWorktreePorts({ params });
+    await api.deleteWorktreePort({ params: { id: "wt_1", label: "web" } });
+    await api.fetchWorktreeDiff({ params });
 
+    const base = "https://example.com/api/projects/myproject/worktrees/wt_1";
     expect(calls).toEqual([
-      "POST https://example.com/api/projects/myproject/worktree-ids/wt_1/ports",
-      "GET https://example.com/api/projects/myproject/worktree-ids/wt_1/ports",
-      "DELETE https://example.com/api/projects/myproject/worktree-ids/wt_1/ports/web",
+      `POST ${base}/send`,
+      `POST ${base}/tabs`,
+      `POST ${base}/tabs/fork-1/select`,
+      `DELETE ${base}/tabs/fork-1`,
+      `POST ${base}/ports`,
+      `GET ${base}/ports`,
+      `DELETE ${base}/ports/web`,
+      `GET ${base}/diff`,
+    ]);
+    expect(projectApiPaths.uploadWorktreeFiles).toBe("/worktrees/:id/upload");
+    expect(projectApiPaths.streamTerminal).toBe("/ws/:id");
+    expect(projectApiPaths.streamAgentsWorktreeConversation).toBe("/ws/agents/worktrees/:id");
+    expect([
+      projectApiPaths.attachAgentsWorktreeConversation,
+      projectApiPaths.fetchAgentsWorktreeConversationHistory,
+      projectApiPaths.sendAgentsWorktreeConversationMessage,
+      projectApiPaths.interruptAgentsWorktreeConversation,
+    ]).toEqual([
+      "/agents/worktrees/:id/attach",
+      "/agents/worktrees/:id/history",
+      "/agents/worktrees/:id/messages",
+      "/agents/worktrees/:id/interrupt",
     ]);
   });
 
