@@ -18,7 +18,7 @@
     type OverflowStatusBarStatus,
   } from "./worktree-list";
   import { attentionLabel, attentionOf, creatingLabel, rowPr, type Attention } from "./worktree-status";
-  import { worktreeKey } from "./worktree-ref";
+  import { refOf, worktreeKey } from "./worktree-ref";
 
   type RowPosition = "above" | "visible" | "below";
 
@@ -110,7 +110,7 @@
 
   function runMenuAction(ref: WorktreeRef, action: (ref: WorktreeRef) => void): void {
     menu = null;
-    action({ project: ref.project, branch: ref.branch });
+    action(refOf(ref));
   }
 
   let listEl = $state<HTMLDivElement | null>(null);
@@ -400,7 +400,7 @@
         onclick={() => {
           if (!target) return;
           menu = null;
-          onselect({ project: target.wt.project, branch: target.wt.branch });
+          onselect(refOf(target.wt));
         }}
         oncontextmenu={(event: MouseEvent) => {
           if (target) openMenu(event, target.key);

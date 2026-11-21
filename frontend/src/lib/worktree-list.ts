@@ -1,6 +1,6 @@
 import type { ActiveListRow, PendingCreationInfo, ProjectListRows, WorktreeInfo, WorktreeListRow } from "./types";
 import { searchMatch } from "./utils";
-import { worktreeKey, worktreeRowKey } from "./worktree-ref";
+import { worktreeKey } from "./worktree-ref";
 
 function parentBranchOf(worktree: WorktreeInfo, worktreesByBranch: Map<string, WorktreeInfo>): string | null {
   if (!worktree.baseBranch || worktree.baseBranch === worktree.branch) {
@@ -117,7 +117,7 @@ export function buildProjectListRows(
 /** A row's `{#each}` key: its worktree id, which a pending creation already
  *  has, so the row keeps its element once the worktree exists. */
 export function listRowKey(row: ActiveListRow): string {
-  return worktreeRowKey(row.kind === "pending" ? row.pending : row.worktree);
+  return worktreeKey(row.kind === "pending" ? row.pending : row.worktree);
 }
 
 /** The rows that are worktrees, leaving out creations still naming their branch. */

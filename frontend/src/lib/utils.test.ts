@@ -17,7 +17,7 @@ import {
   loadUseWebChatUi,
   makeIdeUrl,
   projectRepos,
-  resolveSelectedBranch,
+  resolveSelectedId,
   prBadgeClass,
   prStateTextClass,
   saveFavoriteWorktreeKeys,
@@ -64,33 +64,33 @@ describe("worktree selection persistence", () => {
     localStorage.clear();
   });
 
-  it("keeps the saved branch before the first successful worktree load", () => {
-    expect(resolveSelectedBranch("feature/last-used", undefined, [], false)).toBe("feature/last-used");
+  it("keeps the saved worktree before the first successful worktree load", () => {
+    expect(resolveSelectedId("wt-last-used", undefined, [], false)).toBe("wt-last-used");
   });
 
   it("keeps the current selection when that worktree still exists", () => {
     expect(
-      resolveSelectedBranch(
-        "feature/last-used",
-        { branch: "feature/last-used" },
-        [{ branch: "feature/last-used", mux: "✗" }],
+      resolveSelectedId(
+        "wt-last-used",
+        { id: "wt-last-used" },
+        [{ id: "wt-last-used", mux: "✗" }],
         true,
       ),
-    ).toBe("feature/last-used");
+    ).toBe("wt-last-used");
   });
 
-  it("falls back to an open worktree when the saved branch is gone", () => {
+  it("falls back to an open worktree when the saved one is gone", () => {
     expect(
-      resolveSelectedBranch(
-        "feature/missing",
+      resolveSelectedId(
+        "wt-missing",
         undefined,
         [
-          { branch: "feature/first", mux: "✗" },
-          { branch: "feature/open", mux: "✓" },
+          { id: "wt-first", mux: "✗" },
+          { id: "wt-open", mux: "✓" },
         ],
         true,
       ),
-    ).toBe("feature/open");
+    ).toBe("wt-open");
   });
 
   it("stores and clears the last selected worktree per project", () => {

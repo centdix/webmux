@@ -106,14 +106,15 @@ export interface DiffDialogProps {
   onclose: () => void;
 }
 
-/** Identity of a worktree across projects: branch names are only unique per project. */
+/** Identity of a worktree across projects: its runtime id, which stays the
+ *  same when its branch is renamed or checked out. */
 export interface WorktreeRef {
   project: string;
-  branch: string;
+  id: string;
 }
 
 export interface WorktreeInfo extends WorktreeRef {
-  id: string;
+  branch: string;
   label: string | null;
   baseBranch?: string;
   archived: boolean;
@@ -145,6 +146,15 @@ export interface WorktreeInfo extends WorktreeRef {
  *  its worktree will get. */
 export interface PendingCreationInfo extends PendingWorktreeCreation {
   project: string;
+}
+
+/** A worktree named before its project's list has loaded: by the URL hash
+ *  (a branch) or by the saved selection (an id, or a branch saved by older
+ *  versions). */
+export interface PendingSelection {
+  project: string;
+  name: string;
+  source: "hash" | "saved";
 }
 
 /** One project's worktrees from the hub listing; `error` is that project's fetch failure. */

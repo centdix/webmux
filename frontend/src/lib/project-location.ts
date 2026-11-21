@@ -1,4 +1,4 @@
-import type { WorktreeRef } from "./types";
+import type { PendingSelection, WorktreeRef } from "./types";
 
 /** The `#<project>/<branch>` location hash that reopens a precise worktree.
  *  Project prefixes are slugs (no `/`), so the first `/` splits project from
@@ -41,28 +41,29 @@ export function pickInitialProject(
 
 /** Worktree to select when `project` mounts: the hash branch when the hash
  *  targets this project, else the selection saved for it. */
-export function pickInitialBranch(
+export function pickInitialSelection(
   hash: LocationHash | null,
   project: string,
-  savedBranch: string | null,
-): string | null {
-  if (hash?.project === project && hash.branch) return hash.branch;
-  return savedBranch;
+  saved: string | null,
+): PendingSelection | null {
+  if (hash?.project === project && hash.branch) return { project, name: hash.branch, source: "hash" };
+  return saved ? { project, name: saved, source: "saved" } : null;
 }
 
 /** What a hash edited by hand or set by a same-tab link opens. */
 export type HashTarget = { kind: "worktree"; ref: WorktreeRef } | { kind: "project"; project: string };
 
-/** The worktree, or project, `hash` names when it exists; `null` otherwise. */
+/** The worktree, or project, `hash` names when it exists; `null` otherwise.
+ *  The hash names a branch, resolved here to the worktree on it. */
 export function resolveHashTarget(
   hash: LocationHash | null,
   hasProject: (project: string) => boolean,
-  hasWorktree: (ref: WorktreeRef) => boolean,
+  findWorktree: (project: string, branch: string) => WorktreeRef | undefined,
 ): HashTarget | null {
   if (!hash || !hasProject(hash.project)) return null;
   if (!hash.branch) return { kind: "project", project: hash.project };
-  const ref = { project: hash.project, branch: hash.branch };
-  return hasWorktree(ref) ? { kind: "worktree", ref } : null;
+  const worktree = findWorktree(hash.project, hash.branch);
+  return worktree ? { kind: "worktree", ref: { project: worktree.project, id: worktree.id } } : null;
 }
 
 export function readLocationHash(): LocationHash | null {

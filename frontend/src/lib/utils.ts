@@ -1,6 +1,6 @@
 import type { AppConfig, IdeKind, PrEntry, ProjectInitPhase, ProjectRepo, WorktreeCreationPhase, WorktreeInfo } from "./types";
 import { THEME_KEYS, getTheme } from "./themes";
-import { worktreeKey } from "./worktree-ref";
+import { legacyBranchKey } from "./worktree-ref";
 import type { ThemeKey } from "./themes";
 
 export const SSH_STORAGE_KEY = "wt-ssh-host";
@@ -165,8 +165,9 @@ export function loadSavedSelectedWorktree(projectPrefix: string): string | null 
   return legacy;
 }
 
-export function saveSelectedWorktree(projectPrefix: string, branch: string | null): void {
-  saveStoredString(projectStorageKey(LAST_SELECTED_WORKTREE_STORAGE_KEY, projectPrefix), branch);
+/** Saves the worktree id; older versions saved its branch (resolved on load). */
+export function saveSelectedWorktree(projectPrefix: string, worktreeId: string | null): void {
+  saveStoredString(projectStorageKey(LAST_SELECTED_WORKTREE_STORAGE_KEY, projectPrefix), worktreeId);
 }
 
 function parseStringArray(stored: string | null): string[] {
@@ -179,9 +180,11 @@ function parseStringArray(stored: string | null): string[] {
   }
 }
 
-/** Favorites of every project, as `worktreeKey`s. The first load folds the
- *  per-project branch lists (`wt-favorite-worktrees:<project>`) into it, and
- *  the pre-multi-project unscoped list into `currentProject`. */
+/** Favorites of every project, as `worktreeKey`s (or branch keys saved by
+ *  older versions, moved to ids by `migrateBranchKeys` once their project
+ *  loads). The first load folds the per-project branch lists
+ *  (`wt-favorite-worktrees:<project>`) into it, and the pre-multi-project
+ *  unscoped list into `currentProject`. */
 export function loadFavoriteWorktreeKeys(currentProject: string): Set<string> {
   const keys = new Set(parseStringArray(localStorage.getItem(FAVORITE_WORKTREE_KEYS_STORAGE_KEY)));
   const legacyPrefix = `${FAVORITE_WORKTREES_STORAGE_KEY}:`;
@@ -193,7 +196,7 @@ export function loadFavoriteWorktreeKeys(currentProject: string): Set<string> {
   for (const legacyKey of legacyKeys) {
     const project = legacyKey === FAVORITE_WORKTREES_STORAGE_KEY ? currentProject : legacyKey.slice(legacyPrefix.length);
     for (const branch of parseStringArray(localStorage.getItem(legacyKey))) {
-      keys.add(worktreeKey({ project, branch }));
+      keys.add(legacyBranchKey(project, branch));
     }
     localStorage.removeItem(legacyKey);
   }
@@ -305,16 +308,16 @@ export function projectInitPhaseLabel(phase: ProjectInitPhase | null): string {
   }
 }
 
-export function resolveSelectedBranch(
-  selectedBranch: string | null,
-  selectedWorktree: Pick<WorktreeInfo, "branch"> | undefined,
-  selectableWorktrees: Array<Pick<WorktreeInfo, "branch" | "mux">>,
+export function resolveSelectedId(
+  selectedId: string | null,
+  selectedWorktree: Pick<WorktreeInfo, "id"> | undefined,
+  selectableWorktrees: Array<Pick<WorktreeInfo, "id" | "mux">>,
   hasLoadedWorktrees: boolean,
 ): string | null {
-  if (selectedBranch && selectedWorktree) return selectedBranch;
-  if (!hasLoadedWorktrees) return selectedBranch;
+  if (selectedId && selectedWorktree) return selectedId;
+  if (!hasLoadedWorktrees) return selectedId;
   if (selectableWorktrees.length === 0) return null;
 
   const open = selectableWorktrees.find((worktree) => worktree.mux === "✓");
-  return (open ?? selectableWorktrees[0]).branch;
+  return (open ?? selectableWorktrees[0]).id;
 }

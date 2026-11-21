@@ -58,7 +58,7 @@ describe("attentionOf", () => {
     expect(attentionOf(createWorktree({ creating: true, agent: "waiting" }), none)).toBe("creating");
     expect(attentionOf(createWorktree({ agent: "waiting" }), none)).toBe("waiting");
     expect(attentionOf(createWorktree({ agent: "error" }), none)).toBe("error");
-    expect(attentionOf(createWorktree({ agent: "done" }), new Set(["webmux:feat"]))).toBe("unread");
+    expect(attentionOf(createWorktree({ agent: "done" }), new Set(["webmux:wt-feat"]))).toBe("unread");
     expect(attentionOf(createWorktree({ agent: "done" }), none)).toBe("idle");
     expect(attentionOf(createWorktree({ agent: "waiting", mux: "" }), none)).toBe("closed");
     expect(attentionOf(createWorktree({ agent: "working" }), none)).toBe("working");

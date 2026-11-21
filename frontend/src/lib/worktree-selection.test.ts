@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import type { WorktreeInfo } from "./types";
 import { neighborBranch, stepBranch, WorktreeSelection } from "./worktree-selection.svelte";
 
 afterEach(() => {
@@ -31,46 +32,82 @@ describe("neighborBranch", () => {
   });
 });
 
+function worktree(id: string, branch: string): Pick<WorktreeInfo, "project" | "id" | "branch"> {
+  return { project: "alpha", id, branch };
+}
+
 describe("WorktreeSelection", () => {
-  it("boots on the hash worktree, else the one saved for the project", () => {
-    localStorage.setItem("wt-last-selected-worktree:alpha", "saved");
-    expect(new WorktreeSelection("alpha").selected).toEqual({ project: "alpha", branch: "saved" });
+  it("boots on the hash worktree, else the one saved for the project, once the list has loaded", () => {
+    const worktrees = [worktree("wt-1", "feat/x"), worktree("wt-2", "main")];
+    localStorage.setItem("wt-last-selected-worktree:alpha", "wt-2");
+    const saved = new WorktreeSelection("alpha");
+    expect(saved.selected).toBeNull();
+    saved.resolvePending(worktrees);
+    expect(saved.selected).toEqual({ project: "alpha", id: "wt-2" });
 
     window.history.replaceState(null, "", "/#alpha/feat/x");
-    expect(new WorktreeSelection("alpha").selected).toEqual({ project: "alpha", branch: "feat/x" });
-    expect(new WorktreeSelection("beta").selected).toBeNull();
+    const hashed = new WorktreeSelection("alpha");
+    hashed.resolvePending(worktrees);
+    expect(hashed.selected).toEqual({ project: "alpha", id: "wt-1" });
+    expect(new WorktreeSelection("beta").pending).toBeNull();
+  });
+
+  it("resolves a branch saved by older versions, and saves the id instead", () => {
+    localStorage.setItem("wt-last-selected-worktree:alpha", "main");
+    const selection = new WorktreeSelection("alpha");
+
+    selection.resolvePending([worktree("wt-1", "feat/x"), worktree("wt-2", "main")]);
+    expect(selection.selected).toEqual({ project: "alpha", id: "wt-2" });
+
+    selection.persist(worktree("wt-2", "main"), true, true);
+    expect(localStorage.getItem("wt-last-selected-worktree:alpha")).toBe("wt-2");
   });
 
   it("makes a selected worktree's project current", () => {
     const selection = new WorktreeSelection("alpha");
 
-    selection.select({ project: "beta", branch: "main" });
+    selection.select({ project: "beta", id: "wt-main" });
 
     expect(selection.project).toBe("beta");
-    expect(selection.branch).toBe("main");
+    expect(selection.id).toBe("wt-main");
   });
 
   it("switching project restores that project's saved worktree", () => {
-    localStorage.setItem("wt-last-selected-worktree:beta", "feat/b");
+    localStorage.setItem("wt-last-selected-worktree:beta", "wt-b");
     const selection = new WorktreeSelection("alpha");
-    selection.selectBranch("main");
+    selection.selectId("wt-main");
 
     selection.switchProject("beta");
-    expect(selection.selected).toEqual({ project: "beta", branch: "feat/b" });
+    expect(selection.selected).toBeNull();
+    expect(selection.pending).toEqual({ project: "beta", name: "wt-b", source: "saved" });
 
     selection.switchProject("alpha");
-    expect(selection.selected).toBeNull();
+    expect(selection.pending).toBeNull();
   });
 
-  it("persists into the hash and clears the saved worktree once the project is empty", () => {
-    localStorage.setItem("wt-last-selected-worktree:alpha", "gone");
+  it("stays on the worktree when its branch is renamed, and moves the hash to the new branch", () => {
+    const selection = new WorktreeSelection("alpha");
+    selection.selectId("wt-1");
+
+    selection.persist(worktree("wt-1", "change-me"), true, true);
+    expect(window.location.hash).toBe("#alpha/change-me");
+
+    selection.persist(worktree("wt-1", "feat/named"), true, true);
+    expect(selection.selected).toEqual({ project: "alpha", id: "wt-1" });
+    expect(window.location.hash).toBe("#alpha/feat/named");
+    expect(localStorage.getItem("wt-last-selected-worktree:alpha")).toBe("wt-1");
+  });
+
+  it("keeps the hash branch until the list loads, and clears the saved worktree once the project is empty", () => {
+    localStorage.setItem("wt-last-selected-worktree:alpha", "wt-gone");
+    window.history.replaceState(null, "", "/#alpha/feat/x");
     const selection = new WorktreeSelection("alpha");
 
     selection.persist(undefined, false, false);
-    expect(window.location.hash).toBe("#alpha/gone");
-    expect(localStorage.getItem("wt-last-selected-worktree:alpha")).toBe("gone");
+    expect(window.location.hash).toBe("#alpha/feat/x");
+    expect(localStorage.getItem("wt-last-selected-worktree:alpha")).toBe("wt-gone");
 
-    selection.selectBranch(null);
+    selection.resolvePending([]);
     selection.persist(undefined, true, false);
     expect(window.location.hash).toBe("#alpha");
     expect(localStorage.getItem("wt-last-selected-worktree:alpha")).toBeNull();

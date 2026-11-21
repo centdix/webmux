@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   formatLocationHash,
   parseLocationHash,
-  pickInitialBranch,
+  pickInitialSelection,
   pickInitialProject,
   readLocationHash,
   resolveHashTarget,
@@ -77,26 +77,35 @@ describe("pickInitialProject", () => {
   });
 });
 
-describe("pickInitialBranch", () => {
+describe("pickInitialSelection", () => {
   it("prefers the hash branch when the hash targets this project", () => {
-    expect(pickInitialBranch({ project: "alpha", branch: "feat/x" }, "alpha", "main")).toBe("feat/x");
+    expect(pickInitialSelection({ project: "alpha", branch: "feat/x" }, "alpha", "wt-main")).toEqual({
+      project: "alpha",
+      name: "feat/x",
+      source: "hash",
+    });
   });
 
-  it("uses the saved branch when the hash targets another project or has no branch", () => {
-    expect(pickInitialBranch({ project: "beta", branch: "feat/x" }, "alpha", "main")).toBe("main");
-    expect(pickInitialBranch({ project: "alpha", branch: null }, "alpha", "main")).toBe("main");
-    expect(pickInitialBranch(null, "alpha", null)).toBeNull();
+  it("uses the saved worktree when the hash targets another project or has no branch", () => {
+    const saved = { project: "alpha", name: "wt-main", source: "saved" };
+    expect(pickInitialSelection({ project: "beta", branch: "feat/x" }, "alpha", "wt-main")).toEqual(saved);
+    expect(pickInitialSelection({ project: "alpha", branch: null }, "alpha", "wt-main")).toEqual(saved);
+    expect(pickInitialSelection(null, "alpha", null)).toBeNull();
   });
 });
 
 describe("resolveHashTarget", () => {
-  const worktrees = new Set(["alpha:main", "beta:feat/x"]);
+  const worktrees = [
+    { project: "alpha", id: "wt-1", branch: "main" },
+    { project: "beta", id: "wt-2", branch: "feat/x" },
+  ];
   const hasProject = (project: string): boolean => project === "alpha" || project === "beta";
-  const hasWorktree = (ref: { project: string; branch: string }): boolean => worktrees.has(`${ref.project}:${ref.branch}`);
-  const resolve = (hash: string) => resolveHashTarget(parseLocationHash(hash), hasProject, hasWorktree);
+  const findWorktree = (project: string, branch: string) =>
+    worktrees.find((worktree) => worktree.project === project && worktree.branch === branch);
+  const resolve = (hash: string) => resolveHashTarget(parseLocationHash(hash), hasProject, findWorktree);
 
   it("targets a known worktree or project", () => {
-    expect(resolve("#beta/feat/x")).toEqual({ kind: "worktree", ref: { project: "beta", branch: "feat/x" } });
+    expect(resolve("#beta/feat/x")).toEqual({ kind: "worktree", ref: { project: "beta", id: "wt-2" } });
     expect(resolve("#beta")).toEqual({ kind: "project", project: "beta" });
   });
 
