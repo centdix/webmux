@@ -16,6 +16,7 @@ import {
 } from "../adapters/docker";
 import type { DockerProfileConfig } from "../adapters/config";
 import { AGENT_ADAPTERS } from "../agents";
+import { DEFAULT_SANDBOX_DOCKERFILE, defaultSandboxImageTag } from "../adapters/sandbox-image";
 
 const HOME = "/home/testuser";
 const UID = 1000;
@@ -61,7 +62,7 @@ function build(
     name: "wm-test-123",
     home: HOME,
     user: { uid: UID, gid: GID },
-    image: opts.sandboxConfig.image,
+    image: opts.sandboxConfig.image ?? "webmux-sandbox:default",
     entrypointPath: ENTRYPOINT,
     hostEnv,
     credentials,
@@ -582,3 +583,19 @@ for (const image of ["busybox:latest", "alpine:3.20", "debian:bookworm-slim"]) {
     }, 20_000);
   });
 }
+
+describe("default sandbox image", () => {
+  it("is tagged with a hash of the Dockerfile", () => {
+    expect(defaultSandboxImageTag()).toMatch(/^webmux-sandbox:[0-9a-f]{12}$/);
+    expect(defaultSandboxImageTag("FROM a")).not.toBe(defaultSandboxImageTag("FROM b"));
+    expect(defaultSandboxImageTag("FROM a")).toBe(defaultSandboxImageTag("FROM a"));
+  });
+
+  it("ships what the entrypoint, git creds and agent installs need", () => {
+    expect(DEFAULT_SANDBOX_DOCKERFILE.startsWith("FROM debian:bookworm-slim\n")).toBe(true);
+    for (const pkg of ["ca-certificates", "curl", "git", "sudo", "openssh-client", "unzip", "build-essential", "nodejs", " gh"]) {
+      expect(DEFAULT_SANDBOX_DOCKERFILE).toContain(pkg);
+    }
+    expect(DEFAULT_SANDBOX_DOCKERFILE).toContain("setup_22.x");
+  });
+});

@@ -349,7 +349,7 @@ describe("buildStarterTemplate", () => {
     expect(template).toContain("#   sizePct: 50");
     expect(template).toContain("#   cwd: repo");
     expect(template).toContain("# sandbox:");
-    expect(template).toContain("#   image: ghcr.io/your-org/your-image:latest");
+    expect(template).toContain("#   # image: ghcr.io/your-org/your-image:latest");
     expect(template).toContain("#   mounts:");
     expect(template).toContain("# Integrations connect webmux to external systems.");
     expect(template).toContain("#   dir: ../your-repo");

@@ -358,8 +358,9 @@ profiles:
   # sandbox:
   #   # Run panes inside a container instead of on the host.
   #   runtime: docker
-  #   # Docker image used for the sandbox container.
-  #   image: ghcr.io/your-org/your-image:latest
+  #   # Optional Docker image. Omit it to use webmux's default image, built
+  #   # locally on first use; agent CLIs are installed automatically either way.
+  #   # image: ghcr.io/your-org/your-image:latest
   #   # Forward selected host env vars into the container.
   #   envPassthrough:
   #     - ANTHROPIC_API_KEY
@@ -372,9 +373,9 @@ profiles:
   #   # Extra host paths to mount into the container.
   #   mounts:
   #     # Host path mounted into the sandbox.
-  #     - hostPath: ~/.codex
+  #     - hostPath: ~/datasets
   #       # Path inside the container.
-  #       guestPath: /root/.codex
+  #       guestPath: /home/webmux/datasets
   #       # Allow writes through this mount.
   #       writable: true
   #   # Panes define the tmux layout created for sandbox sessions.
