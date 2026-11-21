@@ -45,13 +45,13 @@ profiles:
 
 webmux does the rest:
 
-- **Image:** without an `image`, webmux builds a slim default image (debian, git, gh, Node 22, sudo) the first time it is needed and tags it `webmux-sandbox:<hash>`.
+- **Image:** without an `image`, webmux builds a slim default image (debian, git, gh, Node 22, sudo) the first time it is needed and tags it `webmux-sandbox:<hash>`. That first worktree waits a minute or two for the build, and the build output goes to the server log.
 - **Agents:** the worktree's agent (claude, codex, opencode, pi, or a custom agent with `sandboxInstall`) is installed on first launch into the `webmux-sandbox-tools` volume, which every sandbox shares. Your host config for each built-in agent (`~/.claude`, `~/.codex`, …) is mounted when it exists, along with auth env vars such as `ANTHROPIC_API_KEY`. To refresh the installed agents, run `docker volume rm webmux-sandbox-tools`.
 - **User:** the agent runs as a `webmux` user with your UID/GID and passwordless `sudo`. Files it writes in the worktree belong to you, and it can install anything.
 - **Git and GitHub:** webmux forwards your GitHub token (`GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth token`) and your git identity. `git push`, cloning private repos and `gh pr create` work, and SSH GitHub remotes are routed through the token. Your SSH agent is forwarded for other remotes. `~/.ssh` and `~/.gitconfig` are not mounted.
 - **Host protection:** the sandbox protects your machine from accidents; it is not meant to contain a hostile agent. The repo's `.git/hooks`, `.git/config` and the worktree's git link files are read-only inside the container, so nothing written in the sandbox runs on the host's next git command. Because `.git/config` is read-only, `git push -u` can't record an upstream. `push.autoSetupRemote` is enabled, so a plain `git push` still works.
 
-A custom `image` only needs `sh`, `useradd` (or busybox `adduser`), git, curl, and Node/npm for agent installs.
+A custom `image` only needs `sh`, `awk`/`find`/`stat` (busybox is fine), `useradd` (or busybox `adduser`), git, and Node/npm. Node/npm is used to install agents and the `bun` that runs the in-container `webmux` CLI.
 
 Containers use host networking (`--network host`): a dev server in the container listens directly on the host, and the `webmux` CLI is mounted into the container so agents can run `webmux port <label>` there too. On macOS this needs Docker Desktop 4.34 or later with *Settings → Resources → Network → Enable host networking* turned on (signed in; not compatible with Enhanced Container Isolation), or OrbStack, which supports it natively. webmux can't detect the setting, so it logs a reminder when it launches a container on macOS.
 

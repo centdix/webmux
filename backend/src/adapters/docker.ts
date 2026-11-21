@@ -655,6 +655,18 @@ async function prepareImage(label: string, argv: string[], stdin?: string): Prom
  *  or build gets its own, longer timeout. */
 async function ensureSandboxImage(configured: string | undefined): Promise<string> {
   const image = configured ?? defaultSandboxImageTag();
+  // Concurrent first launches share one pull/build instead of racing.
+  let pending = preparingImages.get(image);
+  if (!pending) {
+    pending = prepareSandboxImage(image, configured).finally(() => preparingImages.delete(image));
+    preparingImages.set(image, pending);
+  }
+  return pending;
+}
+
+const preparingImages = new Map<string, Promise<string>>();
+
+async function prepareSandboxImage(image: string, configured: string | undefined): Promise<string> {
   if (await imageExists(image)) return image;
   if (configured) {
     await prepareImage(`pulling image ${image}`, ["docker", "pull", image]);
@@ -704,8 +716,9 @@ async function writeSandboxEntrypoint(): Promise<string> {
 }
 
 /** Resolve the host paths for the in-container `webmux` CLI and write its
- *  wrapper script. `WEBMUX_CLI_ENTRY` is set by `webmux serve` to its own JS
- *  bundle; it is absent when the backend runs from source (dev mode). */
+ *  wrapper script. `WEBMUX_CLI_ENTRY` is set by the bundled CLI process (and
+ *  inherited by the `serve` backend) to its own JS bundle; it is absent when
+ *  running from source (dev mode). */
 async function prepareWebmuxCliMounts(): Promise<WebmuxCliMounts | null> {
   const entryPath = Bun.env.WEBMUX_CLI_ENTRY;
   if (!entryPath || !(await pathExists(entryPath))) {

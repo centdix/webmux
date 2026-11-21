@@ -89,8 +89,8 @@ profiles:
 
     # Optional. Without it, webmux builds and uses its default image
     # (debian slim + git, gh, node 22, sudo). A custom image only needs `sh`,
-    # `useradd` (or busybox `adduser`), git, curl, and node/npm: agent CLIs are
-    # installed on demand into a shared volume.
+    # awk/find/stat (busybox is fine), `useradd` (or busybox `adduser`), git,
+    # and node/npm: agent CLIs and bun are installed on demand into a shared volume.
     # image: example-sandbox-image
 
     envPassthrough:

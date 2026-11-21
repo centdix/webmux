@@ -6,9 +6,11 @@
 /** Slim base with what agents and their installs need; agent CLIs themselves
  *  are installed at runtime into the shared tools volume. */
 export const DEFAULT_SANDBOX_DOCKERFILE = `FROM debian:bookworm-slim
+ENV LANG=C.UTF-8
+ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \\
  && apt-get install -y --no-install-recommends \\
-    ca-certificates curl git gnupg sudo openssh-client unzip build-essential \\
+    ca-certificates curl git gnupg sudo openssh-client unzip build-essential less procps \\
  && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \\
  && apt-get install -y --no-install-recommends nodejs \\
  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \\

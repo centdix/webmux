@@ -292,8 +292,9 @@ async function main(args: string[] = process.argv.slice(2)): Promise<void> {
   // This CLI's own JS bundle, mounted into docker sandboxes so agents there can
   // run `webmux`. Set in this process so both the `serve` backend (which
   // inherits it) and in-process lifecycle commands (`add`, `open`) see it.
+  // Always the running bundle, never an inherited value from another install.
   // Absent when running from source (`bin/src/webmux.ts`).
-  if (import.meta.path.endsWith(".js")) Bun.env.WEBMUX_CLI_ENTRY ??= import.meta.path;
+  if (import.meta.path.endsWith(".js")) Bun.env.WEBMUX_CLI_ENTRY = import.meta.path;
   // Internal: called by shell completion scripts
   if (args[0] === "--completions") {
     const { handleCompletions } = await import("./completions.ts");
