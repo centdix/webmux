@@ -4,8 +4,9 @@
  * Runs sandbox containers directly for managed docker worktrees.
  */
 
+import { existsSync, statSync } from "node:fs";
 import { chmod, mkdir, rename, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { type DockerProfileConfig } from "./config";
 import { webmuxRuntimeStateDir } from "./webmux-paths";
 import { log } from "../lib/log";
@@ -234,6 +235,11 @@ export interface DockerRunContext {
   /** Host environment, read for `envPassthrough`. */
   hostEnv: Record<string, string | undefined>;
   credentials: SandboxCredentials;
+  /** Git files mounted read-only over the writable `.git` and worktree, so the
+   *  sandbox cannot make the host's next git command run code (hooks,
+   *  `core.fsmonitor`, a redirected gitfile or commondir). Empty when the repo
+   *  layout is not the standard `<repo>/.git` directory. */
+  protectedGitPaths: string[];
   /** Host paths for the in-container `webmux` CLI, or null when the running
    *  webmux has no JS bundle to mount. */
   webmuxCli: WebmuxCliMounts | null;
@@ -319,10 +325,9 @@ export function buildDockerRunArgs(opts: LaunchContainerOpts, ctx: DockerRunCont
   args.push("-v", `${wtDir}:${wtDir}`);
   args.push("-v", `${mainRepoDir}/.git:${mainRepoDir}/.git`);
   args.push("-v", `${mainRepoDir}:${mainRepoDir}:ro`);
-  // Close the sandbox-to-host hole: hooks and config (core.fsmonitor,
-  // core.hooksPath...) would run code on the host's next git command.
-  args.push("-v", `${mainRepoDir}/.git/hooks:${mainRepoDir}/.git/hooks:ro`);
-  args.push("-v", `${mainRepoDir}/.git/config:${mainRepoDir}/.git/config:ro`);
+  for (const path of ctx.protectedGitPaths) {
+    args.push("-v", `${path}:${path}:ro`);
+  }
 
   // Agent config mounts.
   args.push("-v", `${home}/.claude:${SANDBOX_HOME}/.claude`);
@@ -398,9 +403,8 @@ export async function launchContainer(opts: LaunchContainerOpts): Promise<string
     prepareWebmuxCliMounts(),
     writeSandboxEntrypoint(),
     resolveSandboxCredentials(opts.mainRepoDir),
-    // A missing hooks dir would make its read-only bind mount fail.
-    mkdir(join(opts.mainRepoDir, ".git", "hooks"), { recursive: true }),
   ]);
+  const protectedGitPaths = await resolveProtectedGitPaths(opts.mainRepoDir, opts.wtDir);
   const args = buildDockerRunArgs(opts, {
     name,
     home,
@@ -409,6 +413,7 @@ export async function launchContainer(opts: LaunchContainerOpts): Promise<string
     entrypointPath,
     hostEnv: Bun.env,
     credentials,
+    protectedGitPaths,
     webmuxCli,
   });
 
@@ -416,7 +421,7 @@ export async function launchContainer(opts: LaunchContainerOpts): Promise<string
     log.warn("[docker] sandbox containers use host networking; on macOS enable it in Docker Desktop >= 4.34 (Settings > Resources > Network > Enable host networking) or use OrbStack");
   }
   log.info(`[docker] launching container: ${name}`);
-  const run = await runDocker(args, DOCKER_RUN_TIMEOUT_MS);
+  const run = await runCommand(args, DOCKER_RUN_TIMEOUT_MS);
   if (run.exitCode !== 0) {
     // Clean up any stopped container docker may have left behind.
     await Bun.spawn(["docker", "rm", "-f", name], { stdout: "ignore", stderr: "ignore" }).exited;
@@ -438,60 +443,124 @@ export async function launchContainer(opts: LaunchContainerOpts): Promise<string
   return name;
 }
 
-/** Read a command's trimmed stdout, or null when it fails or prints nothing. */
+/** GitHub token by precedence: `GH_TOKEN`, `GITHUB_TOKEN`, then `gh auth token`.
+ *  Empty values count as unset. */
+export function pickGhToken(
+  env: Record<string, string | undefined>,
+  ghAuthToken: string | null,
+): string | null {
+  return env.GH_TOKEN || env.GITHUB_TOKEN || ghAuthToken || null;
+}
+
+/** SSH agent socket to forward. Docker Desktop and OrbStack expose the host
+ *  agent at a fixed path on macOS; elsewhere the host socket is mounted as-is. */
+export function pickSshAuthSock(
+  platform: NodeJS.Platform,
+  env: Record<string, string | undefined>,
+  isSocket: (path: string) => boolean,
+): string | null {
+  const sock = env.SSH_AUTH_SOCK;
+  if (!sock) return null;
+  if (platform === "darwin") return MACOS_SSH_AUTH_SOCK;
+  return isSocket(sock) ? sock : null;
+}
+
+/** Git files that must stay read-only in the sandbox (see
+ *  `DockerRunContext.protectedGitPaths`), given which candidates exist. */
+export function buildProtectedGitPaths(
+  mainRepoDir: string,
+  wtDir: string,
+  worktreeAdminDir: string | null,
+  exists: (path: string) => boolean,
+): string[] {
+  const gitDir = join(mainRepoDir, ".git");
+  const candidates = [
+    join(gitDir, "hooks"),
+    join(gitDir, "config"),
+    join(wtDir, ".git"),
+    ...(worktreeAdminDir
+      ? ["commondir", "gitdir", "config.worktree"].map((file) => join(worktreeAdminDir, file))
+      : []),
+  ];
+  return candidates.filter(exists);
+}
+
+const GH_AUTH_TOKEN_TIMEOUT_MS = 5_000;
+
+/** Read a command's trimmed stdout, or null when it fails, times out or prints nothing. */
 async function readCommandOutput(argv: string[], cwd: string): Promise<string | null> {
   try {
-    const proc = Bun.spawn(argv, { cwd, stdout: "pipe", stderr: "ignore" });
-    const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
-    const value = stdout.trim();
-    return exitCode === 0 && value ? value : null;
-  } catch {
+    const result = await runCommand(argv, GH_AUTH_TOKEN_TIMEOUT_MS, undefined, cwd);
+    const value = result.stdout.trim();
+    if (result.exitCode !== 0) log.debug(`[docker] ${argv.join(" ")} failed (${result.exitCode}): ${result.stderr.trim()}`);
+    return result.exitCode === 0 && value ? value : null;
+  } catch (error) {
+    log.debug(`[docker] ${argv[0]} unavailable: ${error instanceof Error ? error.message : String(error)}`);
     return null;
   }
 }
 
-async function resolveSshAuthSock(): Promise<string | null> {
-  if (process.platform === "darwin") return MACOS_SSH_AUTH_SOCK;
-  const sock = Bun.env.SSH_AUTH_SOCK;
-  if (!sock) return null;
+function isSocketPath(path: string): boolean {
   try {
-    return (await stat(sock)).isSocket() ? sock : null;
+    return statSync(path).isSocket();
   } catch {
-    return null;
+    return false;
   }
 }
 
 /** Resolve the host's GitHub token, git identity and SSH agent socket. */
 async function resolveSandboxCredentials(repoDir: string): Promise<SandboxCredentials> {
-  const [ghAuthToken, name, email, sshAuthSock] = await Promise.all([
-    Bun.env.GH_TOKEN || Bun.env.GITHUB_TOKEN ? null : readCommandOutput(["gh", "auth", "token"], repoDir),
+  const hasEnvToken = pickGhToken(Bun.env, null) !== null;
+  const [ghAuthToken, name, email] = await Promise.all([
+    hasEnvToken ? null : readCommandOutput(["gh", "auth", "token"], repoDir),
     readCommandOutput(["git", "config", "--get", "user.name"], repoDir),
     readCommandOutput(["git", "config", "--get", "user.email"], repoDir),
-    resolveSshAuthSock(),
   ]);
-  const ghToken = Bun.env.GH_TOKEN || Bun.env.GITHUB_TOKEN || ghAuthToken;
-  if (!ghToken) log.info("[docker] no GitHub token found (GH_TOKEN, GITHUB_TOKEN, gh auth token); GitHub auth unavailable in the sandbox");
+  const ghToken = pickGhToken(Bun.env, ghAuthToken);
+  if (!ghToken) log.info("[docker] no GitHub token found (GH_TOKEN, GITHUB_TOKEN, `gh auth token`); GitHub auth unavailable in the sandbox");
   return {
     ghToken,
     gitIdentity: name && email ? { name, email } : null,
-    sshAuthSock,
+    sshAuthSock: pickSshAuthSock(process.platform, Bun.env, isSocketPath),
   };
 }
 
-interface DockerCommandResult {
+/** Resolve the read-only git paths for a standard `<repo>/.git` layout. With a
+ *  gitfile repo (`--separate-git-dir`, submodule) hardening is skipped. */
+async function resolveProtectedGitPaths(mainRepoDir: string, wtDir: string): Promise<string[]> {
+  const gitDir = join(mainRepoDir, ".git");
+  let isDir = false;
+  try {
+    isDir = (await stat(gitDir)).isDirectory();
+  } catch { /* handled below */ }
+  if (!isDir) {
+    log.warn(`[docker] ${gitDir} is not a directory; git hooks/config stay writable in the sandbox`);
+    return [];
+  }
+  // A missing hooks dir would make its read-only bind mount fail.
+  await mkdir(join(gitDir, "hooks"), { recursive: true });
+  const gitfile = await Bun.file(join(wtDir, ".git")).text().catch(() => "");
+  const gitdir = /^gitdir:\s*(.+)$/m.exec(gitfile)?.[1]?.trim();
+  // The gitdir may be relative (`worktree.useRelativePaths`).
+  const adminDir = gitdir ? resolve(wtDir, gitdir) : null;
+  return buildProtectedGitPaths(mainRepoDir, wtDir, adminDir, existsSync);
+}
+
+interface CommandResult {
   exitCode: number | "timeout";
   stdout: string;
   stderr: string;
 }
 
-/** Run a docker command and kill it after `timeoutMs`, so a hung daemon or a
+/** Run a command and kill it after `timeoutMs`, so a hung daemon or a
  *  slow pull cannot block the server indefinitely. */
-async function runDocker(
+async function runCommand(
   argv: string[],
   timeoutMs: number,
   onStdoutLine?: (line: string) => void,
-): Promise<DockerCommandResult> {
-  const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
+  cwd?: string,
+): Promise<CommandResult> {
+  const proc = Bun.spawn(argv, { cwd, stdout: "pipe", stderr: "pipe" });
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
@@ -526,11 +595,11 @@ async function readLines(stream: ReadableStream<Uint8Array>, onLine: (line: stri
 /** Make sure `image` is available locally, pulling it when missing. Kept apart
  *  from `docker run` so a slow first pull gets its own, longer timeout. */
 async function ensureImage(image: string): Promise<void> {
-  const inspect = await runDocker(["docker", "image", "inspect", "--format", "{{.Id}}", image], DOCKER_RUN_TIMEOUT_MS);
+  const inspect = await runCommand(["docker", "image", "inspect", "--format", "{{.Id}}", image], DOCKER_RUN_TIMEOUT_MS);
   if (inspect.exitCode === 0) return;
 
   log.info(`[docker] pulling image ${image}`);
-  const pull = await runDocker(
+  const pull = await runCommand(
     ["docker", "pull", image],
     DOCKER_IMAGE_PREPARE_TIMEOUT_MS,
     (line) => log.info(`[docker] pull ${image}: ${line}`),
@@ -549,7 +618,7 @@ async function ensureImage(image: string): Promise<void> {
 async function isSandboxReady(name: string, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const probe = await runDocker(
+    const probe = await runCommand(
       ["docker", "exec", name, "test", "-f", CONTAINER_READY_MARKER],
       Math.max(1000, deadline - Date.now()),
     );
@@ -564,7 +633,7 @@ async function isSandboxReady(name: string, timeoutMs: number): Promise<boolean>
  *  `docker exec -u` of a pane finds its home and sudoers in place. */
 async function waitForSandboxReady(name: string): Promise<void> {
   if (await isSandboxReady(name, SANDBOX_READY_TIMEOUT_MS)) return;
-  const logs = await runDocker(["docker", "logs", "--tail", "50", name], DOCKER_RUN_TIMEOUT_MS);
+  const logs = await runCommand(["docker", "logs", "--tail", "50", name], DOCKER_RUN_TIMEOUT_MS);
   throw new Error(`sandbox container ${name} did not become ready: ${(logs.stdout + logs.stderr).trim()}`);
 }
 

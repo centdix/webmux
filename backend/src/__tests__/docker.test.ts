@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildDockerRunArgs,
+  buildProtectedGitPaths,
   buildSandboxGitConfig,
+  pickGhToken,
+  pickSshAuthSock,
   buildSandboxEntrypoint,
   buildWebmuxCliWrapper,
   type LaunchContainerOpts,
@@ -40,8 +43,10 @@ function makeOpts(overrides: Partial<LaunchContainerOpts> = {}): LaunchContainer
   };
 }
 
-/** Shorthand: call buildDockerRunArgs with test defaults for the trailing params. */
 const NO_CREDENTIALS: SandboxCredentials = { ghToken: null, gitIdentity: null, sshAuthSock: null };
+const PROTECTED = ["/repos/main/.git/hooks", "/repos/main/.git/config", "/repos/my-branch/.git"];
+
+/** Shorthand: call buildDockerRunArgs with test defaults for the trailing params. */
 
 function build(
   opts: LaunchContainerOpts,
@@ -57,6 +62,7 @@ function build(
     entrypointPath: ENTRYPOINT,
     hostEnv,
     credentials,
+    protectedGitPaths: PROTECTED,
     webmuxCli,
   });
 }
@@ -401,12 +407,62 @@ describe("buildDockerRunArgs — git credentials", () => {
 });
 
 describe("buildDockerRunArgs — git hardening", () => {
-  it("mounts .git/hooks and .git/config read-only over the writable .git", () => {
+  it("mounts every protected git path read-only, on top of the writable .git and worktree", () => {
     const m = mounts(build(makeOpts()));
-    const gitIdx = m.indexOf("/repos/main/.git:/repos/main/.git");
-    expect(gitIdx).toBeGreaterThan(-1);
-    expect(m.indexOf("/repos/main/.git/hooks:/repos/main/.git/hooks:ro")).toBeGreaterThan(gitIdx);
-    expect(m.indexOf("/repos/main/.git/config:/repos/main/.git/config:ro")).toBeGreaterThan(gitIdx);
+    expect(m).toContain("/repos/main/.git:/repos/main/.git");
+    expect(m).toContain("/repos/my-branch:/repos/my-branch");
+    for (const path of PROTECTED) expect(m).toContain(`${path}:${path}:ro`);
+  });
+});
+
+describe("buildProtectedGitPaths", () => {
+  const admin = "/repos/main/.git/worktrees/my-branch";
+
+  it("covers hooks, config, the worktree gitfile and the worktree admin files that exist", () => {
+    const present = new Set([
+      "/repos/main/.git/hooks", "/repos/main/.git/config", "/repos/my-branch/.git",
+      `${admin}/commondir`, `${admin}/gitdir`,
+    ]);
+    expect(buildProtectedGitPaths("/repos/main", "/repos/my-branch", admin, (p) => present.has(p))).toEqual([
+      "/repos/main/.git/hooks", "/repos/main/.git/config", "/repos/my-branch/.git",
+      `${admin}/commondir`, `${admin}/gitdir`,
+    ]);
+  });
+
+  it("includes config.worktree only when it exists, and skips admin files without an admin dir", () => {
+    expect(buildProtectedGitPaths("/r", "/w", `/r/.git/worktrees/w`, () => true)).toContain("/r/.git/worktrees/w/config.worktree");
+    expect(buildProtectedGitPaths("/r", "/w", null, () => true)).toEqual(["/r/.git/hooks", "/r/.git/config", "/w/.git"]);
+  });
+});
+
+describe("pickGhToken", () => {
+  it("prefers GH_TOKEN, then GITHUB_TOKEN, then gh auth token", () => {
+    expect(pickGhToken({ GH_TOKEN: "a", GITHUB_TOKEN: "b" }, "c")).toBe("a");
+    expect(pickGhToken({ GITHUB_TOKEN: "b" }, "c")).toBe("b");
+    expect(pickGhToken({}, "c")).toBe("c");
+    expect(pickGhToken({}, null)).toBeNull();
+  });
+
+  it("treats empty env values as unset", () => {
+    expect(pickGhToken({ GH_TOKEN: "", GITHUB_TOKEN: "" }, "c")).toBe("c");
+  });
+});
+
+describe("pickSshAuthSock", () => {
+  const sock = "/run/user/1000/keyring/ssh";
+
+  it("Linux: forwards the host socket when it is a socket", () => {
+    expect(pickSshAuthSock("linux", { SSH_AUTH_SOCK: sock }, () => true)).toBe(sock);
+    expect(pickSshAuthSock("linux", { SSH_AUTH_SOCK: sock }, () => false)).toBeNull();
+  });
+
+  it("macOS: uses Docker Desktop's forwarded socket when the host has an agent", () => {
+    expect(pickSshAuthSock("darwin", { SSH_AUTH_SOCK: "/private/tmp/launchd/x" }, () => false)).toBe("/run/host-services/ssh-auth.sock");
+  });
+
+  it("returns null without SSH_AUTH_SOCK on any platform", () => {
+    expect(pickSshAuthSock("linux", {}, () => true)).toBeNull();
+    expect(pickSshAuthSock("darwin", {}, () => true)).toBeNull();
   });
 });
 
