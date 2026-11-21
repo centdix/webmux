@@ -39,7 +39,7 @@ import {
   WorktreeListResponseSchema,
   WorktreeTabParamsSchema,
   WorktreeIdParamsSchema,
-  WorktreeIdPortParamsSchema,
+  WorktreePortParamsSchema,
   RegisterWorktreePortRequestSchema,
   RegisterWorktreePortResponseSchema,
   WorktreePortListResponseSchema,
@@ -374,7 +374,7 @@ export const projectContract = c.router({
   deleteWorktreePort: {
     method: "DELETE",
     path: projectApiPaths.deleteWorktreePort,
-    pathParams: WorktreeIdPortParamsSchema,
+    pathParams: WorktreePortParamsSchema,
     responses: {
       200: OkResponseSchema,
       ...commonErrorResponses,

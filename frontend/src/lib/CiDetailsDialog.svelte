@@ -81,7 +81,6 @@
   }
 
   async function handleFix(checkName: string, filteredLogs: string): Promise<void> {
-    if (!worktreeId) return;
     fixError = "";
     fixLoading = true;
     const preamble =
@@ -182,7 +181,7 @@
               <Btn
                 variant="cta"
                 small
-                disabled={!worktreeId || fixLoading}
+                disabled={fixLoading}
                 onclick={() => handleFix(check.name, filtered)}
                 >{fixLoading ? "Asking agent..." : "Ask agent to fix"}</Btn
               >

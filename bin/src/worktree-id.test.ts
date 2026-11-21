@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeWorktreeMeta } from "../../backend/src/adapters/fs";
-import { makeUnmanagedWorktreeId } from "../../backend/src/services/reconciliation-service";
+import { makeUnmanagedWorktreeId } from "../../backend/src/services/worktree-identity";
 import { resolveWorktreeIdByBranch, type WorktreeIdSource } from "./worktree-id";
 
 describe("resolveWorktreeIdByBranch", () => {

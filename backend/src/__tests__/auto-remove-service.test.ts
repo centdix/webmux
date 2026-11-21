@@ -5,7 +5,7 @@ import {
   runAutoRemove,
   type AutoRemoveDependencies,
 } from "../services/auto-remove-service";
-import { makeUnmanagedWorktreeId } from "../services/reconciliation-service";
+import { makeUnmanagedWorktreeId } from "../services/worktree-identity";
 
 const ROOT = "/repo";
 
@@ -49,9 +49,17 @@ function makeDeps(opts: {
       },
     } as unknown as AutoRemoveDependencies["lifecycleService"],
     notifications: { notify: () => {} } as unknown as AutoRemoveDependencies["notifications"],
-    isRemoving: (b) => removing.has(b),
-    markRemoving: (b) => removing.add(b),
-    unmarkRemoving: (b) => removing.delete(b),
+    guards: {
+      isRemoving: (worktreeId) => removing.has(worktreeId),
+      withRemoving: async (worktreeId, _label, fn) => {
+        removing.add(worktreeId);
+        try {
+          return await fn();
+        } finally {
+          removing.delete(worktreeId);
+        }
+      },
+    },
     getBranchPrStates: async () => opts.states,
   };
   return { deps, removed };

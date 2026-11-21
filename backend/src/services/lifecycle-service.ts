@@ -52,13 +52,8 @@ import {
 } from "./agent-service";
 import { getAgentDefinition, type AgentDefinition } from "./agent-registry";
 import type { CustomAgentsStore } from "./custom-agents-store";
-import {
-  findWindow,
-  makeUnmanagedWorktreeId,
-  readWorktreeIdAt,
-  resolveWorktreeId,
-  type ReconciliationService,
-} from "./reconciliation-service";
+import type { ReconciliationService } from "./reconciliation-service";
+import { findWindow, labelWorktreeBranch, makeUnmanagedWorktreeId, resolveWorktreeId } from "./worktree-identity";
 import { buildTmuxPaneSystemPrompt, ensureSessionLayout, isWorktreeOpen, planSessionLayout } from "./session-service";
 import { buildPortRegistrationSystemPrompt } from "./port-prompt";
 import { ArchiveStateService } from "./archive-state-service";
@@ -194,10 +189,8 @@ export interface CreateLifecycleWorktreesInput extends Omit<CreateLifecycleWorkt
 }
 
 export interface CreateLifecycleWorktreesResult {
-  primaryBranch: string;
-  primaryWorktreeId: string;
-  branches: string[];
-  worktreeIds: string[];
+  /** The created worktrees, primary first. */
+  worktrees: Array<{ branch: string; worktreeId: string }>;
 }
 
 interface ResolvedCreateLifecycleWorktreeInput extends Omit<CreateLifecycleWorktreeInput, "mode" | "branch" | "agent"> {
@@ -279,14 +272,7 @@ export class LifecycleService {
         throw this.wrapOperationError(error);
       }
 
-      const createdBranches = created.map((worktree) => worktree.branch);
-      const createdIds = created.map((worktree) => worktree.worktreeId);
-      return {
-        primaryBranch: createdBranches[0],
-        primaryWorktreeId: createdIds[0],
-        branches: createdBranches,
-        worktreeIds: createdIds,
-      };
+      return { worktrees: created };
     } finally {
       await this.finishReported(reported);
     }
@@ -1039,13 +1025,9 @@ export class LifecycleService {
   }
 
   private async resolveExistingWorktree(worktreeId: string): Promise<ResolvedLifecycleWorktree> {
-    for (const entry of this.listProjectWorktrees()) {
-      if (entry.branch === null) continue;
-      if (await readWorktreeIdAt(this.deps.git, entry.path) !== worktreeId) continue;
-      const gitDir = this.deps.git.resolveWorktreeGitDir(entry.path);
-      return { entry, branch: entry.branch, worktreeId, gitDir, meta: await readWorktreeMeta(gitDir) };
-    }
-    throw new LifecycleError(`Worktree not found: ${worktreeId}`, 404);
+    const resolved = (await this.resolveAllWorktrees()).find((candidate) => candidate.worktreeId === worktreeId);
+    if (!resolved) throw new LifecycleError(`Worktree not found: ${worktreeId}`, 404);
+    return resolved;
   }
 
   private async resolveAllWorktrees(): Promise<ResolvedLifecycleWorktree[]> {
@@ -1056,7 +1038,13 @@ export class LifecycleService {
     return await Promise.all(entries.map(async (entry) => {
       const gitDir = this.deps.git.resolveWorktreeGitDir(entry.path);
       const meta = await readWorktreeMeta(gitDir);
-      return { entry, branch: entry.branch ?? entry.path, worktreeId: resolveWorktreeId(meta, entry.path), gitDir, meta };
+      return {
+        entry,
+        branch: labelWorktreeBranch(entry, meta?.branch ?? null),
+        worktreeId: resolveWorktreeId(meta, entry.path),
+        gitDir,
+        meta,
+      };
     }));
   }
 
@@ -1069,7 +1057,7 @@ export class LifecycleService {
     return initializeManagedWorktree({
       gitDir: resolved.gitDir,
       worktreeId: makeUnmanagedWorktreeId(resolved.entry.path),
-      branch: resolved.entry.branch ?? resolved.entry.path,
+      branch: resolved.branch,
       profile: profileName,
       agent: this.deps.config.workspace.defaultAgent,
       runtime: profile.runtime,

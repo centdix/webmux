@@ -22,7 +22,8 @@ import type { AutoNameConfig } from "../domain/config";
 import { ProjectRuntime } from "../services/project-runtime";
 import { ArchiveStateService } from "../services/archive-state-service";
 import type { AutoNameGenerator } from "../services/auto-name-service";
-import { makeUnmanagedWorktreeId, readWorktreeIdAt, ReconciliationService } from "../services/reconciliation-service";
+import { ReconciliationService } from "../services/reconciliation-service";
+import { makeUnmanagedWorktreeId, readWorktreeIdAt } from "../services/worktree-identity";
 import {
   buildCreateWorktreeTargets,
   LifecycleError,
@@ -549,12 +550,12 @@ describe("LifecycleService", () => {
     const codexMeta = await readWorktreeMeta(git.resolveWorktreeGitDir(codexPath));
 
     expect(created).toEqual({
-      primaryBranch: claudeBranch,
-      primaryWorktreeId: claudeMeta?.worktreeId ?? "",
-      branches: [claudeBranch, codexBranch],
-      worktreeIds: [claudeMeta?.worktreeId ?? "", codexMeta?.worktreeId ?? ""],
+      worktrees: [
+        { branch: claudeBranch, worktreeId: claudeMeta?.worktreeId ?? "" },
+        { branch: codexBranch, worktreeId: codexMeta?.worktreeId ?? "" },
+      ],
     });
-    expect(created.worktreeIds.every((id) => id.length > 0)).toBe(true);
+    expect(created.worktrees.every((worktree) => worktree.worktreeId.length > 0)).toBe(true);
     expect(claudeMeta?.agent).toBe("claude");
     expect(codexMeta?.agent).toBe("codex");
     expect(claudeMeta?.baseBranch).toBe("main");
@@ -579,10 +580,10 @@ describe("LifecycleService", () => {
       worktreeId: chosenId,
     });
 
-    expect(created.primaryWorktreeId).toBe(chosenId);
+    expect(created.worktrees[0].worktreeId).toBe(chosenId);
     expect(runtime.getWorktreeByBranch("claude-feature/chosen")?.worktreeId).toBe(chosenId);
-    expect(created.worktreeIds[1]).not.toBe(chosenId);
-    expect(runtime.getWorktreeByBranch("codex-feature/chosen")?.worktreeId).toBe(created.worktreeIds[1]);
+    expect(created.worktrees[1].worktreeId).not.toBe(chosenId);
+    expect(runtime.getWorktreeByBranch("codex-feature/chosen")?.worktreeId).toBe(created.worktrees[1].worktreeId);
   });
 
   it("rolls back the first paired worktree when the second branch cannot be created", async () => {
@@ -2102,15 +2103,10 @@ describe("LifecycleService", () => {
       agents: ["claude", "codex"],
     });
 
-    expect(created).toMatchObject({
-      primaryBranch: "claude-fix-login-flow",
-      branches: ["claude-fix-login-flow", "codex-fix-login-flow"],
-    });
-    expect(created.worktreeIds).toEqual([
-      runtime.getWorktreeByBranch("claude-fix-login-flow")?.worktreeId ?? "",
-      runtime.getWorktreeByBranch("codex-fix-login-flow")?.worktreeId ?? "",
+    expect(created.worktrees).toEqual([
+      { branch: "claude-fix-login-flow", worktreeId: runtime.getWorktreeByBranch("claude-fix-login-flow")?.worktreeId ?? "" },
+      { branch: "codex-fix-login-flow", worktreeId: runtime.getWorktreeByBranch("codex-fix-login-flow")?.worktreeId ?? "" },
     ]);
-    expect(created.primaryWorktreeId).toBe(created.worktreeIds[0]);
     expect(autoName.calls).toEqual([
       {
         config: {
@@ -2276,7 +2272,7 @@ describe("LifecycleService", () => {
     );
 
     const result = await lifecycle.createWorktrees({ prompt: "Fix the login flow", agents: ["claude", "codex"] });
-    expect(result.branches).toHaveLength(2);
+    expect(result.worktrees).toHaveLength(2);
     expect(reportedIds).toHaveLength(2);
     expect(finishedIds).toEqual(reportedIds);
     expect(tracker.listPending()).toEqual([]);

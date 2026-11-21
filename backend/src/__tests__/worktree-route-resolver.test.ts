@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { resolveRouteWorktree, WorktreeBusyGuards } from "../services/worktree-id-resolver";
+import { WorktreeBusyGuards } from "../services/worktree-busy-guards";
+import { resolveRouteWorktree } from "../services/worktree-route-resolver";
 
 function makeDeps(
   initial: Record<string, string>,
@@ -74,10 +75,11 @@ describe("resolveRouteWorktree", () => {
   it("answers 409 for an id being removed even after a reconcile dropped it from the runtime", async () => {
     const fixture = makeDeps({});
 
-    fixture.guards.markRemoving("wt-a");
-    await expect(resolveRouteWorktree("wt-a", fixture.deps, ANY)).rejects.toMatchObject({
-      status: 409,
-      message: "Worktree is being removed: wt-a",
+    await fixture.guards.withRemoving("wt-a", "feature/a", async () => {
+      await expect(resolveRouteWorktree("wt-a", fixture.deps, ANY)).rejects.toMatchObject({
+        status: 409,
+        message: "Worktree is being removed: wt-a",
+      });
     });
     expect(fixture.reconciles).toBe(0);
   });
@@ -108,7 +110,6 @@ describe("resolveRouteWorktree", () => {
 
   it("does not guard a known worktree unless asked to", async () => {
     const fixture = makeDeps({ "wt-a": "feature/a" }, undefined, ["wt-a"]);
-    fixture.guards.markRemoving("wt-a");
 
     expect(await resolveRouteWorktree("wt-a", fixture.deps, ANY)).toEqual({ worktreeId: "wt-a", branch: "feature/a" });
   });

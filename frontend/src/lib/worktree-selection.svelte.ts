@@ -3,21 +3,21 @@ import type { PendingSelection, WorktreeInfo, WorktreeRef } from "./types";
 import { loadSavedSelectedWorktree, saveSelectedWorktree } from "./utils";
 import { refOf } from "./worktree-ref";
 
-/** Branch Cmd+Up/Down moves to in `branches` (the displayed order): from
- *  nothing, the first or last one; at either end, stay put. */
-export function stepBranch(branches: string[], current: string | null, direction: -1 | 1): string | null {
-  if (branches.length === 0) return current;
-  if (!current) return branches[direction === 1 ? 0 : branches.length - 1];
-  const next = branches.indexOf(current) + direction;
-  return next >= 0 && next < branches.length ? branches[next] : current;
+/** Key Cmd+Up/Down moves to in `keys` (the displayed order): from nothing,
+ *  the first or last one; at either end, stay put. */
+export function stepKey(keys: string[], current: string | null, direction: -1 | 1): string | null {
+  if (keys.length === 0) return current;
+  if (!current) return keys[direction === 1 ? 0 : keys.length - 1];
+  const next = keys.indexOf(current) + direction;
+  return next >= 0 && next < keys.length ? keys[next] : current;
 }
 
 /** Where the selection goes when `leaving` closes or disappears: the row
  *  above, else the one below, skipping rows being removed. */
-export function neighborBranch(branches: string[], leaving: string, removing: ReadonlySet<string>): string | null {
-  const index = branches.indexOf(leaving);
-  const candidates = [branches[index - 1], branches[index + 1]];
-  return candidates.find((branch) => branch !== undefined && !removing.has(branch)) ?? null;
+export function neighborKey(keys: string[], leaving: string, removing: ReadonlySet<string>): string | null {
+  const index = keys.indexOf(leaving);
+  const candidates = [keys[index - 1], keys[index + 1]];
+  return candidates.find((key) => key !== undefined && !removing.has(key)) ?? null;
 }
 
 /** The selected worktree and the current project (whose worktrees the sidebar
@@ -67,14 +67,15 @@ export class WorktreeSelection {
   resolvePending(worktrees: Array<Pick<WorktreeInfo, "project" | "id" | "branch">>): void {
     const pending = this.pending;
     if (!pending) return;
-    const key = pending.source === "hash" ? "branch" : "id";
-    this.select(worktrees.find((worktree) => worktree[key] === pending.name) ?? null);
+    this.select(worktrees.find((worktree) =>
+      "branch" in pending ? worktree.branch === pending.branch : worktree.id === pending.id
+    ) ?? null);
   }
 
   /** Mirror the selection into the hash: its current branch, else the hash
    *  branch still pending. */
   writeHash(selectedWorktree: Pick<WorktreeInfo, "branch"> | undefined): void {
-    const pendingBranch = this.pending?.source === "hash" ? this.pending.name : null;
+    const pendingBranch = this.pending && "branch" in this.pending ? this.pending.branch : null;
     writeLocationHash(this.project, selectedWorktree?.branch ?? pendingBranch);
   }
 

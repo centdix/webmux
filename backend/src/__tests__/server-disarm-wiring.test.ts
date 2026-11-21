@@ -36,8 +36,8 @@ describe("server.ts disarm-on-interaction wiring", () => {
 });
 
 /** Source-level regression test: a worktree being created is missing from the runtime, so the
- *  terminal WebSocket must check its id with `resolveRouteWorktree` (409 while being created) and
- *  then `resolveTerminalWorktree` (409 while removed / tabs mutating) before attaching. */
+ *  terminal attach target must be resolved through `resolveIdleRouteWorktree` (409 while being
+ *  created, removed or having its tabs updated). */
 describe("server.ts terminal WebSocket attaches by id", () => {
   const serverPath = join(import.meta.dir, "..", "server.ts");
 
@@ -47,36 +47,46 @@ describe("server.ts terminal WebSocket attaches by id", () => {
     expect(source).toMatch(/\[projectApiPaths\.streamAgentsWorktreeConversation\]: \(req, server\) => \{\s*const parsed = parseParams\(req\.params, WorktreeIdParamsSchema\);[\s\S]*?data: \{ kind: "agents", prefix: instancePrefix, worktreeId,/);
   });
 
-  it("resolves the route id before resolving the terminal attach target", async () => {
+  it("resolves the terminal attach target through the idle route resolver", async () => {
     const source = await Bun.file(serverPath).text();
-    expect(source).toMatch(/const terminalWorktree = await resolveTerminalWorktree\(\(await resolveRouteWorktree\(worktreeId\)\)\.worktreeId\)/);
+    expect(source).toMatch(/const terminalWorktree = await resolveTerminalWorktree\(worktreeId\)/);
+    expect(source).toMatch(/async function resolveTerminalWorktree\(worktreeId: string\): Promise<\{[^}]*\}> \{\s*let state = await resolveIdleRouteWorktree\(worktreeId\);/);
   });
 });
 
 /** Source-level wiring test: which routes guard against busy worktrees. The resolve-then-guard
- *  order itself is covered by `worktree-id-resolver.test.ts`. */
+ *  order itself is covered by `worktree-route-resolver.test.ts`. */
 describe("server.ts id routes resolve the worktree first", () => {
   const serverPath = join(import.meta.dir, "..", "server.ts");
   const expected = [
-    "apiDeleteWorktree",
-    "apiOpenWorktree",
     "apiGetNativeTerminalLaunch",
     "apiCloseWorktree",
-    "apiRefreshWorktreeAgentTerminal",
     "apiSetWorktreeArchived",
     "apiSetWorktreeLabel",
     "apiSetWorktreeProfile",
     "apiMergeWorktree",
-    "apiSendPrompt",
-    "apiCreateWorktreeTab",
-    "apiSelectWorktreeTab",
-    "apiDeleteWorktreeTab",
   ];
 
   it.each(expected)("%s resolves the id and requires an idle worktree first", async (fn) => {
     const source = await Bun.file(serverPath).text();
     expect(source).toMatch(new RegExp(
       `async function ${fn}\\(id: string[^)]*\\): Promise<Response> \\{\\s*const \\{ worktreeId, branch \\} = await resolveIdleRouteWorktree\\(id\\);`,
+    ));
+  });
+
+  it.each([
+    ["apiDeleteWorktree", "busyGuards.withRemoving("],
+    ["apiOpenWorktree", "busyGuards.withMutatingTab("],
+    ["apiRefreshWorktreeAgentTerminal", "busyGuards.withMutatingTab("],
+    ["apiCreateWorktreeTab", "busyGuards.withMutatingTab("],
+    ["apiSelectWorktreeTab", "busyGuards.withMutatingTab("],
+    ["apiDeleteWorktreeTab", "busyGuards.withMutatingTab("],
+    ["apiSendPrompt", "resolveTerminalWorktree("],
+  ])("%s resolves the id, then guards through %s", async (fn, guard) => {
+    const source = await Bun.file(serverPath).text();
+    const escapedGuard = guard.replace(/[.(]/g, "\\$&");
+    expect(source).toMatch(new RegExp(
+      `async function ${fn}\\(id: string[^)]*\\): Promise<Response> \\{\\s*const \\{ worktreeId, branch \\} = await resolveRouteWorktree\\(id\\);[\\s\\S]*?${escapedGuard}`,
     ));
   });
 

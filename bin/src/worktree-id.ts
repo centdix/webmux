@@ -1,7 +1,7 @@
 import { BunGitGateway, type GitGateway } from "../../backend/src/adapters/git";
 import { readWorktreeMeta } from "../../backend/src/adapters/fs";
 import { listLiveProjectWorktrees } from "../../backend/src/services/lifecycle-service";
-import { labelWorktreeBranch, readWorktreeIdAt, resolveWorktreeId } from "../../backend/src/services/reconciliation-service";
+import { labelWorktreeBranch, readWorktreeIdAt, resolveWorktreeId } from "../../backend/src/services/worktree-identity";
 import { resolveProjectRoot } from "./shared";
 
 export interface WorktreeIdSource {

@@ -33,11 +33,11 @@ interface WatchState {
 
 const states = new Map<string, WatchState>();
 
-function getState(branch: string): WatchState {
-  let state = states.get(branch);
+function getState(worktreeId: string): WatchState {
+  let state = states.get(worktreeId);
   if (!state) {
     state = { idleSinceMs: null, inFlight: false };
-    states.set(branch, state);
+    states.set(worktreeId, state);
   }
   return state;
 }
@@ -57,11 +57,11 @@ async function processWorktree(
   const meta = await readMeta(path);
   if (!meta?.oneshot) {
     // Disarmed (or never armed) — drop any tracked state and skip.
-    states.delete(branch);
+    states.delete(worktreeId);
     return;
   }
 
-  const state = getState(branch);
+  const state = getState(worktreeId);
   if (state.inFlight) return;
 
   // `stopped` / `error` are explicit terminal signals from the agent runtime —
@@ -129,7 +129,7 @@ async function processWorktree(
     // reconcile fires — without this mirror, snapshot.oneshot would stay armed.
     if (deps.projectRuntime.getWorktree(worktreeId)) deps.projectRuntime.setOneshot(worktreeId, null);
   } finally {
-    states.delete(branch);
+    states.delete(worktreeId);
   }
 }
 

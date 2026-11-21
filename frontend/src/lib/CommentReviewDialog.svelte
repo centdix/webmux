@@ -73,7 +73,7 @@
   }
 
   async function handleSend(): Promise<void> {
-    if (!worktreeId || noneSelected) return;
+    if (noneSelected) return;
     sending = true;
     sendError = "";
     const preamble =

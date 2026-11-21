@@ -964,8 +964,7 @@ export async function runOneshot(parsed: ParsedOneshotCommand, port: number, dep
       const result = await api.createWorktree({
         body: { ...body, source: "oneshot", oneshot: oneshotConfig },
       });
-      branch = result.primaryBranch;
-      worktreeId = result.primaryWorktreeId;
+      ({ branch, worktreeId } = result.worktrees[0]);
       stdout(`[${timestamp()}] [event] created ${branch}`);
     }
   } catch (error) {

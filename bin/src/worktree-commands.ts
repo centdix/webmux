@@ -12,7 +12,7 @@ import type { WorktreeCreationPhase } from "../../backend/src/domain/model";
 import { compareWorktreeOrder, isValidWorktreeName } from "../../backend/src/domain/policies";
 import { isValidPortLabel } from "../../backend/src/domain/port-registrations";
 import { buildArchivedWorktreePathSet } from "../../backend/src/services/archive-service";
-import { readWorktreeIdAt } from "../../backend/src/services/reconciliation-service";
+import { readWorktreeIdAt } from "../../backend/src/services/worktree-identity";
 import { resolveWorktreeIdByBranch, resolveWorktreeIdInProject } from "./worktree-id";
 import { readProjectsRegistryFile, type ProjectsRegistryReadResult } from "../../backend/src/adapters/projects-registry";
 import type { ProjectEntry } from "../../backend/src/domain/projects";
@@ -1170,11 +1170,11 @@ export async function runWorktreeCommand(
       }
 
       const result = await runtime.lifecycleService.createWorktrees(parsed.input);
-      for (const branch of result.branches) {
+      for (const { branch } of result.worktrees) {
         stdout(`Created worktree ${branch}`);
       }
       if (!parsed.detach) {
-        switchToTmuxWindow(runtime.projectDir, result.primaryBranch);
+        switchToTmuxWindow(runtime.projectDir, result.worktrees[0].branch);
       }
       return 0;
     }

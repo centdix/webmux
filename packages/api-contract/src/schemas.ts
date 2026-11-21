@@ -173,11 +173,8 @@ export const OpenWorktreeRequestSchema = z.object({
 });
 
 export const CreateWorktreeResponseSchema = z.object({
-  primaryBranch: z.string(),
-  primaryWorktreeId: z.string(),
-  branches: z.array(z.string()),
-  /** Aligned with `branches`: `worktreeIds[i]` is the id of the worktree on `branches[i]`. */
-  worktreeIds: z.array(z.string()),
+  /** The created worktrees, primary first. */
+  worktrees: z.array(z.object({ worktreeId: z.string(), branch: z.string() })).min(1),
 });
 
 export const SetWorktreeArchivedRequestSchema = z.object({
@@ -613,7 +610,7 @@ export const WorktreeIdParamsSchema = z.object({
   id: z.string().min(1),
 });
 
-export const WorktreeIdPortParamsSchema = z.object({
+export const WorktreePortParamsSchema = z.object({
   id: z.string().min(1),
   label: z.string(),
 });
@@ -793,7 +790,7 @@ export type WorktreeTab = z.infer<typeof WorktreeTabSchema>;
 export type WorktreeTabParams = z.infer<typeof WorktreeTabParamsSchema>;
 export type CreateTabResponse = z.infer<typeof CreateTabResponseSchema>;
 export type WorktreeIdParams = z.infer<typeof WorktreeIdParamsSchema>;
-export type WorktreeIdPortParams = z.infer<typeof WorktreeIdPortParamsSchema>;
+export type WorktreePortParams = z.infer<typeof WorktreePortParamsSchema>;
 export type RegisterWorktreePortRequest = z.infer<typeof RegisterWorktreePortRequestSchema>;
 export type RegisterWorktreePortResponse = z.infer<typeof RegisterWorktreePortResponseSchema>;
 export type WorktreePortListResponse = z.infer<typeof WorktreePortListResponseSchema>;

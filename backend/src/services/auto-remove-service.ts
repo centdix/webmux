@@ -3,16 +3,15 @@ import type { PrEntry } from "../domain/model";
 import { log } from "../lib/log";
 import type { LifecycleService } from "./lifecycle-service";
 import type { NotificationService } from "./notification-service";
-import { readWorktreeIdAt } from "./reconciliation-service";
+import type { WorktreeBusyGuards } from "./worktree-busy-guards";
+import { readWorktreeIdAt } from "./worktree-identity";
 
 export interface AutoRemoveDependencies {
   lifecycleService: LifecycleService;
   git: GitGateway;
   projectRoot: string;
   notifications: NotificationService;
-  isRemoving: (worktreeId: string) => boolean;
-  markRemoving: (worktreeId: string) => void;
-  unmarkRemoving: (worktreeId: string) => void;
+  guards: Pick<WorktreeBusyGuards, "isRemoving" | "withRemoving">;
   /** Authoritative PR states per branch across all configured repos. Queried live
    *  rather than read from the per-worktree PR cache, so a merge is detected even
    *  when no open-state display sync ever ran (dashboard was never opened). Returns
@@ -48,29 +47,28 @@ export async function runAutoRemove(deps: AutoRemoveDependencies): Promise<void>
       log.info(`[auto-remove] skipping unreadable worktree ${branch}: ${msg}`);
       continue;
     }
-    if (deps.isRemoving(worktreeId)) continue;
+    if (deps.guards.isRemoving(worktreeId)) continue;
 
     if (deps.git.readWorktreeStatus(entry.path).dirty) {
       log.info(`[auto-remove] skipping dirty worktree: ${branch}`);
       continue;
     }
 
-    deps.markRemoving(worktreeId);
     try {
-      log.info(`[auto-remove] removing merged worktree: ${branch}`);
-      await deps.lifecycleService.removeWorktree(worktreeId);
-      deps.notifications.notify({
-        worktreeId,
-        branch,
-        type: "worktree_auto_removed",
-        message: `Worktree auto-removed after merge: ${branch}`,
+      await deps.guards.withRemoving(worktreeId, branch, async () => {
+        log.info(`[auto-remove] removing merged worktree: ${branch}`);
+        await deps.lifecycleService.removeWorktree(worktreeId);
+        deps.notifications.notify({
+          worktreeId,
+          branch,
+          type: "worktree_auto_removed",
+          message: `Worktree auto-removed after merge: ${branch}`,
+        });
+        log.info(`[auto-remove] removed worktree: ${branch}`);
       });
-      log.info(`[auto-remove] removed worktree: ${branch}`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error(`[auto-remove] failed to remove worktree ${branch}: ${msg}`);
-    } finally {
-      deps.unmarkRemoving(worktreeId);
     }
   }
 }

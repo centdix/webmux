@@ -46,8 +46,8 @@ export function pickInitialSelection(
   project: string,
   saved: string | null,
 ): PendingSelection | null {
-  if (hash?.project === project && hash.branch) return { project, name: hash.branch, source: "hash" };
-  return saved ? { project, name: saved, source: "saved" } : null;
+  if (hash?.project === project && hash.branch) return { project, branch: hash.branch };
+  return saved ? { project, id: saved } : null;
 }
 
 /** What a hash edited by hand or set by a same-tab link opens. */

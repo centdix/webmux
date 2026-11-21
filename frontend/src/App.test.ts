@@ -293,8 +293,7 @@ function createConfig(overrides: Partial<AppConfig> = {}): AppConfig {
 
 /** A create response for the given branches; ids follow `createWorktree`'s `wt-<branch>`. */
 function createdResult(...branches: string[]): CreateWorktreeResponse {
-  const worktreeIds = branches.map((branch) => `wt-${branch}`);
-  return { primaryBranch: branches[0], primaryWorktreeId: worktreeIds[0], branches, worktreeIds };
+  return { worktrees: branches.map((branch) => ({ branch, worktreeId: `wt-${branch}` })) };
 }
 
 function createWorktree(
@@ -830,7 +829,7 @@ describe("App create selection", () => {
     render(App, { props: { selection, onNoProjects: vi.fn() } });
 
     expect(await screen.findByText("git exploded")).toBeInTheDocument();
-    expect(selection.pending).toEqual({ project: PROJECT, name: "wt-feature/saved", source: "saved" });
+    expect(selection.pending).toEqual({ project: PROJECT, id: "wt-feature/saved" });
     expect(window.location.hash).toBe(`#${PROJECT}`);
     expect(localStorage.getItem(`wt-last-selected-worktree:${PROJECT}`)).toBe("wt-feature/saved");
   });
@@ -846,7 +845,7 @@ describe("App create selection", () => {
     render(App, { props: { selection, onNoProjects: vi.fn() } });
 
     expect(await screen.findByText("git exploded")).toBeInTheDocument();
-    expect(selection.pending).toEqual({ project: PROJECT, name: "feature/hash", source: "hash" });
+    expect(selection.pending).toEqual({ project: PROJECT, branch: "feature/hash" });
     expect(window.location.hash).toBe(`#${PROJECT}/feature/hash`);
 
     window.dispatchEvent(new HashChangeEvent("hashchange"));
@@ -1303,10 +1302,10 @@ describe("App create selection", () => {
       createWorktree("zzz-renamed", { id: primaryId }),
     ]);
     createResult.resolve({
-      primaryBranch: "claude-feature/new",
-      primaryWorktreeId: primaryId,
-      branches: ["claude-feature/new", "codex-feature/new"],
-      worktreeIds: [primaryId, "wt-second"],
+      worktrees: [
+        { branch: "claude-feature/new", worktreeId: primaryId },
+        { branch: "codex-feature/new", worktreeId: "wt-second" },
+      ],
     });
 
     await waitFor(() => {

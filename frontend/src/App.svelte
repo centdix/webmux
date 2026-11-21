@@ -69,7 +69,7 @@
     DEFAULT_POLL_INTERVAL_MS,
     WorktreesStore,
   } from "./lib/worktrees-store.svelte";
-  import { neighborBranch, stepBranch, type WorktreeSelection } from "./lib/worktree-selection.svelte";
+  import { neighborKey, stepKey, type WorktreeSelection } from "./lib/worktree-selection.svelte";
   import { readLocationHash, resolveHashTarget } from "./lib/project-location";
   import { WorktreeActions } from "./lib/worktree-actions.svelte";
   import { NotificationCenter } from "./lib/notifications.svelte";
@@ -173,8 +173,6 @@
   let DiffDialogComponent = $state<Component<DiffDialogProps> | null>(null);
   let showAddProjectDialog = $state(false);
   let pendingCreateCount = $state(0);
-  let latestAutoSelectCreateId = -1;
-  let nextCreateRequestId = 0;
   let nextAvailableBranchFetchId = 0;
   let nextBaseBranchFetchId = 0;
   let sshHost = $state(localStorage.getItem(SSH_STORAGE_KEY) ?? "");
@@ -422,7 +420,7 @@
   });
 
   $effect(() => {
-    if (pendingCreateCount === 0 || latestAutoSelectCreateId === -1 || !pendingCreate) return;
+    if (!pendingCreate) return;
     const target = store.find(pendingCreate);
     if (target) selectWorktree(target);
   });
@@ -565,7 +563,6 @@
 
   async function handleCreate(request: CreateWorktreeRequest) {
     const targetProject = createProject;
-    const requestId = nextCreateRequestId++;
     const shouldAutoSelectCreatedWorktree = selectedWorktree == null;
     const requestedAgentIds = request.agents && request.agents.length > 0
       ? request.agents
@@ -573,9 +570,6 @@
         ? [request.agent]
         : [createConfig.defaultAgentId];
     const expectedCreatedCount = requestedAgentIds.length;
-    if (shouldAutoSelectCreatedWorktree) {
-      latestAutoSelectCreateId = requestId;
-    }
     pendingCreateCount += expectedCreatedCount;
     const created: WorktreeRef = { project: targetProject, id: randomUuid() };
     if (shouldAutoSelectCreatedWorktree) {
@@ -603,29 +597,25 @@
         linear.invalidate(targetProject);
         linear.ensure(targetProject);
       }
-      if (store.find(created) && shouldAutoSelectCreatedWorktree && requestId === latestAutoSelectCreateId) {
+      if (sameWorktree(pendingCreate, created) && store.find(created)) {
         selectWorktree(created);
       }
     } catch (err) {
       showToast({ tone: "error", message: `Failed to create: ${errorMessage(err)}` });
     } finally {
       pendingCreateCount = Math.max(0, pendingCreateCount - expectedCreatedCount);
-      if (shouldAutoSelectCreatedWorktree && requestId === latestAutoSelectCreateId) {
-        pendingCreate = null;
-        latestAutoSelectCreateId = -1;
-      }
+      if (sameWorktree(pendingCreate, created)) pendingCreate = null;
     }
   }
 
   /** The user moved elsewhere: a create in flight no longer steals the selection. */
   function cancelCreateAutoSelect(): void {
     pendingCreate = null;
-    latestAutoSelectCreateId = -1;
   }
 
   function selectNeighborOf(ref: WorktreeRef): void {
     if (!sameWorktree(ref, selection.selected)) return;
-    const neighbor = neighborBranch(visibleKeys, worktreeKey(ref), store.removing.keys);
+    const neighbor = neighborKey(visibleKeys, worktreeKey(ref), store.removing.keys);
     selection.select(neighbor ? parseWorktreeKey(neighbor) : null);
   }
 
@@ -780,12 +770,12 @@
       if (isTextEntryTarget(e.target)) return;
       e.preventDefault();
       const prefixes = railItems.map((item) => item.prefix);
-      const next = stepBranch(prefixes, activeProject, e.key === "ArrowUp" ? -1 : 1);
+      const next = stepKey(prefixes, activeProject, e.key === "ArrowUp" ? -1 : 1);
       if (next && next !== activeProject) switchToProject(next);
     } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
       e.preventDefault();
       const current = selection.selected ? worktreeKey(selection.selected) : null;
-      const next = stepBranch(navigableKeys, current, e.key === "ArrowUp" ? -1 : 1);
+      const next = stepKey(navigableKeys, current, e.key === "ArrowUp" ? -1 : 1);
       if (next !== current) selection.select(next ? parseWorktreeKey(next) : null);
     } else if (e.key === "k" || e.key === "K") {
       e.preventDefault();
@@ -1245,11 +1235,11 @@
   />
 {/if}
 
-{#if ciDetailsPr}
+{#if ciDetailsPr && selectedWorktree}
   <CiDetailsDialog
     project={activeProject}
     pr={ciDetailsPr}
-    worktreeId={selectedWorktree?.id ?? ""}
+    worktreeId={selectedWorktree.id}
     onclose={() => (ciDetailsPr = null)}
     onfixsuccess={() => {
       ciDetailsPr = null;
@@ -1257,11 +1247,11 @@
   />
 {/if}
 
-{#if commentReviewPr}
+{#if commentReviewPr && selectedWorktree}
   <CommentReviewDialog
     project={activeProject}
     pr={commentReviewPr}
-    worktreeId={selectedWorktree?.id ?? ""}
+    worktreeId={selectedWorktree.id}
     onclose={() => (commentReviewPr = null)}
     onsendsuccess={() => {
       commentReviewPr = null;

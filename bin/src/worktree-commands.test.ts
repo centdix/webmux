@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { readProjectsRegistryFile } from "../../backend/src/adapters/projects-registry";
 import { buildProjectSessionName, buildWorktreeWindowName } from "../../backend/src/adapters/tmux";
 import type { CreateLifecycleWorktreeInput, CreateLifecycleWorktreesInput, CreateLifecycleWorktreesResult } from "../../backend/src/services/lifecycle-service";
-import { makeUnmanagedWorktreeId } from "../../backend/src/services/reconciliation-service";
+import { makeUnmanagedWorktreeId } from "../../backend/src/services/worktree-identity";
 import {
   parseAddCommandArgs,
   parseBranchCommandArgs,
@@ -36,8 +36,7 @@ function stubLifecycleService(calls: Array<{ method: string; value: unknown }>) 
       const branches = selectedAgents.length > 1
         ? selectedAgents.map((agent) => `${agent}/${branch}`)
         : [branch];
-      const worktreeIds = branches.map((_, index) => `wt-${index + 1}`);
-      return { primaryBranch: branches[0] ?? branch, primaryWorktreeId: "wt-1", branches, worktreeIds };
+      return { worktrees: branches.map((name, index) => ({ branch: name, worktreeId: `wt-${index + 1}` })) };
     },
     async openWorktree(worktreeId: string): Promise<{ branch: string; worktreeId: string }> {
       calls.push({ method: "openWorktree", value: worktreeId });
@@ -466,7 +465,7 @@ describe("runWorktreeCommand", () => {
                 phase: "creating_worktree",
                 source: "ui",
               });
-              return { primaryBranch: "fix-login-flow", primaryWorktreeId: "wt-1", branches: ["fix-login-flow"], worktreeIds: ["wt-1"] };
+              return { worktrees: [{ branch: "fix-login-flow", worktreeId: "wt-1" }] };
             },
           },
         }),

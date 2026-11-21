@@ -1,34 +1,34 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { WorktreeInfo } from "./types";
-import { neighborBranch, stepBranch, WorktreeSelection } from "./worktree-selection.svelte";
+import { neighborKey, stepKey, WorktreeSelection } from "./worktree-selection.svelte";
 
 afterEach(() => {
   localStorage.clear();
   window.history.replaceState(null, "", "/");
 });
 
-describe("stepBranch", () => {
+describe("stepKey", () => {
   const branches = ["a", "b", "c"];
 
   it("starts from either end when nothing is selected", () => {
-    expect(stepBranch(branches, null, 1)).toBe("a");
-    expect(stepBranch(branches, null, -1)).toBe("c");
+    expect(stepKey(branches, null, 1)).toBe("a");
+    expect(stepKey(branches, null, -1)).toBe("c");
   });
 
   it("moves within the list and stays put at its ends", () => {
-    expect(stepBranch(branches, "b", 1)).toBe("c");
-    expect(stepBranch(branches, "b", -1)).toBe("a");
-    expect(stepBranch(branches, "c", 1)).toBe("c");
-    expect(stepBranch([], "x", 1)).toBe("x");
+    expect(stepKey(branches, "b", 1)).toBe("c");
+    expect(stepKey(branches, "b", -1)).toBe("a");
+    expect(stepKey(branches, "c", 1)).toBe("c");
+    expect(stepKey([], "x", 1)).toBe("x");
   });
 });
 
-describe("neighborBranch", () => {
+describe("neighborKey", () => {
   it("prefers the row above, skipping rows being removed", () => {
-    expect(neighborBranch(["a", "b", "c"], "b", new Set())).toBe("a");
-    expect(neighborBranch(["a", "b", "c"], "b", new Set(["a"]))).toBe("c");
-    expect(neighborBranch(["a", "b", "c"], "a", new Set())).toBe("b");
-    expect(neighborBranch(["a"], "a", new Set())).toBeNull();
+    expect(neighborKey(["a", "b", "c"], "b", new Set())).toBe("a");
+    expect(neighborKey(["a", "b", "c"], "b", new Set(["a"]))).toBe("c");
+    expect(neighborKey(["a", "b", "c"], "a", new Set())).toBe("b");
+    expect(neighborKey(["a"], "a", new Set())).toBeNull();
   });
 });
 
@@ -68,7 +68,7 @@ describe("WorktreeSelection", () => {
 
     selection.switchProject("beta");
     expect(selection.selected).toBeNull();
-    expect(selection.pending).toEqual({ project: "beta", name: "wt-b", source: "saved" });
+    expect(selection.pending).toEqual({ project: "beta", id: "wt-b" });
 
     selection.switchProject("alpha");
     expect(selection.pending).toBeNull();

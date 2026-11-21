@@ -79,15 +79,11 @@ describe("pickInitialProject", () => {
 
 describe("pickInitialSelection", () => {
   it("prefers the hash branch when the hash targets this project", () => {
-    expect(pickInitialSelection({ project: "alpha", branch: "feat/x" }, "alpha", "wt-main")).toEqual({
-      project: "alpha",
-      name: "feat/x",
-      source: "hash",
-    });
+    expect(pickInitialSelection({ project: "alpha", branch: "feat/x" }, "alpha", "wt-main")).toEqual({ project: "alpha", branch: "feat/x" });
   });
 
   it("uses the saved worktree when the hash targets another project or has no branch", () => {
-    const saved = { project: "alpha", name: "wt-main", source: "saved" };
+    const saved = { project: "alpha", id: "wt-main" };
     expect(pickInitialSelection({ project: "beta", branch: "feat/x" }, "alpha", "wt-main")).toEqual(saved);
     expect(pickInitialSelection({ project: "alpha", branch: null }, "alpha", "wt-main")).toEqual(saved);
     expect(pickInitialSelection(null, "alpha", null)).toBeNull();

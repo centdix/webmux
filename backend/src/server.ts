@@ -27,7 +27,7 @@ import {
   ToggleEnabledRequestSchema,
   UpsertCustomAgentRequestSchema,
   WorktreeIdParamsSchema,
-  WorktreeIdPortParamsSchema,
+  WorktreePortParamsSchema,
   WorktreeTabParamsSchema,
 } from "@webmux/api-contract";
 import { log } from "./lib/log";
@@ -130,7 +130,8 @@ import { classifyAgentsTerminalWorktreeError } from "./services/agents-ui-action
 import { buildProjectSnapshot } from "./services/snapshot-service";
 import { hubReconcileOptions, listAllProjectWorktrees } from "./services/all-projects-worktrees-service";
 import type { ReconcileOptions } from "./services/reconciliation-service";
-import { resolveRouteWorktree as resolveRouteWorktreeWith, WorktreeBusyGuards } from "./services/worktree-id-resolver";
+import { WorktreeBusyGuards } from "./services/worktree-busy-guards";
+import { resolveRouteWorktree as resolveRouteWorktreeWith } from "./services/worktree-route-resolver";
 import {
   ClaudeConversationService,
   isPendingClaudeConversationId,
@@ -401,9 +402,7 @@ const autoRemoveDeps: AutoRemoveDependencies = {
   git,
   projectRoot: PROJECT_DIR,
   notifications: runtimeNotifications,
-  isRemoving: (worktreeId: string) => busyGuards.isRemoving(worktreeId),
-  markRemoving: (worktreeId: string) => busyGuards.markRemoving(worktreeId),
-  unmarkRemoving: (worktreeId: string) => busyGuards.unmarkRemoving(worktreeId),
+  guards: busyGuards,
   getBranchPrStates: () =>
     fetchBranchPrStates(config.integrations.github.linkedRepos, PROJECT_DIR, prSyncState),
 };
@@ -549,13 +548,13 @@ const routeWorktreeResolverDeps = {
   guards: busyGuards,
 };
 
-/** A route's worktree id, checked against the runtime, with its current branch. */
-async function resolveRouteWorktree(worktreeId: string): Promise<{ worktreeId: string; branch: string }> {
+/** A route's worktree, checked against the runtime. */
+async function resolveRouteWorktree(worktreeId: string): Promise<ManagedWorktreeRuntimeState> {
   return await resolveRouteWorktreeWith(worktreeId, routeWorktreeResolverDeps, { requireIdle: false });
 }
 
 /** Like `resolveRouteWorktree`, and also 409 while the worktree is being created, removed, or has its tabs updated. */
-async function resolveIdleRouteWorktree(worktreeId: string): Promise<{ worktreeId: string; branch: string }> {
+async function resolveIdleRouteWorktree(worktreeId: string): Promise<ManagedWorktreeRuntimeState> {
   return await resolveRouteWorktreeWith(worktreeId, routeWorktreeResolverDeps, { requireIdle: true });
 }
 
@@ -574,15 +573,11 @@ async function resolveTerminalWorktree(worktreeId: string): Promise<{
   attachTarget: TerminalAttachTarget;
   agentName: WorktreeSnapshot["agentName"];
 }> {
-  let state = projectRuntime.getWorktree(worktreeId);
-  if (!state || !state.session.exists || !state.session.sessionName) {
+  let state = await resolveIdleRouteWorktree(worktreeId);
+  if (!state.session.exists || !state.session.sessionName) {
     await reconciliationService.reconcile(PROJECT_DIR);
-    state = projectRuntime.getWorktree(worktreeId);
+    state = await resolveIdleRouteWorktree(worktreeId);
   }
-  if (!state) {
-    throw new Error(`Worktree not found: ${worktreeId}`);
-  }
-  busyGuards.ensureNotBusy(state.worktreeId, state.branch);
   if (!state.session.exists || !state.session.sessionName) {
     throw new Error(`No open tmux window found for worktree: ${state.branch}`);
   }
@@ -1057,7 +1052,7 @@ async function apiInterruptAgentsWorktree(id: string): Promise<Response> {
 }
 
 async function apiRefreshWorktreeAgentTerminal(id: string): Promise<Response> {
-  const { worktreeId, branch } = await resolveIdleRouteWorktree(id);
+  const { worktreeId, branch } = await resolveRouteWorktree(id);
   return busyGuards.withMutatingTab(worktreeId, branch, async () => {
     await lifecycleService.refreshAgentTerminal(worktreeId);
     return jsonResponse({ ok: true });
@@ -1411,17 +1406,12 @@ async function apiCreateWorktree(req: Request): Promise<Response> {
     ...(oneshot ? { oneshot } : {}),
     ...(body.worktreeId ? { worktreeId: body.worktreeId } : {}),
   });
-  log.debug(`[worktree:add] done branches=${result.branches.join(",")}`);
-  return jsonResponse({
-    primaryBranch: result.primaryBranch,
-    primaryWorktreeId: result.primaryWorktreeId,
-    branches: result.branches,
-    worktreeIds: result.worktreeIds,
-  }, 201);
+  log.debug(`[worktree:add] done branches=${result.worktrees.map((worktree) => worktree.branch).join(",")}`);
+  return jsonResponse({ worktrees: result.worktrees }, 201);
 }
 
 async function apiDeleteWorktree(id: string): Promise<Response> {
-  const { worktreeId, branch } = await resolveIdleRouteWorktree(id);
+  const { worktreeId, branch } = await resolveRouteWorktree(id);
   return busyGuards.withRemoving(worktreeId, branch, async () => {
     log.info(`[worktree:rm] branch=${branch} worktreeId=${worktreeId}`);
     await lifecycleService.removeWorktree(worktreeId);
@@ -1431,7 +1421,7 @@ async function apiDeleteWorktree(id: string): Promise<Response> {
 }
 
 async function apiOpenWorktree(id: string, req: Request): Promise<Response> {
-  const { worktreeId, branch } = await resolveIdleRouteWorktree(id);
+  const { worktreeId, branch } = await resolveRouteWorktree(id);
   const parsed = await parseJsonBody(req, OpenWorktreeRequestSchema);
   if (!parsed.ok) return parsed.response;
   const prompt = parsed.data.prompt?.trim() ? parsed.data.prompt.trim() : undefined;
@@ -1470,7 +1460,7 @@ async function apiSetWorktreeArchived(id: string, req: Request): Promise<Respons
 }
 
 async function apiCreateWorktreeTab(id: string): Promise<Response> {
-  const { worktreeId, branch } = await resolveIdleRouteWorktree(id);
+  const { worktreeId, branch } = await resolveRouteWorktree(id);
   return busyGuards.withMutatingTab(worktreeId, branch, async () => {
     log.info(`[worktree:tab:create] branch=${branch}`);
     const result = await lifecycleService.createWorktreeTab(worktreeId);
@@ -1479,7 +1469,7 @@ async function apiCreateWorktreeTab(id: string): Promise<Response> {
 }
 
 async function apiSelectWorktreeTab(id: string, tabId: string): Promise<Response> {
-  const { worktreeId, branch } = await resolveIdleRouteWorktree(id);
+  const { worktreeId, branch } = await resolveRouteWorktree(id);
   return busyGuards.withMutatingTab(worktreeId, branch, async () => {
     log.info(`[worktree:tab:select] branch=${branch} tab=${tabId}`);
     await lifecycleService.selectWorktreeTab(worktreeId, tabId);
@@ -1488,7 +1478,7 @@ async function apiSelectWorktreeTab(id: string, tabId: string): Promise<Response
 }
 
 async function apiDeleteWorktreeTab(id: string, tabId: string): Promise<Response> {
-  const { worktreeId, branch } = await resolveIdleRouteWorktree(id);
+  const { worktreeId, branch } = await resolveRouteWorktree(id);
   return busyGuards.withMutatingTab(worktreeId, branch, async () => {
     log.info(`[worktree:tab:delete] branch=${branch} tab=${tabId}`);
     await lifecycleService.deleteWorktreeTab(worktreeId, tabId);
@@ -1521,7 +1511,7 @@ async function apiSetWorktreeProfile(id: string, req: Request): Promise<Response
 }
 
 async function apiSendPrompt(id: string, req: Request): Promise<Response> {
-  const { worktreeId, branch } = await resolveIdleRouteWorktree(id);
+  const { worktreeId, branch } = await resolveRouteWorktree(id);
   const parsed = await parseJsonBody(req, SendWorktreePromptRequestSchema);
   if (!parsed.ok) return parsed.response;
   const body = parsed.data;
@@ -1632,10 +1622,6 @@ async function postWorktreeConversationToLinear(
     return { ok: false, error: "LINEAR_API_KEY not set", status: 503 };
   }
 
-  await reconciliationService.reconcile(PROJECT_DIR);
-  const state = projectRuntime.getWorktree(worktreeId);
-  if (!state) return { ok: false, error: `Worktree not found: ${worktreeId}`, status: 404 };
-
   const resolved = await resolveAgentsWorktree(worktreeId);
   if (!resolved.ok) {
     return { ok: false, error: `Worktree not found: ${worktreeId}`, status: 404 };
@@ -1649,12 +1635,12 @@ async function postWorktreeConversationToLinear(
     : await worktreeConversationService.readWorktreeConversation(resolved.worktree);
   if (!conversationResult.ok) return { ok: false, error: conversationResult.error, status: conversationResult.status };
 
-  const prUrl = (state.prs ?? []).find((pr) => pr.state === "open" || pr.state === "merged")?.url ?? null;
+  const prUrl = resolved.worktree.prs.find((pr) => pr.state === "open" || pr.state === "merged")?.url ?? null;
 
   const exportInput: ExportConversationInput = {
     target,
-    branch: state.branch,
-    baseBranch: state.baseBranch ?? null,
+    branch: resolved.worktree.branch,
+    baseBranch: resolved.worktree.baseBranch ?? null,
     agent: resolved.worktree.agentName ?? null,
     prUrl,
     conversation: conversationResult.data.conversation,
@@ -1724,24 +1710,29 @@ function apiGetAutoNameConfig(): Response {
 const worktreePortApiDeps: WorktreePortApiDeps = {
   projectDir: PROJECT_DIR,
   portRegistrations: portRegistrationService,
-  projectRuntime,
-  reconcile: () => reconciliationService.reconcile(PROJECT_DIR),
 };
 
-async function apiRegisterWorktreePort(worktreeId: string, req: Request): Promise<Response> {
+async function apiListWorktreePorts(id: string): Promise<Response> {
+  const { worktreeId } = await resolveRouteWorktree(id);
+  return listWorktreePorts(worktreePortApiDeps, worktreeId);
+}
+
+async function apiRegisterWorktreePort(id: string, req: Request): Promise<Response> {
   const parsed = await parseJsonBody(req, RegisterWorktreePortRequestSchema);
   if (!parsed.ok) return parsed.response;
+  const { worktreeId } = await resolveRouteWorktree(id);
   return registerWorktreePort(worktreePortApiDeps, worktreeId, parsed.data);
+}
+
+async function apiDeleteWorktreePort(id: string, label: string): Promise<Response> {
+  const { worktreeId } = await resolveRouteWorktree(id);
+  return deleteWorktreePort(worktreePortApiDeps, worktreeId, label);
 }
 
 const MAX_DIFF_BYTES = 200 * 1024;
 
 async function apiGetWorktreeDiff(id: string): Promise<Response> {
-  const { worktreeId } = await resolveRouteWorktree(id);
-  await reconciliationService.reconcile(PROJECT_DIR);
-  const state = projectRuntime.getWorktree(worktreeId);
-  if (!state) return errorResponse(`Worktree not found: ${worktreeId}`, 404);
-
+  const state = await resolveRouteWorktree(id);
   const uncommitted = git.readDiff(state.path);
   const gitStatus = git.readStatus(state.path);
   const unpushedCommits = git.listUnpushedCommits(state.path);
@@ -1797,7 +1788,7 @@ async function apiUploadFiles(id: string, req: Request): Promise<Response> {
   const entries = formData.getAll("files");
   if (entries.length === 0) return errorResponse("No files provided", 400);
 
-  const uploadDir = `/tmp/webmux-uploads/${sanitizeFilename(branch)}`;
+  const uploadDir = `/tmp/webmux-uploads/${worktreeId}`;
   mkdirSync(uploadDir, { recursive: true });
 
   const results: Array<{ path: string }> = [];
@@ -2074,7 +2065,7 @@ function parseNotificationIdParam(params: Record<string, string>):
         const parsed = parseParams(req.params, WorktreeIdParamsSchema);
         if (!parsed.ok) return parsed.response;
         const { id } = parsed.data;
-        return catching(routeLabel("GET", projectApiPaths.worktreePorts, { id }), () => listWorktreePorts(worktreePortApiDeps, id));
+        return catching(routeLabel("GET", projectApiPaths.worktreePorts, { id }), () => apiListWorktreePorts(id));
       },
       POST: (req) => {
         const parsed = parseParams(req.params, WorktreeIdParamsSchema);
@@ -2086,10 +2077,10 @@ function parseNotificationIdParam(params: Record<string, string>):
 
     [projectApiPaths.deleteWorktreePort]: {
       DELETE: (req) => {
-        const parsed = parseParams(req.params, WorktreeIdPortParamsSchema);
+        const parsed = parseParams(req.params, WorktreePortParamsSchema);
         if (!parsed.ok) return parsed.response;
         const { id, label } = parsed.data;
-        return catching(routeLabel("DELETE", projectApiPaths.deleteWorktreePort, { id, label }), () => deleteWorktreePort(worktreePortApiDeps, id, label));
+        return catching(routeLabel("DELETE", projectApiPaths.deleteWorktreePort, { id, label }), () => apiDeleteWorktreePort(id, label));
       },
     },
 
@@ -2215,7 +2206,7 @@ function parseNotificationIdParam(params: Record<string, string>):
               if (msg.initialPane !== undefined) {
                 log.debug(`[ws] initialPane=${msg.initialPane} worktreeId=${worktreeId}`);
               }
-              const terminalWorktree = await resolveTerminalWorktree((await resolveRouteWorktree(worktreeId)).worktreeId);
+              const terminalWorktree = await resolveTerminalWorktree(worktreeId);
               const attachId = `${terminalWorktree.worktreeId}:${randomUUID()}`;
               data.attachId = attachId;
               await attach(
@@ -2230,7 +2221,7 @@ function parseNotificationIdParam(params: Record<string, string>):
               sendWs(ws, { type: "attached" });
               const scrollback = getScrollback(attachId);
               log.debug(
-                `[ws] attached branch=${projectRuntime.getWorktree(worktreeId)?.branch} worktreeId=${worktreeId} attachId=${attachId} scrollback=${scrollback.length} bytes`,
+                `[ws] attached worktreeId=${worktreeId} attachId=${attachId} scrollback=${scrollback.length} bytes`,
               );
               if (scrollback.length > 0) {
                 sendWs(ws, { type: "scrollback", data: scrollback });

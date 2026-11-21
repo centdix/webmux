@@ -85,14 +85,15 @@ describe("pending creations", () => {
 });
 
 describe("CreateWorktreeResponseSchema", () => {
-  it("carries the created worktree ids aligned with their branches", () => {
+  it("carries each created worktree's id with its branch, primary first", () => {
     const response = {
-      primaryBranch: "claude-feature/search",
-      primaryWorktreeId: "wt-claude",
-      branches: ["claude-feature/search", "codex-feature/search"],
-      worktreeIds: ["wt-claude", "wt-codex"],
+      worktrees: [
+        { worktreeId: "wt-claude", branch: "claude-feature/search" },
+        { worktreeId: "wt-codex", branch: "codex-feature/search" },
+      ],
     };
     expect(CreateWorktreeResponseSchema.parse(response)).toEqual(response);
-    expect(CreateWorktreeResponseSchema.safeParse({ primaryBranch: "a", branches: ["a"] }).success).toBe(false);
+    expect(CreateWorktreeResponseSchema.safeParse({ worktrees: [] }).success).toBe(false);
+    expect(CreateWorktreeResponseSchema.safeParse({ worktrees: [{ branch: "a" }] }).success).toBe(false);
   });
 });

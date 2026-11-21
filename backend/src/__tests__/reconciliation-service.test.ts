@@ -14,7 +14,8 @@ import {
 } from "../adapters/tmux";
 import { writeWorktreeMeta, writeWorktreePrs } from "../adapters/fs";
 import { ProjectRuntime } from "../services/project-runtime";
-import { makeUnmanagedWorktreeId, ReconciliationService } from "../services/reconciliation-service";
+import { ReconciliationService } from "../services/reconciliation-service";
+import { makeUnmanagedWorktreeId } from "../services/worktree-identity";
 
 interface Deferred {
   promise: Promise<void>;

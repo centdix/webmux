@@ -3,19 +3,11 @@ import { isValidPortLabel } from "../domain/port-registrations";
 import { errorResponse, jsonResponse } from "../lib/http";
 import { log } from "../lib/log";
 import type { PortRegistrationService } from "./port-registration-service";
-import type { ProjectRuntime } from "./project-runtime";
 
+/** Port routes for a worktree the caller already resolved (`/worktrees/:id/ports`). */
 export interface WorktreePortApiDeps {
   projectDir: string;
   portRegistrations: Pick<PortRegistrationService, "register" | "unregister" | "listWithStatus">;
-  projectRuntime: Pick<ProjectRuntime, "getWorktree">;
-  reconcile: () => Promise<void>;
-}
-
-/** Check a port route's worktree id (`/worktrees/:id/ports`) against the runtime. */
-async function isKnownWorktree(deps: WorktreePortApiDeps, worktreeId: string): Promise<boolean> {
-  await deps.reconcile();
-  return deps.projectRuntime.getWorktree(worktreeId) !== null;
 }
 
 export async function registerWorktreePort(
@@ -25,7 +17,6 @@ export async function registerWorktreePort(
 ): Promise<Response> {
   const { label, port, keep } = request;
   if (!isValidPortLabel(label)) return errorResponse(`Invalid port label: ${label}`, 400);
-  if (!await isKnownWorktree(deps, worktreeId)) return errorResponse(`Worktree not found: ${worktreeId}`, 404);
 
   const result = deps.portRegistrations.register({ projectDir: deps.projectDir, worktreeId, label }, { port, keep });
   if (!result.ok) return errorResponse(result.error, result.reason === "conflict" ? 409 : 503);
@@ -34,12 +25,10 @@ export async function registerWorktreePort(
 }
 
 export async function listWorktreePorts(deps: WorktreePortApiDeps, worktreeId: string): Promise<Response> {
-  if (!await isKnownWorktree(deps, worktreeId)) return errorResponse(`Worktree not found: ${worktreeId}`, 404);
   return jsonResponse({ ports: await deps.portRegistrations.listWithStatus(deps.projectDir, worktreeId) });
 }
 
 export async function deleteWorktreePort(deps: WorktreePortApiDeps, worktreeId: string, label: string): Promise<Response> {
-  if (!await isKnownWorktree(deps, worktreeId)) return errorResponse(`Worktree not found: ${worktreeId}`, 404);
   if (!deps.portRegistrations.unregister({ projectDir: deps.projectDir, worktreeId, label })) {
     return errorResponse(`No port registered as "${label}" for ${worktreeId}`, 404);
   }
