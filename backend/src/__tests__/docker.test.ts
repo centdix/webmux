@@ -4,9 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildDockerRunArgs,
+  buildSandboxGitConfig,
   buildSandboxEntrypoint,
   buildWebmuxCliWrapper,
   type LaunchContainerOpts,
+  type SandboxCredentials,
   type WebmuxCliMounts,
 } from "../adapters/docker";
 import type { DockerProfileConfig } from "../adapters/config";
@@ -39,10 +41,11 @@ function makeOpts(overrides: Partial<LaunchContainerOpts> = {}): LaunchContainer
 }
 
 /** Shorthand: call buildDockerRunArgs with test defaults for the trailing params. */
+const NO_CREDENTIALS: SandboxCredentials = { ghToken: null, gitIdentity: null, sshAuthSock: null };
+
 function build(
   opts: LaunchContainerOpts,
-  existingPaths = new Set<string>(),
-  sshAuthSock?: string,
+  credentials: SandboxCredentials = NO_CREDENTIALS,
   webmuxCli: WebmuxCliMounts | null = null,
   hostEnv: Record<string, string | undefined> = {},
 ): string[] {
@@ -53,8 +56,7 @@ function build(
     image: opts.sandboxConfig.image,
     entrypointPath: ENTRYPOINT,
     hostEnv,
-    existingPaths,
-    sshAuthSock,
+    credentials,
     webmuxCli,
   });
 }
@@ -129,7 +131,7 @@ describe("buildDockerRunArgs — envPassthrough", () => {
   it("forwards listed host vars that are set, from the given host env", () => {
     const flags = envFlags(build(
       makeOpts({ sandboxConfig: makeDockerProfile({ envPassthrough: ["FOO", "UNSET", "HOME"] }) }),
-      new Set(), undefined, null, { FOO: "bar", HOME: "/host" },
+      NO_CREDENTIALS, null, { FOO: "bar", HOME: "/host" },
     ));
     expect(flags).toContain("FOO=bar");
     expect(flags.some((f) => f.startsWith("UNSET="))).toBe(false);
@@ -240,68 +242,6 @@ describe("buildDockerRunArgs — extraMounts", () => {
 });
 
 // ---------------------------------------------------------------------------
-// extraMounts conflict resolution: config wins over credential defaults
-// ---------------------------------------------------------------------------
-
-describe("buildDockerRunArgs — extraMounts override credential mounts", () => {
-  it("config ~/.ssh writable overrides the default read-only credential mount", () => {
-    const existingPaths = new Set([`${HOME}/.ssh`]);
-    const args = build(
-      makeOpts({ sandboxConfig: makeDockerProfile({ image: "img", mounts: [
-        { hostPath: "~/.ssh", guestPath: "/home/webmux/.ssh", writable: true },
-      ] }) }),
-      existingPaths,
-    );
-    const m = mounts(args);
-    expect(m).toContain(`${HOME}/.ssh:/home/webmux/.ssh`);
-    expect(m).not.toContain(`${HOME}/.ssh:/home/webmux/.ssh:ro`);
-  });
-
-  it("config ~/.ssh read-only still suppresses the credential mount (config controls it)", () => {
-    const existingPaths = new Set([`${HOME}/.ssh`]);
-    const args = build(
-      makeOpts({ sandboxConfig: makeDockerProfile({ image: "img", mounts: [
-        { hostPath: "~/.ssh", guestPath: "/home/webmux/.ssh", writable: false },
-      ] }) }),
-      existingPaths,
-    );
-    const m = mounts(args);
-    const sshMounts = m.filter(v => v.includes("/home/webmux/.ssh"));
-    expect(sshMounts).toHaveLength(1);
-    expect(sshMounts[0]).toBe(`${HOME}/.ssh:/home/webmux/.ssh:ro`);
-  });
-
-  it("config ~/.gitconfig override does not affect unrelated credential mounts", () => {
-    const existingPaths = new Set([`${HOME}/.gitconfig`, `${HOME}/.ssh`]);
-    const args = build(
-      makeOpts({ sandboxConfig: makeDockerProfile({ image: "img", mounts: [
-        { hostPath: "~/.gitconfig", guestPath: "/home/webmux/.gitconfig", writable: true },
-      ] }) }),
-      existingPaths,
-    );
-    const m = mounts(args);
-    expect(m).toContain(`${HOME}/.gitconfig:/home/webmux/.gitconfig`);
-    expect(m).not.toContain(`${HOME}/.gitconfig:/home/webmux/.gitconfig:ro`);
-    expect(m).toContain(`${HOME}/.ssh:/home/webmux/.ssh:ro`);
-  });
-
-  it("credential mounts are included normally when there are no extraMounts", () => {
-    const existingPaths = new Set([`${HOME}/.gitconfig`, `${HOME}/.ssh`]);
-    const args = build(makeOpts(), existingPaths);
-    const m = mounts(args);
-    expect(m).toContain(`${HOME}/.gitconfig:/home/webmux/.gitconfig:ro`);
-    expect(m).toContain(`${HOME}/.ssh:/home/webmux/.ssh:ro`);
-  });
-
-  it("credential mounts are omitted for paths that do not exist on the host", () => {
-    const args = build(makeOpts());
-    const m = mounts(args);
-    expect(m).not.toContain(`${HOME}/.gitconfig:/home/webmux/.gitconfig:ro`);
-    expect(m).not.toContain(`${HOME}/.ssh:/home/webmux/.ssh:ro`);
-  });
-});
-
-// ---------------------------------------------------------------------------
 // Networking
 // ---------------------------------------------------------------------------
 
@@ -335,7 +275,7 @@ describe("buildDockerRunArgs — webmux CLI", () => {
   };
 
   it("mounts the CLI bundle, the PATH wrapper and the instance registry read-only", () => {
-    const m = mounts(build(makeOpts(), new Set(), undefined, CLI));
+    const m = mounts(build(makeOpts(), NO_CREDENTIALS, CLI));
     expect(m).toContain("/opt/pkg/webmux/bin/webmux.js:/opt/webmux/webmux.js:ro");
     expect(m).toContain(`${HOME}/.webmux/docker/webmux:/usr/local/bin/webmux:ro`);
     expect(m).toContain(`${HOME}/.webmux/instances:/home/webmux/.webmux/instances:ro`);
@@ -379,32 +319,126 @@ describe("buildDockerRunArgs — reserved env vars", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Git credentials
+// ---------------------------------------------------------------------------
+
+/** Map GIT_CONFIG_KEY_n/VALUE_n env flags back to ordered [key, value] pairs. */
+function gitConfigPairs(args: string[]): Array<[string, string]> {
+  const flags = envFlags(args);
+  const get = (k: string): string | undefined => flags.find((f) => f.startsWith(`${k}=`))?.slice(k.length + 1);
+  const count = Number(get("GIT_CONFIG_COUNT"));
+  return Array.from({ length: count }, (_, i): [string, string] => [get(`GIT_CONFIG_KEY_${i}`)!, get(`GIT_CONFIG_VALUE_${i}`)!]);
+}
+
+describe("buildDockerRunArgs — git credentials", () => {
+  const WITH_TOKEN: SandboxCredentials = {
+    ghToken: "ghp_secret",
+    gitIdentity: { name: "Ada Lovelace", email: "ada@example.com" },
+    sshAuthSock: null,
+  };
+
+  it("always sets safe.directory and push.autoSetupRemote", () => {
+    expect(gitConfigPairs(build(makeOpts()))).toEqual([
+      ["safe.directory", "/repos/my-branch"],
+      ["safe.directory", "/repos/main"],
+      ["push.autoSetupRemote", "true"],
+    ]);
+  });
+
+  it("without a token: no GH_TOKEN, no credential helper, no insteadOf", () => {
+    const args = build(makeOpts());
+    expect(envFlags(args).some((f) => f.startsWith("GH_TOKEN="))).toBe(false);
+    expect(gitConfigPairs(args).some(([k]) => k.startsWith("credential.") || k.startsWith("url."))).toBe(false);
+  });
+
+  it("with a token: passes GH_TOKEN, resets then sets the github.com helper, rewrites SSH remotes", () => {
+    const args = build(makeOpts(), WITH_TOKEN);
+    expect(envFlags(args)).toContain("GH_TOKEN=ghp_secret");
+    const pairs = gitConfigPairs(args);
+    const helpers = pairs.filter(([k]) => k === "credential.https://github.com.helper").map(([, v]) => v);
+    expect(helpers[0]).toBe("");
+    expect(helpers[1]).toContain('echo "password=$GH_TOKEN"');
+    expect(helpers[1]).toContain("username=x-access-token");
+    expect(pairs.filter(([k]) => k === "url.https://github.com/.insteadOf").map(([, v]) => v))
+      .toEqual(["git@github.com:", "ssh://git@github.com/"]);
+  });
+
+  it("the helper itself never embeds the token", () => {
+    const pairs = buildSandboxGitConfig("/wt", "/repo", WITH_TOKEN);
+    expect(pairs.some(([, v]) => v.includes("ghp_secret"))).toBe(false);
+  });
+
+  it("passes the host git identity as author and committer", () => {
+    const flags = envFlags(build(makeOpts(), WITH_TOKEN));
+    expect(flags).toContain("GIT_AUTHOR_NAME=Ada Lovelace");
+    expect(flags).toContain("GIT_AUTHOR_EMAIL=ada@example.com");
+    expect(flags).toContain("GIT_COMMITTER_NAME=Ada Lovelace");
+    expect(flags).toContain("GIT_COMMITTER_EMAIL=ada@example.com");
+  });
+
+  it("runtime env and envPassthrough cannot override GIT_CONFIG_*, GH_TOKEN or the identity", () => {
+    const args = build(
+      makeOpts({
+        runtimeEnv: { GIT_CONFIG_KEY_7: "core.fsmonitor", GIT_CONFIG_COUNT: "9", GH_TOKEN: "evil" },
+        sandboxConfig: makeDockerProfile({ envPassthrough: ["GIT_AUTHOR_NAME", "GIT_CONFIG_VALUE_3"] }),
+      }),
+      WITH_TOKEN,
+      null,
+      { GIT_AUTHOR_NAME: "Mallory", GIT_CONFIG_VALUE_3: "x" },
+    );
+    const flags = envFlags(args);
+    expect(flags).not.toContain("GIT_CONFIG_KEY_7=core.fsmonitor");
+    expect(flags.filter((f) => f.startsWith("GIT_CONFIG_COUNT="))).toEqual(["GIT_CONFIG_COUNT=7"]);
+    expect(flags).not.toContain("GH_TOKEN=evil");
+    expect(flags).not.toContain("GIT_AUTHOR_NAME=Mallory");
+    expect(flags).not.toContain("GIT_CONFIG_VALUE_3=x");
+  });
+
+  it("no longer mounts ~/.gitconfig, ~/.ssh or ~/.config/gh", () => {
+    const m = mounts(build(makeOpts(), WITH_TOKEN));
+    expect(m.some((v) => v.includes(".gitconfig") || v.includes("/.ssh") || v.includes(".config/gh"))).toBe(false);
+  });
+});
+
+describe("buildDockerRunArgs — git hardening", () => {
+  it("mounts .git/hooks and .git/config read-only over the writable .git", () => {
+    const m = mounts(build(makeOpts()));
+    const gitIdx = m.indexOf("/repos/main/.git:/repos/main/.git");
+    expect(gitIdx).toBeGreaterThan(-1);
+    expect(m.indexOf("/repos/main/.git/hooks:/repos/main/.git/hooks:ro")).toBeGreaterThan(gitIdx);
+    expect(m.indexOf("/repos/main/.git/config:/repos/main/.git/config:ro")).toBeGreaterThan(gitIdx);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // SSH agent forwarding
 // ---------------------------------------------------------------------------
 
 describe("buildDockerRunArgs — SSH agent forwarding", () => {
-  const SOCK = "/run/user/1000/keyring/ssh";
+  const withSock = (sshAuthSock: string): SandboxCredentials => ({ ...NO_CREDENTIALS, sshAuthSock });
 
-  it("mounts the socket via --mount and sets SSH_AUTH_SOCK when present", () => {
-    const args = build(makeOpts(), new Set([SOCK]), SOCK);
-    expect(args).toContain(`type=bind,source=${SOCK},target=${SOCK}`);
-    expect(envFlags(args)).toContain(`SSH_AUTH_SOCK=${SOCK}`);
+  it("mounts the Linux host socket via --mount and sets SSH_AUTH_SOCK", () => {
+    const sock = "/run/user/1000/keyring/ssh";
+    const args = build(makeOpts(), withSock(sock));
+    expect(args).toContain(`type=bind,source=${sock},target=${sock}`);
+    expect(envFlags(args)).toContain(`SSH_AUTH_SOCK=${sock}`);
   });
 
-  it("does nothing when sshAuthSock is undefined", () => {
-    const args = build(makeOpts(), new Set(), undefined);
-    expect(mounts(args).join("\n")).not.toContain("SSH_AUTH_SOCK");
-    expect(envFlags(args).join("\n")).not.toContain("SSH_AUTH_SOCK");
+  it("mounts Docker Desktop's forwarded socket on macOS", () => {
+    const sock = "/run/host-services/ssh-auth.sock";
+    const args = build(makeOpts(), withSock(sock));
+    expect(args).toContain(`type=bind,source=${sock},target=${sock}`);
+    expect(envFlags(args)).toContain(`SSH_AUTH_SOCK=${sock}`);
   });
 
-  it("does nothing when socket path is not in existingPaths", () => {
-    const args = build(makeOpts(), new Set(), SOCK);
-    expect(mounts(args).join("\n")).not.toContain(SOCK);
+  it("does nothing when there is no socket", () => {
+    const args = build(makeOpts());
+    expect(args.includes("--mount")).toBe(false);
     expect(envFlags(args).join("\n")).not.toContain("SSH_AUTH_SOCK");
   });
 
   it("SSH_AUTH_SOCK from envPassthrough is blocked by reservedKeys", () => {
-    const args = build(makeOpts({ sandboxConfig: makeDockerProfile({ image: "img", envPassthrough: ["SSH_AUTH_SOCK"] }) }));
+    const args = build(makeOpts({ sandboxConfig: makeDockerProfile({ image: "img", envPassthrough: ["SSH_AUTH_SOCK"] }) }), NO_CREDENTIALS, null, { SSH_AUTH_SOCK: "/x" });
     expect(envFlags(args).filter(f => f.startsWith("SSH_AUTH_SOCK="))).toHaveLength(0);
   });
 });
