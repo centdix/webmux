@@ -23,8 +23,12 @@ function buildRuntimeBootstrap(runtimeEnvPath: string): string {
 
 const DOCKER_TOOLS_PATH = `${CONTAINER_TOOLS_DIR}/bin:${CONTAINER_TOOLS_DIR}/bun/bin`;
 
+const DOCKER_TOOLS_ENV = `NPM_CONFIG_PREFIX=${CONTAINER_TOOLS_DIR} BUN_INSTALL=${CONTAINER_TOOLS_DIR}/bun`;
+
+/** Global npm/bun installs (including an agent's self-update) go to the shared
+ *  tools volume: the image's default prefix is not writable by the sandbox user. */
 function buildDockerRuntimeBootstrap(runtimeEnvPath: string): string {
-  return `${buildRuntimeBootstrap(runtimeEnvPath)}; export PATH="${DOCKER_TOOLS_PATH}:$PATH:${DOCKER_PATH_FALLBACK}"`;
+  return `${buildRuntimeBootstrap(runtimeEnvPath)}; export ${DOCKER_TOOLS_ENV} PATH="${DOCKER_TOOLS_PATH}:$PATH:${DOCKER_PATH_FALLBACK}"`;
 }
 
 /**
@@ -36,11 +40,15 @@ function buildDockerRuntimeBootstrap(runtimeEnvPath: string): string {
 export function buildSandboxInstallCommand(install: string, binary?: string): string {
   const isInstalled = binary ? `command -v ${binary} >/dev/null 2>&1` : null;
   const notice = binary ? `webmux: installing ${binary} in the sandbox...` : "webmux: running the agent's sandbox install...";
-  const script = `${isInstalled ? `${isInstalled} || ` : ""}{ echo ${quoteShell(notice)}; ${install}; }`;
-  const env = `NPM_CONFIG_PREFIX=${CONTAINER_TOOLS_DIR} BUN_INSTALL=${CONTAINER_TOOLS_DIR}/bun`;
+  // The install runs as its own `sh -c` so a trailing `;`, `&` or comment in a
+  // user-supplied command cannot break the surrounding script.
+  const script = `${isInstalled ? `${isInstalled} || ` : ""}{ echo ${quoteShell(notice)}; sh -c ${quoteShell(install)}; }`;
+  const env = DOCKER_TOOLS_ENV;
   const locked = `if command -v flock >/dev/null 2>&1; then ${env} flock ${CONTAINER_TOOLS_DIR}/.lock sh -c ${quoteShell(script)}; else ${env} sh -c ${quoteShell(script)}; fi`;
   return isInstalled ? `${isInstalled} || { ${locked}; }` : locked;
 }
+
+const SANDBOX_INSTALL_FAILED = "webmux: the agent install failed (see above); it is retried on the next launch";
 
 /** The mounted webmux CLI runs on bun, which most images lack. */
 const BUN_INSTALL_STEP = `if command -v webmux >/dev/null 2>&1; then ${buildSandboxInstallCommand("npm i -g bun", "bun")}; fi`;
@@ -236,10 +244,12 @@ export function buildDockerAgentPaneCommand(input: {
   forkFromSessionId?: string;
   pinSessionId?: string;
 }): string {
+  const install = buildAgentSandboxInstall(input.agent);
   const steps = [
     buildDockerRuntimeBootstrap(input.runtimeEnvPath),
     BUN_INSTALL_STEP,
-    buildAgentSandboxInstall(input.agent),
+    // The invocation stays last and unwrapped: custom start commands are user text.
+    install ? `{ ${install}; } || echo ${quoteShell(SANDBOX_INSTALL_FAILED)} >&2` : null,
     buildAgentInvocation(input),
   ];
   return steps.filter((step): step is string => step !== null).join("; ");

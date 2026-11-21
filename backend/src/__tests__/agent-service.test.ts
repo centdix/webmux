@@ -79,10 +79,20 @@ describe("buildSandboxInstallCommand", () => {
     expect(cmd).not.toContain("|| {");
   });
 
-  it("is valid sh", () => {
-    for (const cmd of [buildSandboxInstallCommand("npm i -g a", "a"), buildSandboxInstallCommand("echo 'b'")]) {
-      expect(Bun.spawnSync(["sh", "-n", "-c", cmd]).exitCode).toBe(0);
+  it("is valid sh, whatever a user-supplied install ends with", () => {
+    const installs = ["npm i -g a", "echo 'b'", "npm i -g x;", "npm i -g x # pin", "npm i -g x &", "a\nb"];
+    for (const install of installs) {
+      for (const cmd of [buildSandboxInstallCommand(install, "a"), buildSandboxInstallCommand(install)]) {
+        expect(Bun.spawnSync(["sh", "-n", "-c", cmd]).exitCode).toBe(0);
+        // The inner locked script must parse too.
+        const inner = Bun.spawnSync(["sh", "-c", `set -- ${cmd.replace(/^.*?flock \/opt\/webmux\/tools\/\.lock sh -c /, "").replace(/; else .*$/, "")}; printf %s "$1"`]);
+        expect(Bun.spawnSync(["sh", "-n", "-c", inner.stdout.toString()]).exitCode).toBe(0);
+      }
     }
+  });
+
+  it("runs the install with npm/bun pointed at the tools volume", () => {
+    expect(buildSandboxInstallCommand("x", "y")).toContain("NPM_CONFIG_PREFIX=/opt/webmux/tools BUN_INSTALL=/opt/webmux/tools/bun flock");
   });
 });
 
@@ -358,10 +368,10 @@ describe("agent-service command builders", () => {
 
     expect(shell).toContain("docker exec -it -u 1000:1001 -e HOME='/home/webmux' -w '/repos/feature' 'wm-feature-container' /bin/sh -c");
     expect(shell).toContain("/bin/zsh");
-    expect(shell).toContain('export PATH="/opt/webmux/tools/bin:/opt/webmux/tools/bun/bin:$PATH:/home/webmux/.local/bin:/usr/local/bin:/home/webmux/.bun/bin:/home/webmux/.cargo/bin"');
+    expect(shell).toContain('export NPM_CONFIG_PREFIX=/opt/webmux/tools BUN_INSTALL=/opt/webmux/tools/bun PATH="/opt/webmux/tools/bin:/opt/webmux/tools/bun/bin:$PATH:/home/webmux/.local/bin:/usr/local/bin:/home/webmux/.bun/bin:/home/webmux/.cargo/bin"');
     expect(agent).toContain("codex --enable hooks --yolo");
     expect(agent).toContain("ship the fix");
-    expect(agent).toContain('export PATH="/opt/webmux/tools/bin:/opt/webmux/tools/bun/bin:$PATH:/home/webmux/.local/bin:/usr/local/bin:/home/webmux/.bun/bin:/home/webmux/.cargo/bin"');
+    expect(agent).toContain('export NPM_CONFIG_PREFIX=/opt/webmux/tools BUN_INSTALL=/opt/webmux/tools/bun PATH="/opt/webmux/tools/bin:/opt/webmux/tools/bun/bin:$PATH:/home/webmux/.local/bin:/usr/local/bin:/home/webmux/.bun/bin:/home/webmux/.cargo/bin"');
     expect(agent).not.toContain("docker exec");
   });
 
@@ -383,6 +393,10 @@ describe("agent-service command builders", () => {
     expect(agent.indexOf(bun)).toBeLessThan(agent.indexOf(install));
     expect(agent.indexOf(install)).toBeLessThan(agent.lastIndexOf("claude "));
     expect(agent).not.toContain("@openai/codex");
+    expect(agent).toContain(`{ ${install}; } || echo`);
+    // Global installs and agent self-updates land in the tools volume at runtime too.
+    expect(agent).toContain("export NPM_CONFIG_PREFIX=/opt/webmux/tools BUN_INSTALL=/opt/webmux/tools/bun PATH=");
+    expect(Bun.spawnSync(["sh", "-n", "-c", agent]).exitCode).toBe(0);
   });
 
   it("runs a custom agent's sandboxInstall in docker, and nothing without one", () => {
@@ -398,6 +412,12 @@ describe("agent-service command builders", () => {
       agent: customAgent({ startCommand: "gemini", sandboxInstall: "npm i -g @google/gemini-cli" }),
     });
     expect(withInstall).toContain(buildSandboxInstallCommand("npm i -g @google/gemini-cli"));
+    expect(Bun.spawnSync(["sh", "-n", "-c", withInstall]).exitCode).toBe(0);
+    const trailing = buildDockerAgentPaneCommand({
+      ...base,
+      agent: customAgent({ startCommand: "gemini;", sandboxInstall: "npm i -g g;" }),
+    });
+    expect(Bun.spawnSync(["sh", "-n", "-c", trailing]).exitCode).toBe(0);
     const without = buildDockerAgentPaneCommand({ ...base, agent: customAgent({ startCommand: "gemini" }) });
     expect(without).not.toContain("running the agent's sandbox install");
   });
@@ -425,7 +445,7 @@ describe("agent-service command builders", () => {
 
     expect(shell).toContain("/bin/bash");
     expect(shell).not.toContain(" /bin/sh -lc ");
-    expect(shell).toContain('export PATH="/opt/webmux/tools/bin:/opt/webmux/tools/bun/bin:$PATH:/home/webmux/.local/bin:/usr/local/bin:/home/webmux/.bun/bin:/home/webmux/.cargo/bin"');
+    expect(shell).toContain('export NPM_CONFIG_PREFIX=/opt/webmux/tools BUN_INSTALL=/opt/webmux/tools/bun PATH="/opt/webmux/tools/bin:/opt/webmux/tools/bun/bin:$PATH:/home/webmux/.local/bin:/usr/local/bin:/home/webmux/.bun/bin:/home/webmux/.cargo/bin"');
   });
 
   it("falls back to /bin/sh when the preferred docker shell is unavailable", () => {

@@ -248,7 +248,7 @@ agents:
     label: Gemini CLI
     startCommand: gemini --prompt "${PROMPT}"
     resumeCommand: gemini --resume latest   # optional
-    sandboxInstall: command -v gemini || npm i -g @google/gemini-cli   # optional, Docker sandboxes only
+    sandboxInstall: command -v gemini >/dev/null || npm i -g @google/gemini-cli   # optional, Docker sandboxes only
 ```
 
 `startCommand` and `resumeCommand` can reference `${PROMPT}`, `${SYSTEM_PROMPT}`, `${WORKTREE_PATH}`, `${REPO_PATH}`, `${BRANCH}`, and `${PROFILE}`. Without a `resumeCommand`, reopening a worktree restarts the agent fresh. An `agents:` section in `.webmux.yaml` or `.webmux.local.yaml` is ignored — move it to the global file. Worktrees started on a former project-local custom agent fail to open with `Unknown agent` until you recreate that agent globally under the same id.

@@ -129,7 +129,7 @@
         id="agent-sandbox-install"
         type="text"
         class="w-full px-2.5 py-1.5 rounded-md border border-edge bg-surface text-primary text-[13px] placeholder:text-muted/50 outline-none focus:border-accent font-mono"
-        placeholder={"e.g. command -v gemini || npm i -g @google/gemini-cli"}
+        placeholder={"e.g. command -v gemini >/dev/null || npm i -g @google/gemini-cli"}
         bind:value={sandboxInstall}
       />
       <p class="mt-1 text-[11px] text-muted">
